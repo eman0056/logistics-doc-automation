@@ -1,0 +1,62 @@
+{
+  "name": "Document_Processing_Chain",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "process-chain",
+        "options": {}
+      },
+      "name": "Webhook Ingest Trigger",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [200, 300]
+    },
+    {
+      "parameters": {
+        "requestMethod": "POST",
+        "url": "http://localhost:3000/api/documents/ocr",
+        "options": {}
+      },
+      "name": "Run OCR Workflow",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 1,
+      "position": [400, 300]
+    },
+    {
+      "parameters": {
+        "requestMethod": "POST",
+        "url": "http://localhost:3000/api/documents/ai",
+        "options": {}
+      },
+      "name": "Run AI Extraction Workflow",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 1,
+      "position": [600, 300]
+    }
+  ],
+  "connections": {
+    "Webhook Ingest Trigger": {
+      "main": [
+        [
+          {
+            "node": "Run OCR Workflow",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Run OCR Workflow": {
+      "main": [
+        [
+          {
+            "node": "Run AI Extraction Workflow",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  }
+}

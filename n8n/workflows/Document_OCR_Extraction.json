@@ -1,0 +1,52 @@
+{
+  "name": "Document_OCR_Extraction",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "726784a2-239a-4a6d-a837-85828f4b2ca2",
+        "options": {}
+      },
+      "name": "Webhook Trigger",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [250, 300]
+    },
+    {
+      "parameters": {
+        "requestMethod": "POST",
+        "url": "={{ $json.body.webhookCallbackUrl || ('http://localhost:3000/api/documents/' + $json.body.documentId + '/extraction/raw-text') }}",
+        "options": {},
+        "bodyParametersUi": {
+          "parameter": [
+            {
+              "name": "rawOcrText",
+              "value": "={{ $json.body.rawOcrText }}"
+            },
+            {
+              "name": "pageCount",
+              "value": "1"
+            }
+          ]
+        }
+      },
+      "name": "Callback Node.js API",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 1,
+      "position": [500, 300]
+    }
+  ],
+  "connections": {
+    "Webhook Trigger": {
+      "main": [
+        [
+          {
+            "node": "Callback Node.js API",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  }
+}
