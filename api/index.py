@@ -1264,6 +1264,10 @@ def serve_upload_file(filename: str):
         return FileResponse(file_path)
     return JSONResponse({"error": "File not found"}, status_code=404)
 
+@app.get("/")
+def serve_spa_root():
+    return _send_spa_html("/")
+
 @app.get("/{path:path}")
 def serve_spa(path: str):
     return _send_spa_html("/" + path)
