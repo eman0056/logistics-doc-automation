@@ -94,13 +94,25 @@ def execute_query(conn, query, params=()):
 
 @app.get("/api/debug-info")
 def debug_info():
+    db_error = None
+    db_ok = False
+    try:
+        conn = get_db()
+        cursor = conn.cursor()
+        cursor.execute("SELECT 1")
+        db_ok = True
+        conn.close()
+    except Exception as e:
+        db_error = str(e)
     return {
         "status": "app_loaded",
         "DB_PATH": DB_PATH,
         "POSTGRES_URL_set": bool(POSTGRES_URL),
         "psycopg2_available": psycopg2 is not None,
         "VERCEL": os.getenv("VERCEL", "not_set"),
-        "DATABASE_URL_prefix": (os.getenv("DATABASE_URL", ""))[:20]
+        "DATABASE_URL_prefix": (os.getenv("DATABASE_URL", ""))[:30],
+        "db_ok": db_ok,
+        "db_error": db_error
     }
 
 
