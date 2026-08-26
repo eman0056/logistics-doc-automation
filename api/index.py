@@ -922,7 +922,20 @@ async def upload_documents(request: Request):
         return JSONResponse({"error": "No files uploaded"}, status_code=400)
         
     import base64
-    app_base_url = os.getenv("APP_BASE_URL") or str(request.base_url).rstrip("/")
+    vercel_url = os.getenv("VERCEL_URL")
+    forwarded_host = request.headers.get("x-forwarded-host")
+    host = request.headers.get("host")
+    
+    if os.getenv("APP_BASE_URL"):
+        app_base_url = os.getenv("APP_BASE_URL").rstrip("/")
+    elif forwarded_host:
+        app_base_url = f"https://{forwarded_host}"
+    elif vercel_url:
+        app_base_url = f"https://{vercel_url}"
+    elif host and "localhost" not in host and "127.0.0.1" not in host:
+        app_base_url = f"https://{host}"
+    else:
+        app_base_url = str(request.base_url).rstrip("/")
     webhook_url = os.getenv("N8N_WEBHOOK_URL", "https://n8n.provelopers.net/webhook/726784a2-239a-4a6d-a837-85828f4b2ca2")
     
     def trigger_webhook(url, data):
