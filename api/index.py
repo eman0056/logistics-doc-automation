@@ -785,57 +785,123 @@ def _send_spa_html(path):
       const freightFormatted = numVal(canonical.freightCost, 150).toFixed(2);
       const taxFormatted = numVal(canonical.taxCost, 75).toFixed(2);
       const totalFormatted = numVal(canonical.totalAmount, 1475).toFixed(2);
+      
+      const isUPS = (canonical.carrierName || "").toUpperCase().includes("UPS") || (canonical.shipperName || "").toUpperCase().includes("UPS");
 
       let itemsHtml = '';
       if (canonical.lineItems && canonical.lineItems.length > 0) {
         itemsHtml = canonical.lineItems.map(item => `
           <tr class="hover:bg-slate-50 transition-colors">
-            <td class="p-4 border-b border-slate-100 font-medium text-slate-800">${item.description || 'Logistics Freight Item'}</td>
-            <td class="p-4 border-b border-slate-100 text-center font-mono text-slate-500">${item.quantity || 1}</td>
-            <td class="p-4 border-b border-slate-100 text-right font-mono text-slate-500">$${numVal(item.unitPrice, 100).toFixed(2)}</td>
-            <td class="p-4 border-b border-slate-100 text-right font-mono font-bold text-slate-900">$${numVal(item.totalPrice, 100).toFixed(2)}</td>
+            <td class="p-3 border-b border-slate-200 font-medium text-slate-800 text-sm">${item.description || 'Logistics Freight Item'}</td>
+            <td class="p-3 border-b border-slate-200 text-center font-mono text-slate-600">${item.quantity || 1}</td>
+            <td class="p-3 border-b border-slate-200 text-right font-mono text-slate-600">$${numVal(item.unitPrice, 100).toFixed(2)}</td>
+            <td class="p-3 border-b border-slate-200 text-right font-mono font-bold text-slate-900">$${numVal(item.totalPrice, 100).toFixed(2)}</td>
           </tr>
         `).join('');
       } else {
         itemsHtml = `
           <tr class="hover:bg-slate-50 transition-colors">
-            <td class="p-4 border-b border-slate-100 font-medium text-slate-800">Freight Transport & Cargo Handling Services</td>
-            <td class="p-4 border-b border-slate-100 text-center font-mono text-slate-500">1</td>
-            <td class="p-4 border-b border-slate-100 text-right font-mono text-slate-500">$${subtotalFormatted}</td>
-            <td class="p-4 border-b border-slate-100 text-right font-mono font-bold text-slate-900">$${subtotalFormatted}</td>
+            <td class="p-3 border-b border-slate-200 font-medium text-slate-800 text-sm">Freight Transport & Cargo Handling Services</td>
+            <td class="p-3 border-b border-slate-200 text-center font-mono text-slate-600">1</td>
+            <td class="p-3 border-b border-slate-200 text-right font-mono text-slate-600">$${subtotalFormatted}</td>
+            <td class="p-3 border-b border-slate-200 text-right font-mono font-bold text-slate-900">$${subtotalFormatted}</td>
           </tr>
         `;
       }
 
-      app.innerHTML = `
-        ${navHtml}
-        <style>
-          @media print {
-            body { background: white; -webkit-print-color-adjust: exact; }
-            .no-print { display: none !important; }
-            header { display: none !important; }
-            main { padding: 0 !important; margin: 0 !important; max-width: 100% !important; }
-            .shadow-2xl { shadow: none !important; box-shadow: none !important; border: none !important; }
-          }
-          @keyframes slideUpFade {
-            from { opacity: 0; transform: translateY(20px); }
-            to { opacity: 1; transform: translateY(0); }
-          }
-          .animate-in { animation: slideUpFade 0.6s cubic-bezier(0.16, 1, 0.3, 1) forwards; }
-        </style>
-        <main class="max-w-5xl mx-auto px-4 py-8 space-y-6 text-slate-900 animate-in">
-          <div class="flex justify-between items-center bg-slate-900 border border-slate-800 p-4 rounded-2xl shadow-lg no-print">
-            <a href="/documents/${docId}/review" class="text-xs bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white px-4 py-2 rounded-xl transition-colors">← Back to Review</a>
-            <div class="space-x-3 flex items-center">
-              <span class="text-xs text-emerald-400 font-medium mr-2 flex items-center gap-1"><span class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span> Invoice Ready</span>
-              <button onclick="window.print()" class="text-xs bg-slate-800 hover:bg-slate-700 text-white px-5 py-2 rounded-xl font-bold transition-colors">🖨️ Print</button>
-              <button onclick="window.print()" class="text-xs text-white px-5 py-2 rounded-xl font-bold shadow-lg shadow-sky-900/30 hover:scale-105 transition-transform" style="background-color: ${primaryColor}">Download PDF 📥</button>
+      let invoiceHtml = '';
+      
+      if (isUPS) {
+        const upsBrown = '#351C15';
+        const upsGold = '#FFB500';
+        
+        invoiceHtml = `
+          <div class="bg-white p-10 shadow-sm border border-slate-200 relative overflow-hidden" style="font-family: Arial, Helvetica, sans-serif; color: #333;">
+            <div class="flex justify-between items-start border-b-4 pb-6" style="border-bottom-color: ${upsBrown};">
+              <div class="flex items-center gap-4">
+                <div class="w-16 h-16 flex items-center justify-center text-2xl font-black text-white" style="background-color: ${upsBrown}; border: 3px solid ${upsGold}; border-radius: 4px;">
+                  UPS
+                </div>
+                <div>
+                  <h1 class="text-2xl font-black tracking-tight" style="color: ${upsBrown};">UPS FREIGHT</h1>
+                  <p class="text-sm font-bold text-slate-500">Invoice / Bill of Lading</p>
+                </div>
+              </div>
+              <div class="text-right">
+                <h2 class="text-3xl font-black mb-1" style="color: ${upsBrown};">INVOICE</h2>
+                <div class="grid grid-cols-2 gap-x-4 gap-y-1 text-sm mt-2">
+                  <span class="font-bold text-slate-500">Invoice Number:</span> <span class="font-mono font-bold text-slate-800">${canonical.documentNumber || 'N/A'}</span>
+                  <span class="font-bold text-slate-500">Shipment Date:</span> <span class="font-medium text-slate-800">${canonical.pickupDate || 'N/A'}</span>
+                  <span class="font-bold text-slate-500">Tracking #:</span> <span class="font-mono font-bold text-slate-800">${canonical.shipmentNumber || 'N/A'}</span>
+                  <span class="font-bold text-slate-500">PO Number:</span> <span class="font-mono font-bold text-slate-800">${canonical.purchaseOrderNumber || 'N/A'}</span>
+                </div>
+              </div>
+            </div>
+
+            <div class="grid grid-cols-2 gap-8 mt-8 mb-8">
+              <div class="p-4 border border-slate-300">
+                <h3 class="font-black text-[11px] tracking-widest uppercase mb-2" style="color: ${upsBrown};">Shipper / Origin</h3>
+                <p class="font-bold text-slate-900 text-base mb-1">${canonical.shipperName || 'Unknown Shipper'}</p>
+              </div>
+              <div class="p-4 border border-slate-300" style="background-color: #fcfbf9;">
+                <h3 class="font-black text-[11px] tracking-widest uppercase mb-2" style="color: ${upsBrown};">Consignee / Destination</h3>
+                <p class="font-bold text-slate-900 text-base mb-1">${canonical.consigneeName || 'Unknown Consignee'}</p>
+              </div>
+            </div>
+
+            <div class="grid grid-cols-3 gap-2 mb-8 text-sm">
+                <div class="border border-slate-300 p-3 flex flex-col">
+                    <span class="text-slate-500 font-bold uppercase text-[10px] mb-1">Carrier</span>
+                    <span class="font-bold text-slate-800">${canonical.carrierName || 'UPS Freight'}</span>
+                </div>
+                <div class="border border-slate-300 p-3 flex flex-col text-center">
+                    <span class="text-slate-500 font-bold uppercase text-[10px] mb-1">Total Weight</span>
+                    <span class="font-bold text-slate-800">${canonical.weightLb || 0} LBS</span>
+                </div>
+                <div class="border border-slate-300 p-3 flex flex-col text-center">
+                    <span class="text-slate-500 font-bold uppercase text-[10px] mb-1">Total Quantity</span>
+                    <span class="font-bold text-slate-800">${canonical.totalQuantity || 0} PKG</span>
+                </div>
+            </div>
+
+            <div class="border-2 border-slate-300 mb-8">
+              <table class="w-full text-left text-sm border-collapse">
+                <thead>
+                  <tr class="text-white text-[11px] uppercase tracking-widest font-bold" style="background-color: ${upsBrown};">
+                    <th class="p-3 w-1/2 border-r border-slate-400">Description of Articles</th>
+                    <th class="p-3 text-center border-r border-slate-400">Pieces</th>
+                    <th class="p-3 text-right border-r border-slate-400">Rate</th>
+                    <th class="p-3 text-right">Charges</th>
+                  </tr>
+                </thead>
+                <tbody class="divide-y divide-slate-300">
+                  ${itemsHtml}
+                </tbody>
+              </table>
+            </div>
+
+            <div class="flex justify-end mt-4">
+              <div class="w-80">
+                <div class="space-y-2 text-sm text-slate-700 border-b-2 border-slate-300 pb-3 mb-3">
+                  <div class="flex justify-between items-center"><span class="font-bold">Freight Charges</span><span class="font-mono">$${freightFormatted}</span></div>
+                  <div class="flex justify-between items-center"><span class="font-bold">Accessorial / Tax</span><span class="font-mono">$${taxFormatted}</span></div>
+                </div>
+                <div class="flex justify-between items-center p-3 text-white" style="background-color: ${upsBrown}; border-left: 6px solid ${upsGold};">
+                  <span class="font-black text-sm tracking-widest uppercase">Total Amount Due</span>
+                  <span class="font-black font-mono text-xl tracking-tighter">$${totalFormatted} <span class="text-xs ml-1">${canonical.currency || 'USD'}</span></span>
+                </div>
+              </div>
+            </div>
+
+            <div class="mt-12 pt-6 border-t-2 border-slate-200 text-center text-[10px] text-slate-500 space-y-1 font-bold uppercase">
+              <p>Payable upon receipt. Remit to UPS Freight.</p>
             </div>
           </div>
-
-          <!-- Invoice Paper -->
+        `;
+      } else {
+        // Default Apex Freight style
+        invoiceHtml = `
           <div class="bg-white rounded-[24px] p-12 shadow-[0_20px_50px_rgba(0,0,0,0.3)] border border-slate-100 relative overflow-hidden">
-            <!-- Decorative Header Accent -->
             <div class="absolute top-0 left-0 w-full h-3" style="background-color: ${primaryColor}"></div>
             <div class="absolute top-0 right-12 w-24 h-24 rounded-b-full opacity-10" style="background-color: ${primaryColor}"></div>
 
@@ -932,9 +998,41 @@ def _send_spa_html(path):
               <p>Payment is due within 30 days of the invoice date. Please include the invoice number on your check.</p>
             </div>
           </div>
+        `;
+      }
+
+      app.innerHTML = `
+        ${navHtml}
+        <style>
+          @media print {
+            body { background: white; -webkit-print-color-adjust: exact; }
+            .no-print { display: none !important; }
+            header { display: none !important; }
+            main { padding: 0 !important; margin: 0 !important; max-width: 100% !important; }
+            .shadow-2xl { shadow: none !important; box-shadow: none !important; border: none !important; }
+          }
+          @keyframes slideUpFade {
+            from { opacity: 0; transform: translateY(20px); }
+            to { opacity: 1; transform: translateY(0); }
+          }
+          .animate-in { animation: slideUpFade 0.6s cubic-bezier(0.16, 1, 0.3, 1) forwards; }
+        </style>
+        <main class="max-w-5xl mx-auto px-4 py-8 space-y-6 text-slate-900 animate-in">
+          <div class="flex justify-between items-center bg-slate-900 border border-slate-800 p-4 rounded-2xl shadow-lg no-print">
+            <a href="/documents/${docId}/review" class="text-xs bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white px-4 py-2 rounded-xl transition-colors">← Back to Review</a>
+            <div class="space-x-3 flex items-center">
+              <span class="text-xs text-emerald-400 font-medium mr-2 flex items-center gap-1"><span class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span> Invoice Ready</span>
+              <button onclick="window.print()" class="text-xs bg-slate-800 hover:bg-slate-700 text-white px-5 py-2 rounded-xl font-bold transition-colors">🖨️ Print</button>
+              <button onclick="window.print()" class="text-xs text-white px-5 py-2 rounded-xl font-bold shadow-lg shadow-sky-900/30 hover:scale-105 transition-transform" style="background-color: ${primaryColor}">Download PDF 📥</button>
+            </div>
+          </div>
+
+          <!-- Invoice Paper -->
+          ${invoiceHtml}
         </main>
       `;
     }
+
 
     async function renderInvoicesDashboard(app, navHtml, primaryColor) {
       const res = await fetch('/api/documents');
@@ -1116,7 +1214,7 @@ async def upload_documents(request: Request):
     except Exception:
         temp_dir = "/tmp"
     
-    app_base_url = os.getenv("APP_BASE_URL", "http://localhost:3000")
+    app_base_url = os.getenv("APP_BASE_URL") or str(request.base_url).rstrip("/")
     webhook_url = os.getenv("N8N_WEBHOOK_URL", "https://n8n.provelopers.net/webhook/726784a2-239a-4a6d-a837-85828f4b2ca2")
     
     def trigger_webhook(url, data):
