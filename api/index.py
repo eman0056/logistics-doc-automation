@@ -1076,7 +1076,14 @@ async def extraction_callback(doc_id: str, request: Request):
 
     json_str = json.dumps(extracted)
     conn = get_db()
-    execute_query(conn, "UPDATE Extraction SET canonicalJson = ? WHERE documentId = ?;", (json_str, doc_id))
+    
+    # Check if row exists
+    cursor = execute_query(conn, "SELECT 1 FROM Extraction WHERE documentId=?", (doc_id,))
+    if cursor.fetchone():
+        execute_query(conn, "UPDATE Extraction SET canonicalJson = ? WHERE documentId = ?;", (json_str, doc_id))
+    else:
+        execute_query(conn, "INSERT INTO Extraction (documentId, canonicalJson) VALUES (?, ?);", (doc_id, json_str))
+        
     execute_query(conn, "UPDATE Document SET status = 'EXTRACTED' WHERE id = ?;", (doc_id,))
     conn.commit()
     conn.close()
