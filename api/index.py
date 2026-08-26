@@ -506,20 +506,57 @@ def _send_spa_html(path):
     }
 
     async function renderReviewPage(app, navHtml, primaryColor, docId) {
-      const res = await fetch('/api/documents');
-      const d = await res.json();
-      const doc = (d.documents || []).find(item => item.id === docId) || {};
+      // Fetch with polling support
+      async function fetchDoc() {
+        const res = await fetch('/api/documents');
+        const d = await res.json();
+        return (d.documents || []).find(item => item.id === docId) || {};
+      }
 
+      // Show loading state first
+      app.innerHTML = `
+        ${navHtml}
+        <main class="max-w-7xl mx-auto px-4 py-8">
+          <div class="flex flex-col items-center justify-center py-32 space-y-6">
+            <div class="w-16 h-16 rounded-full border-4 border-sky-500 border-t-transparent animate-spin"></div>
+            <div class="text-center">
+              <h2 class="text-2xl font-bold text-white">Processing Document</h2>
+              <p class="text-slate-400 mt-2">n8n is extracting data from your document. This usually takes 10-30 seconds...</p>
+            </div>
+            <div id="pollStatus" class="text-xs text-slate-500">Checking for extracted data...</div>
+          </div>
+        </main>
+      `;
+
+      // Poll until extraction data is available (max 2 minutes)
+      let doc = {};
       let canonical = {};
-      
-      // Load raw data dynamically
-      if (doc.extraction?.finalSubmittedData) {
-        try { canonical = JSON.parse(doc.extraction.finalSubmittedData); } catch(e) {}
-      } else if (doc.extraction?.canonicalJson) {
-        try { canonical = JSON.parse(doc.extraction.canonicalJson); } catch(e) {}
-      } else {
-        // Fallback example if empty
-        canonical = { "Document Notice": "No extraction data found yet." };
+      let pollCount = 0;
+      const maxPolls = 24; // 24 * 5s = 2 minutes
+
+      while (pollCount < maxPolls) {
+        doc = await fetchDoc();
+        const pollStatus = document.getElementById('pollStatus');
+        if (pollStatus) pollStatus.textContent = `Checking... (attempt ${pollCount + 1}/${maxPolls})`;
+
+        if (doc.extraction?.finalSubmittedData) {
+          try { canonical = JSON.parse(doc.extraction.finalSubmittedData); } catch(e) {}
+          if (Object.keys(canonical).length > 0) break;
+        }
+        if (doc.extraction?.canonicalJson) {
+          try { canonical = JSON.parse(doc.extraction.canonicalJson); } catch(e) {}
+          if (Object.keys(canonical).length > 0) break;
+        }
+
+        pollCount++;
+        if (pollCount < maxPolls) {
+          await new Promise(resolve => setTimeout(resolve, 5000)); // wait 5s
+        }
+      }
+
+      // If still no data after polling, show a proper message
+      if (Object.keys(canonical).length === 0) {
+        canonical = { "Status": "Extraction timed out. Please check your n8n workflow and try again." };
       }
 
       let fieldsHtml = '';
@@ -558,7 +595,7 @@ def _send_spa_html(path):
             <div class="xl:col-span-5 bg-slate-900 border border-slate-800 p-6 rounded-2xl shadow-2xl space-y-4">
               <h3 class="text-sm font-bold text-slate-300 border-b border-slate-800 pb-3">Original Document</h3>
               <div class="bg-slate-950 rounded-xl overflow-hidden border border-slate-800 h-[600px] relative group">
-                <img src="/${doc.storagePath}" alt="Document Preview" class="w-full h-full object-contain p-2" onerror="this.src='https://placehold.co/600x800/1e293b/475569?text=No+Preview+Available'" />
+                <img src="/api/documents/${docId}/file" alt="Document Preview" class="w-full h-full object-contain p-2" onerror="this.src='https://placehold.co/600x800/1e293b/475569?text=No+Preview+Available'" />
               </div>
             </div>
 
