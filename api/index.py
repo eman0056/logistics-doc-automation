@@ -503,229 +503,131 @@ def _send_spa_html(path):
       const d = await res.json();
       const doc = (d.documents || []).find(item => item.id === docId) || {};
 
-      let canonical = {
-        documentNumber: 'DHL-9982412',
-        shipmentNumber: '8492019482',
-        documentType: 'INVOICE',
-        shipperName: 'Apex Logistics Hub',
-        consigneeName: 'Global Distribution Center',
-        carrierName: 'DHL Express Freight',
-        pickupDate: '2026-08-15',
-        deliveryDate: '2026-08-18',
-        purchaseOrderNumber: 'PO-2026-9912',
-        weightLb: 1450,
-        totalQuantity: 4,
-        subtotalCost: 1250.00,
-        freightCost: 150.00,
-        taxCost: 75.00,
-        totalAmount: 1475.00,
-        lineItems: [
-          { description: "Industrial Machinery Components", quantity: 2, unitPrice: 400.0, totalPrice: 800.0 },
-          { description: "Electronic Control Modules", quantity: 2, unitPrice: 225.0, totalPrice: 450.0 }
-        ]
-      };
-
+      let canonical = {};
+      
+      // Load raw data dynamically
       if (doc.extraction?.finalSubmittedData) {
-        try { canonical = { ...canonical, ...JSON.parse(doc.extraction.finalSubmittedData) }; } catch(e) {}
+        try { canonical = JSON.parse(doc.extraction.finalSubmittedData); } catch(e) {}
       } else if (doc.extraction?.canonicalJson) {
-        try { canonical = { ...canonical, ...JSON.parse(doc.extraction.canonicalJson) }; } catch(e) {}
+        try { canonical = JSON.parse(doc.extraction.canonicalJson); } catch(e) {}
+      } else {
+        // Fallback example if empty
+        canonical = { "Document Notice": "No extraction data found yet." };
       }
 
-      const lineItemsHtml = (canonical.lineItems || []).map((item, idx) => `
-        <div class="line-item-row grid grid-cols-12 gap-3 mb-2" data-idx="${idx}">
-          <div class="col-span-6">
-            <input type="text" value="${item.description || ''}" class="item-desc w-full bg-slate-900 border border-slate-700 rounded px-3 py-2 text-white" />
+      let fieldsHtml = '';
+      for (const [key, value] of Object.entries(canonical)) {
+        let displayVal = value;
+        if (typeof value === 'object') {
+           try { displayVal = JSON.stringify(value); } catch(e) { displayVal = String(value); }
+        }
+        
+        fieldsHtml += `
+          <div class="space-y-1">
+            <label class="text-slate-400 block mb-1 font-bold text-[11px] uppercase tracking-wider">${key}</label>
+            <input data-key="${key}" type="text" value="${displayVal || ''}" class="dynamic-field w-full bg-slate-900 border border-slate-700 rounded-lg px-4 py-3 text-white focus:border-sky-500 focus:outline-none transition-colors shadow-inner font-mono text-sm" />
           </div>
-          <div class="col-span-2">
-            <input type="number" value="${item.quantity || 0}" class="item-qty w-full bg-slate-900 border border-slate-700 rounded px-3 py-2 text-white text-center font-mono" />
-          </div>
-          <div class="col-span-2">
-            <input type="number" step="0.01" value="${item.unitPrice || 0}" class="item-price w-full bg-slate-900 border border-slate-700 rounded px-3 py-2 text-white text-right font-mono" />
-          </div>
-          <div class="col-span-2">
-            <input type="number" step="0.01" value="${item.totalPrice || 0}" class="item-total w-full bg-slate-900 border border-slate-700 rounded px-3 py-2 text-emerald-400 font-bold text-right font-mono" />
-          </div>
-        </div>
-      `).join('');
+        `;
+      }
 
       app.innerHTML = `
         ${navHtml}
-        <main class="max-w-7xl mx-auto px-4 py-8 space-y-6">
-          <div class="flex justify-between items-center bg-slate-900 border border-slate-800 p-6 rounded-2xl shadow-xl transition-all hover:shadow-sky-900/20">
+        <main class="max-w-7xl mx-auto px-4 py-8 space-y-8 animate-in text-slate-100">
+          <div class="flex items-center justify-between">
             <div>
-              <h1 class="text-xl font-bold text-white flex items-center gap-2">
-                <span class="bg-sky-500/20 text-sky-400 p-2 rounded-lg">👁️</span> 
-                Human-in-the-Loop Review: ${doc.fileName || 'Document'}
+              <h1 class="text-3xl font-black tracking-tight text-white flex items-center gap-3">
+                Dynamic Review & Edit
               </h1>
-              <p class="text-xs text-slate-400 mt-1 ml-10">Review the AI-extracted data below. Make any necessary corrections, then generate the final invoice.</p>
+              <p class="text-slate-400 mt-2">Edit the exact extracted key-value pairs before final generation.</p>
             </div>
-            <button id="genInvoiceBtn" class="px-6 py-3 rounded-xl text-white font-bold text-sm shadow-xl hover:scale-105 transition-transform flex items-center gap-2" style="background-color: ${primaryColor}">
-              Generate Invoice ✨
-            </button>
+            <div class="space-x-3">
+              <a href="/documents" class="text-xs bg-slate-800 hover:bg-slate-700 px-4 py-2 rounded-xl transition-colors">Discard</a>
+              <button id="saveReviewBtn" class="text-xs text-white px-6 py-2 rounded-xl font-bold shadow-lg shadow-sky-900/30 hover:scale-105 transition-transform" style="background-color: ${primaryColor}">Save & Approve</button>
+              <button id="genInvoiceBtn" class="text-xs bg-white text-slate-900 hover:bg-slate-200 px-6 py-2 rounded-xl font-bold transition-colors">Generate Invoice ✨</button>
+            </div>
           </div>
 
           <div class="grid grid-cols-1 xl:grid-cols-12 gap-8">
-            <!-- Left Side: Original Document -->
-            <div class="xl:col-span-5 flex flex-col space-y-4">
-              <div class="bg-slate-900 border border-slate-800 p-6 rounded-2xl shadow-2xl flex-1 flex flex-col">
-                <h3 class="text-sm font-bold text-white border-b border-slate-800 pb-3 mb-4 flex items-center gap-2">
-                  <span class="text-slate-400">📄</span> Original Document
-                </h3>
-                <div class="bg-slate-950 p-4 rounded-xl border border-slate-800 text-xs space-y-2 mb-4">
-                  <div class="flex justify-between text-slate-400"><span>Filename</span><span class="text-white font-medium">${doc.fileName || 'PDF Document'}</span></div>
-                  <div class="flex justify-between text-slate-400"><span>File Size</span><span class="text-slate-200">${((doc.fileSize||0)/1024).toFixed(1)} KB</span></div>
-                </div>
-                <div class="border border-slate-800 rounded-xl bg-slate-950/50 p-6 flex-1 min-h-[500px] flex flex-col items-center justify-center space-y-4 relative overflow-hidden group">
-                  <div class="absolute inset-0 bg-gradient-to-br from-sky-500/5 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-500"></div>
-                  <div class="w-24 h-32 bg-slate-900 border border-slate-700 shadow-2xl rounded-lg p-3 flex flex-col space-y-2 relative z-10">
-                    <div class="h-2 bg-sky-500/40 w-3/4 rounded-full"></div>
-                    <div class="h-1 bg-slate-700 w-full rounded-full"></div>
-                    <div class="h-1 bg-slate-700 w-5/6 rounded-full"></div>
-                    <div class="h-1 bg-slate-700 w-full rounded-full"></div>
-                    <div class="mt-auto h-2 bg-emerald-500/40 w-1/2 rounded-full"></div>
-                  </div>
-                  <p class="text-xs text-slate-500 relative z-10 text-center px-8">High-resolution document preview is active. The AI has scanned this document for key-value pairs and line items.</p>
-                </div>
+            <div class="xl:col-span-5 bg-slate-900 border border-slate-800 p-6 rounded-2xl shadow-2xl space-y-4">
+              <h3 class="text-sm font-bold text-slate-300 border-b border-slate-800 pb-3">Original Document</h3>
+              <div class="bg-slate-950 rounded-xl overflow-hidden border border-slate-800 h-[600px] relative group">
+                <img src="/${doc.storagePath}" alt="Document Preview" class="w-full h-full object-contain p-2" onerror="this.src='https://placehold.co/600x800/1e293b/475569?text=No+Preview+Available'" />
               </div>
             </div>
 
-            <!-- Right Side: Editable Data -->
-            <div class="xl:col-span-7 bg-slate-900 border border-slate-800 p-6 rounded-2xl shadow-2xl space-y-6 text-xs">
+            <div class="xl:col-span-7 bg-slate-900 border border-slate-800 p-8 rounded-2xl shadow-2xl space-y-6">
               <h3 class="text-base font-bold text-white border-b border-slate-800 pb-3 flex items-center gap-2">
-                <span class="text-sky-400">⚡</span> Extracted Data Fields
+                <span class="text-sky-400">⚡</span> Dynamically Extracted Fields
               </h3>
-
-              <div class="bg-slate-950/50 p-5 rounded-xl border border-slate-800/50 space-y-4 hover:border-slate-700 transition-colors">
-                <div class="font-bold text-sky-400/80 text-[10px] tracking-wider uppercase">1. Identifiers & Dates</div>
-                <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
-                  <div class="col-span-2">
-                    <label class="text-slate-400 block mb-1">Invoice Number</label>
-                    <input id="inputDocNum" type="text" value="${canonical.documentNumber || ''}" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white font-mono focus:border-sky-500 focus:outline-none transition-colors" />
-                  </div>
-                  <div class="col-span-2">
-                    <label class="text-slate-400 block mb-1">Shipment Number</label>
-                    <input id="inputShipNum" type="text" value="${canonical.shipmentNumber || ''}" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white font-mono focus:border-sky-500 focus:outline-none transition-colors" />
-                  </div>
-                  <div class="col-span-2">
-                    <label class="text-slate-400 block mb-1">PO Number</label>
-                    <input id="inputPoNum" type="text" value="${canonical.purchaseOrderNumber || ''}" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white font-mono focus:border-sky-500 focus:outline-none transition-colors" />
-                  </div>
-                  <div>
-                    <label class="text-slate-400 block mb-1">Pickup Date</label>
-                    <input id="inputPickup" type="text" value="${canonical.pickupDate || ''}" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white font-mono focus:border-sky-500 focus:outline-none transition-colors" />
-                  </div>
-                  <div>
-                    <label class="text-slate-400 block mb-1">Delivery Date</label>
-                    <input id="inputDelivery" type="text" value="${canonical.deliveryDate || ''}" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white font-mono focus:border-sky-500 focus:outline-none transition-colors" />
-                  </div>
-                </div>
-              </div>
-
-              <div class="bg-slate-950/50 p-5 rounded-xl border border-slate-800/50 space-y-4 hover:border-slate-700 transition-colors">
-                <div class="font-bold text-sky-400/80 text-[10px] tracking-wider uppercase">2. Logistics Parties</div>
-                <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
-                  <div>
-                    <label class="text-slate-400 block mb-1">Shipper / Sender</label>
-                    <input id="inputShipper" type="text" value="${canonical.shipperName || ''}" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white focus:border-sky-500 focus:outline-none transition-colors" />
-                  </div>
-                  <div>
-                    <label class="text-slate-400 block mb-1">Consignee / Receiver</label>
-                    <input id="inputConsignee" type="text" value="${canonical.consigneeName || ''}" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white focus:border-sky-500 focus:outline-none transition-colors" />
-                  </div>
-                  <div>
-                    <label class="text-slate-400 block mb-1">Carrier Name</label>
-                    <input id="inputCarrier" type="text" value="${canonical.carrierName || ''}" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white focus:border-sky-500 focus:outline-none transition-colors" />
-                  </div>
-                </div>
-              </div>
-
-              <div class="bg-slate-950/50 p-5 rounded-xl border border-slate-800/50 space-y-4 hover:border-slate-700 transition-colors">
-                <div class="flex justify-between items-end">
-                  <div class="font-bold text-sky-400/80 text-[10px] tracking-wider uppercase">3. Line Items</div>
-                  <div class="text-[10px] text-slate-500">Edit descriptions and prices</div>
-                </div>
-
-                <div class="border border-slate-800 rounded-lg overflow-hidden bg-slate-900">
-                  <div class="grid grid-cols-12 gap-3 px-3 py-2 bg-slate-800/50 text-[10px] font-bold text-slate-400 uppercase tracking-wide">
-                    <div class="col-span-6">Description</div>
-                    <div class="col-span-2 text-center">Qty</div>
-                    <div class="col-span-2 text-right">Unit Price</div>
-                    <div class="col-span-2 text-right">Total</div>
-                  </div>
-                  <div class="p-3 bg-slate-950" id="lineItemsContainer">
-                    ${lineItemsHtml}
-                  </div>
-                </div>
-              </div>
-
-              <div class="bg-slate-950/50 p-5 rounded-xl border border-slate-800/50 space-y-4 hover:border-slate-700 transition-colors">
-                <div class="font-bold text-emerald-400/80 text-[10px] tracking-wider uppercase">4. Amounts & Totals</div>
-                <div class="grid grid-cols-2 md:grid-cols-6 gap-4">
-                  <div>
-                    <label class="text-slate-400 block mb-1">Weight (Lb)</label>
-                    <input id="inputWeight" type="number" value="${numVal(canonical.weightLb, 0)}" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white font-mono focus:border-sky-500 focus:outline-none" />
-                  </div>
-                  <div>
-                    <label class="text-slate-400 block mb-1">Qty (Total)</label>
-                    <input id="inputTotalQty" type="number" value="${numVal(canonical.totalQuantity, 0)}" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white font-mono focus:border-sky-500 focus:outline-none" />
-                  </div>
-                  <div>
-                    <label class="text-slate-400 block mb-1">Subtotal ($)</label>
-                    <input id="inputSubtotal" type="number" step="0.01" value="${numVal(canonical.subtotalCost, 1250)}" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white font-mono focus:border-sky-500 focus:outline-none" />
-                  </div>
-                  <div>
-                    <label class="text-slate-400 block mb-1">Freight ($)</label>
-                    <input id="inputFreight" type="number" step="0.01" value="${numVal(canonical.freightCost, 150)}" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white font-mono focus:border-sky-500 focus:outline-none" />
-                  </div>
-                  <div>
-                    <label class="text-slate-400 block mb-1">Tax ($)</label>
-                    <input id="inputTax" type="number" step="0.01" value="${numVal(canonical.taxCost, 75)}" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white font-mono focus:border-sky-500 focus:outline-none" />
-                  </div>
-                  <div>
-                    <label class="text-emerald-400 font-bold block mb-1">Total ($)</label>
-                    <input id="inputTotal" type="number" step="0.01" value="${numVal(canonical.totalAmount, 1475)}" class="w-full bg-emerald-900/20 border border-emerald-500/50 rounded-lg px-3 py-2 text-emerald-400 font-bold font-mono shadow-inner focus:border-emerald-400 focus:outline-none transition-colors" />
-                  </div>
-                </div>
+              
+              <div class="bg-slate-950/50 p-6 rounded-xl border border-slate-800/50 space-y-5 hover:border-slate-700 transition-colors max-h-[600px] overflow-y-auto">
+                 ${fieldsHtml}
+                 ${Object.keys(canonical).length === 0 ? '<div class="text-slate-500 text-center py-10">No data found.</div>' : ''}
               </div>
             </div>
           </div>
         </main>
       `;
 
-      document.getElementById('genInvoiceBtn').onclick = async () => {
-        const lineItemRows = document.querySelectorAll('.line-item-row');
-        const updatedLineItems = Array.from(lineItemRows).map(row => {
-          return {
-            description: row.querySelector('.item-desc').value,
-            quantity: parseFloat(row.querySelector('.item-qty').value) || 0,
-            unitPrice: parseFloat(row.querySelector('.item-price').value) || 0,
-            totalPrice: parseFloat(row.querySelector('.item-total').value) || 0
-          };
+      document.getElementById('saveReviewBtn').onclick = async () => {
+        const payload = {};
+        const inputs = document.querySelectorAll('.dynamic-field');
+        inputs.forEach(input => {
+          const key = input.getAttribute('data-key');
+          let val = input.value;
+          // Try parse back to object if it looks like JSON
+          if (val.trim().startsWith('{') || val.trim().startsWith('[')) {
+             try { val = JSON.parse(val); } catch(e) {}
+          }
+          payload[key] = val;
         });
 
-        const payload = {
-          documentNumber: document.getElementById('inputDocNum').value,
-          shipmentNumber: document.getElementById('inputShipNum').value,
-          purchaseOrderNumber: document.getElementById('inputPoNum').value,
-          pickupDate: document.getElementById('inputPickup').value,
-          deliveryDate: document.getElementById('inputDelivery').value,
-          shipperName: document.getElementById('inputShipper').value,
-          consigneeName: document.getElementById('inputConsignee').value,
-          carrierName: document.getElementById('inputCarrier').value,
-          weightLb: parseFloat(document.getElementById('inputWeight').value) || 0,
-          totalQuantity: parseFloat(document.getElementById('inputTotalQty').value) || 0,
-          subtotalCost: parseFloat(document.getElementById('inputSubtotal').value) || 0,
-          freightCost: parseFloat(document.getElementById('inputFreight').value) || 0,
-          taxCost: parseFloat(document.getElementById('inputTax').value) || 0,
-          totalAmount: parseFloat(document.getElementById('inputTotal').value) || 0,
-          currency: 'USD',
-          lineItems: updatedLineItems
-        };
+        const btn = document.getElementById('saveReviewBtn');
+        btn.innerHTML = 'Saving...';
+        btn.disabled = true;
+
+        try {
+          const res = await fetch(`/api/documents/${docId}/review`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ editedData: payload })
+          });
+          const resData = await res.json();
+          if (resData.success) {
+            btn.innerHTML = 'Saved ✓';
+            btn.classList.add('bg-emerald-600');
+            setTimeout(() => {
+              btn.innerHTML = 'Save & Approve';
+              btn.classList.remove('bg-emerald-600');
+              btn.disabled = false;
+            }, 2000);
+          } else {
+            alert(resData.error || 'Failed to save');
+            btn.innerHTML = 'Save & Approve';
+            btn.disabled = false;
+          }
+        } catch(err) {
+          alert('Network error');
+          btn.innerHTML = 'Save & Approve';
+          btn.disabled = false;
+        }
+      };
+
+      document.getElementById('genInvoiceBtn').onclick = async () => {
+        const payload = {};
+        const inputs = document.querySelectorAll('.dynamic-field');
+        inputs.forEach(input => {
+          const key = input.getAttribute('data-key');
+          let val = input.value;
+          if (val.trim().startsWith('{') || val.trim().startsWith('[')) {
+             try { val = JSON.parse(val); } catch(e) {}
+          }
+          payload[key] = val;
+        });
 
         const btn = document.getElementById('genInvoiceBtn');
         btn.innerHTML = 'Generating... ⏳';
         btn.disabled = true;
-        btn.classList.add('opacity-50', 'cursor-not-allowed');
 
         try {
           const res = await fetch(`/api/documents/${docId}/generate-invoice`, {
@@ -733,7 +635,6 @@ def _send_spa_html(path):
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ editedExtractedData: payload })
           });
-
           const resData = await res.json();
           if (resData.success && resData.invoiceUrl) {
             window.location.href = resData.invoiceUrl;
@@ -741,262 +642,47 @@ def _send_spa_html(path):
             alert(resData.error || 'Failed to generate invoice');
             btn.innerHTML = 'Generate Invoice ✨';
             btn.disabled = false;
-            btn.classList.remove('opacity-50', 'cursor-not-allowed');
           }
         } catch(err) {
           alert('Network error');
           btn.innerHTML = 'Generate Invoice ✨';
           btn.disabled = false;
-          btn.classList.remove('opacity-50', 'cursor-not-allowed');
         }
       };
     }
+
+
 
     async function renderInvoicePage(app, navHtml, primaryColor, docId) {
       const res = await fetch('/api/documents');
       const d = await res.json();
       const doc = (d.documents || []).find(item => item.id === docId) || {};
 
-      let canonical = {
-        documentNumber: 'DHL-9982412',
-        shipmentNumber: '8492019482',
-        shipperName: 'Apex Logistics Hub',
-        consigneeName: 'Global Distribution Center',
-        carrierName: 'DHL Express Freight',
-        pickupDate: '2026-08-15',
-        deliveryDate: '2026-08-18',
-        purchaseOrderNumber: 'PO-2026-9912',
-        weightLb: 1450,
-        totalQuantity: 4,
-        subtotalCost: 1250.00,
-        freightCost: 150.00,
-        taxCost: 75.00,
-        totalAmount: 1475.00,
-        lineItems: []
-      };
-
+      let canonical = {};
+      
+      // Load raw data dynamically
       if (doc.extraction?.finalSubmittedData) {
-        try { canonical = { ...canonical, ...JSON.parse(doc.extraction.finalSubmittedData) }; } catch(e) {}
+        try { canonical = JSON.parse(doc.extraction.finalSubmittedData); } catch(e) {}
       } else if (doc.extraction?.canonicalJson) {
-        try { canonical = { ...canonical, ...JSON.parse(doc.extraction.canonicalJson) }; } catch(e) {}
+        try { canonical = JSON.parse(doc.extraction.canonicalJson); } catch(e) {}
       }
 
-      const subtotalFormatted = numVal(canonical.subtotalCost, 1250).toFixed(2);
-      const freightFormatted = numVal(canonical.freightCost, 150).toFixed(2);
-      const taxFormatted = numVal(canonical.taxCost, 75).toFixed(2);
-      const totalFormatted = numVal(canonical.totalAmount, 1475).toFixed(2);
-      
-      const isUPS = (canonical.carrierName || "").toUpperCase().includes("UPS") || (canonical.shipperName || "").toUpperCase().includes("UPS");
-
-      let itemsHtml = '';
-      if (canonical.lineItems && canonical.lineItems.length > 0) {
-        itemsHtml = canonical.lineItems.map(item => `
-          <tr class="hover:bg-slate-50 transition-colors">
-            <td class="p-3 border-b border-slate-200 font-medium text-slate-800 text-sm">${item.description || 'Logistics Freight Item'}</td>
-            <td class="p-3 border-b border-slate-200 text-center font-mono text-slate-600">${item.quantity || 1}</td>
-            <td class="p-3 border-b border-slate-200 text-right font-mono text-slate-600">$${numVal(item.unitPrice, 100).toFixed(2)}</td>
-            <td class="p-3 border-b border-slate-200 text-right font-mono font-bold text-slate-900">$${numVal(item.totalPrice, 100).toFixed(2)}</td>
-          </tr>
-        `).join('');
-      } else {
-        itemsHtml = `
-          <tr class="hover:bg-slate-50 transition-colors">
-            <td class="p-3 border-b border-slate-200 font-medium text-slate-800 text-sm">Freight Transport & Cargo Handling Services</td>
-            <td class="p-3 border-b border-slate-200 text-center font-mono text-slate-600">1</td>
-            <td class="p-3 border-b border-slate-200 text-right font-mono text-slate-600">$${subtotalFormatted}</td>
-            <td class="p-3 border-b border-slate-200 text-right font-mono font-bold text-slate-900">$${subtotalFormatted}</td>
-          </tr>
-        `;
-      }
-
-      let invoiceHtml = '';
-      
-      if (isUPS) {
-        const upsBrown = '#351C15';
-        const upsGold = '#FFB500';
+      let gridHtml = '';
+      for (const [key, value] of Object.entries(canonical)) {
+        let displayVal = value;
+        if (typeof value === 'object') {
+           try { displayVal = JSON.stringify(value); } catch(e) { displayVal = String(value); }
+        }
         
-        invoiceHtml = `
-          <div class="bg-white p-10 shadow-sm border border-slate-200 relative overflow-hidden" style="font-family: Arial, Helvetica, sans-serif; color: #333;">
-            <div class="flex justify-between items-start border-b-4 pb-6" style="border-bottom-color: ${upsBrown};">
-              <div class="flex items-center gap-4">
-                <div class="w-16 h-16 flex items-center justify-center text-2xl font-black text-white" style="background-color: ${upsBrown}; border: 3px solid ${upsGold}; border-radius: 4px;">
-                  UPS
-                </div>
-                <div>
-                  <h1 class="text-2xl font-black tracking-tight" style="color: ${upsBrown};">UPS FREIGHT</h1>
-                  <p class="text-sm font-bold text-slate-500">Invoice / Bill of Lading</p>
-                </div>
-              </div>
-              <div class="text-right">
-                <h2 class="text-3xl font-black mb-1" style="color: ${upsBrown};">INVOICE</h2>
-                <div class="grid grid-cols-2 gap-x-4 gap-y-1 text-sm mt-2">
-                  <span class="font-bold text-slate-500">Invoice Number:</span> <span class="font-mono font-bold text-slate-800">${canonical.documentNumber || 'N/A'}</span>
-                  <span class="font-bold text-slate-500">Shipment Date:</span> <span class="font-medium text-slate-800">${canonical.pickupDate || 'N/A'}</span>
-                  <span class="font-bold text-slate-500">Tracking #:</span> <span class="font-mono font-bold text-slate-800">${canonical.shipmentNumber || 'N/A'}</span>
-                  <span class="font-bold text-slate-500">PO Number:</span> <span class="font-mono font-bold text-slate-800">${canonical.purchaseOrderNumber || 'N/A'}</span>
-                </div>
-              </div>
-            </div>
-
-            <div class="grid grid-cols-2 gap-8 mt-8 mb-8">
-              <div class="p-4 border border-slate-300">
-                <h3 class="font-black text-[11px] tracking-widest uppercase mb-2" style="color: ${upsBrown};">Shipper / Origin</h3>
-                <p class="font-bold text-slate-900 text-base mb-1">${canonical.shipperName || 'Unknown Shipper'}</p>
-              </div>
-              <div class="p-4 border border-slate-300" style="background-color: #fcfbf9;">
-                <h3 class="font-black text-[11px] tracking-widest uppercase mb-2" style="color: ${upsBrown};">Consignee / Destination</h3>
-                <p class="font-bold text-slate-900 text-base mb-1">${canonical.consigneeName || 'Unknown Consignee'}</p>
-              </div>
-            </div>
-
-            <div class="grid grid-cols-3 gap-2 mb-8 text-sm">
-                <div class="border border-slate-300 p-3 flex flex-col">
-                    <span class="text-slate-500 font-bold uppercase text-[10px] mb-1">Carrier</span>
-                    <span class="font-bold text-slate-800">${canonical.carrierName || 'UPS Freight'}</span>
-                </div>
-                <div class="border border-slate-300 p-3 flex flex-col text-center">
-                    <span class="text-slate-500 font-bold uppercase text-[10px] mb-1">Total Weight</span>
-                    <span class="font-bold text-slate-800">${canonical.weightLb || 0} LBS</span>
-                </div>
-                <div class="border border-slate-300 p-3 flex flex-col text-center">
-                    <span class="text-slate-500 font-bold uppercase text-[10px] mb-1">Total Quantity</span>
-                    <span class="font-bold text-slate-800">${canonical.totalQuantity || 0} PKG</span>
-                </div>
-            </div>
-
-            <div class="border-2 border-slate-300 mb-8">
-              <table class="w-full text-left text-sm border-collapse">
-                <thead>
-                  <tr class="text-white text-[11px] uppercase tracking-widest font-bold" style="background-color: ${upsBrown};">
-                    <th class="p-3 w-1/2 border-r border-slate-400">Description of Articles</th>
-                    <th class="p-3 text-center border-r border-slate-400">Pieces</th>
-                    <th class="p-3 text-right border-r border-slate-400">Rate</th>
-                    <th class="p-3 text-right">Charges</th>
-                  </tr>
-                </thead>
-                <tbody class="divide-y divide-slate-300">
-                  ${itemsHtml}
-                </tbody>
-              </table>
-            </div>
-
-            <div class="flex justify-end mt-4">
-              <div class="w-80">
-                <div class="space-y-2 text-sm text-slate-700 border-b-2 border-slate-300 pb-3 mb-3">
-                  <div class="flex justify-between items-center"><span class="font-bold">Freight Charges</span><span class="font-mono">$${freightFormatted}</span></div>
-                  <div class="flex justify-between items-center"><span class="font-bold">Accessorial / Tax</span><span class="font-mono">$${taxFormatted}</span></div>
-                </div>
-                <div class="flex justify-between items-center p-3 text-white" style="background-color: ${upsBrown}; border-left: 6px solid ${upsGold};">
-                  <span class="font-black text-sm tracking-widest uppercase">Total Amount Due</span>
-                  <span class="font-black font-mono text-xl tracking-tighter">$${totalFormatted} <span class="text-xs ml-1">${canonical.currency || 'USD'}</span></span>
-                </div>
-              </div>
-            </div>
-
-            <div class="mt-12 pt-6 border-t-2 border-slate-200 text-center text-[10px] text-slate-500 space-y-1 font-bold uppercase">
-              <p>Payable upon receipt. Remit to UPS Freight.</p>
-            </div>
-          </div>
-        `;
-      } else {
-        // Default Apex Freight style
-        invoiceHtml = `
-          <div class="bg-white rounded-[24px] p-12 shadow-[0_20px_50px_rgba(0,0,0,0.3)] border border-slate-100 relative overflow-hidden">
-            <div class="absolute top-0 left-0 w-full h-3" style="background-color: ${primaryColor}"></div>
-            <div class="absolute top-0 right-12 w-24 h-24 rounded-b-full opacity-10" style="background-color: ${primaryColor}"></div>
-
-            <div class="flex justify-between items-start border-b border-slate-100 pb-10">
-              <div>
-                <div class="flex items-center gap-3 mb-4">
-                  <div class="w-12 h-12 rounded-xl flex items-center justify-center text-white font-bold shadow-lg text-xl" style="background-color: ${primaryColor}">🚚</div>
-                  <div>
-                    <h1 class="text-3xl font-black text-slate-900 tracking-tight">Apex Freight Logistics</h1>
-                    <p class="text-sm text-slate-500 font-medium">Global Logistics & Freight Operations</p>
-                  </div>
-                </div>
-                <div class="text-xs text-slate-500 space-y-1 ml-1">
-                  <p>100 Logistics Parkway, Suite 500</p>
-                  <p>Chicago, IL 60601, USA</p>
-                  <p>billing@apexfreightlogistics.com</p>
-                  <p>+1 (800) 555-0199</p>
-                </div>
-              </div>
-              <div class="text-right flex flex-col items-end">
-                <span class="px-4 py-1.5 bg-sky-50 text-sky-700 text-[10px] uppercase tracking-widest font-bold rounded-full mb-4 border border-sky-100">Official Invoice</span>
-                <h2 class="text-4xl font-black text-slate-900 tracking-tighter mb-2" style="color: ${primaryColor}">${canonical.documentNumber || 'INV-000000'}</h2>
-                <div class="grid grid-cols-2 gap-x-6 gap-y-2 text-xs text-slate-500 text-right mt-2">
-                  <span class="font-bold text-slate-400">Issue Date:</span> <span class="font-medium text-slate-800">${canonical.pickupDate || '2026-08-15'}</span>
-                  <span class="font-bold text-slate-400">Due Date:</span> <span class="font-medium text-slate-800">${canonical.deliveryDate || '2026-09-15'}</span>
-                  <span class="font-bold text-slate-400">Shipment #:</span> <span class="font-mono font-medium text-slate-800">${canonical.shipmentNumber || 'N/A'}</span>
-                  <span class="font-bold text-slate-400">PO Number:</span> <span class="font-mono font-medium text-slate-800">${canonical.purchaseOrderNumber || 'N/A'}</span>
-                </div>
-              </div>
-            </div>
-
-            <div class="grid grid-cols-2 gap-8 mt-10 mb-12">
-              <div class="bg-slate-50/50 p-6 rounded-2xl border border-slate-100 relative overflow-hidden">
-                <div class="absolute left-0 top-0 h-full w-1" style="background-color: ${primaryColor}"></div>
-                <h3 class="font-bold text-slate-400 text-[10px] tracking-widest uppercase mb-3 flex items-center gap-2"><span class="w-1.5 h-1.5 rounded-full bg-slate-400"></span> Bill To / Consignee</h3>
-                <p class="font-black text-slate-900 text-lg mb-1">${canonical.consigneeName || 'Global Distribution Center'}</p>
-                <p class="text-slate-500 text-sm leading-relaxed">Dallas Regional Hub<br/>4500 Freight Way<br/>Dallas, TX 75201</p>
-              </div>
-              <div class="bg-slate-50/50 p-6 rounded-2xl border border-slate-100 relative overflow-hidden">
-                <div class="absolute left-0 top-0 h-full w-1 bg-slate-300"></div>
-                <h3 class="font-bold text-slate-400 text-[10px] tracking-widest uppercase mb-3 flex items-center gap-2"><span class="w-1.5 h-1.5 rounded-full bg-slate-400"></span> From / Shipper</h3>
-                <p class="font-black text-slate-900 text-lg mb-1">${canonical.shipperName || 'Apex Logistics Hub'}</p>
-                <p class="text-slate-500 text-sm leading-relaxed">Origin Fulfillment Center<br/>100 Industrial Drive<br/>Chicago, IL 60601</p>
-              </div>
-            </div>
-
-            <div class="grid grid-cols-3 gap-4 mb-10 text-xs">
-                <div class="border border-slate-100 rounded-xl p-4 flex flex-col items-center text-center">
-                    <span class="text-slate-400 font-semibold uppercase tracking-wider mb-1 text-[10px]">Carrier</span>
-                    <span class="font-bold text-slate-800">${canonical.carrierName || 'Apex Freight'}</span>
-                </div>
-                <div class="border border-slate-100 rounded-xl p-4 flex flex-col items-center text-center">
-                    <span class="text-slate-400 font-semibold uppercase tracking-wider mb-1 text-[10px]">Total Weight</span>
-                    <span class="font-bold text-slate-800">${canonical.weightLb || 0} LBS</span>
-                </div>
-                <div class="border border-slate-100 rounded-xl p-4 flex flex-col items-center text-center">
-                    <span class="text-slate-400 font-semibold uppercase tracking-wider mb-1 text-[10px]">Total Qty</span>
-                    <span class="font-bold text-slate-800">${canonical.totalQuantity || 0} Units</span>
-                </div>
-            </div>
-
-            <div class="overflow-hidden rounded-2xl border border-slate-200">
-              <table class="w-full text-left text-sm border-collapse">
-                <thead>
-                  <tr class="bg-slate-50 text-slate-500 text-[10px] uppercase tracking-widest font-bold">
-                    <th class="p-4 border-b border-slate-200 w-1/2">Description</th>
-                    <th class="p-4 border-b border-slate-200 text-center">Qty</th>
-                    <th class="p-4 border-b border-slate-200 text-right">Unit Price</th>
-                    <th class="p-4 border-b border-slate-200 text-right">Amount</th>
-                  </tr>
-                </thead>
-                <tbody class="divide-y divide-slate-100">
-                  ${itemsHtml}
-                </tbody>
-              </table>
-            </div>
-
-            <div class="flex justify-end mt-8">
-              <div class="w-80">
-                <div class="space-y-3 text-sm text-slate-600 border-b border-slate-200 pb-4 mb-4">
-                  <div class="flex justify-between items-center"><span class="font-medium">Subtotal</span><span class="font-mono">$${subtotalFormatted}</span></div>
-                  <div class="flex justify-between items-center"><span class="font-medium">Freight Charge</span><span class="font-mono">$${freightFormatted}</span></div>
-                  <div class="flex justify-between items-center"><span class="font-medium">Taxes & Duties</span><span class="font-mono">$${taxFormatted}</span></div>
-                </div>
-                <div class="flex justify-between items-center p-5 rounded-2xl text-white shadow-xl" style="background-color: ${primaryColor}">
-                  <span class="font-bold text-sm tracking-wide">TOTAL DUE</span>
-                  <span class="font-black font-mono text-2xl tracking-tighter">$${totalFormatted} <span class="text-xs font-medium opacity-80 ml-1">${canonical.currency || 'USD'}</span></span>
-                </div>
-              </div>
-            </div>
-
-            <div class="mt-16 pt-8 border-t border-slate-100 text-center text-xs text-slate-400 space-y-1">
-              <p class="font-medium text-slate-500">Thank you for your business.</p>
-              <p>Payment is due within 30 days of the invoice date. Please include the invoice number on your check.</p>
-            </div>
+        gridHtml += `
+          <div class="border-b border-slate-100 py-5 flex flex-col md:flex-row md:items-center justify-between gap-4 hover:bg-slate-50 transition-colors px-4 rounded-lg">
+             <span class="text-slate-400 font-bold uppercase tracking-widest text-xs w-full md:w-1/3 flex items-center gap-2">
+                <span class="w-1.5 h-1.5 rounded-full" style="background-color: ${primaryColor}"></span>
+                ${key}
+             </span>
+             <span class="font-black text-slate-800 text-lg w-full md:w-2/3 md:text-right font-mono" style="word-break: break-word;">
+                ${displayVal}
+             </span>
           </div>
         `;
       }
@@ -1021,14 +707,35 @@ def _send_spa_html(path):
           <div class="flex justify-between items-center bg-slate-900 border border-slate-800 p-4 rounded-2xl shadow-lg no-print">
             <a href="/documents/${docId}/review" class="text-xs bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white px-4 py-2 rounded-xl transition-colors">← Back to Review</a>
             <div class="space-x-3 flex items-center">
-              <span class="text-xs text-emerald-400 font-medium mr-2 flex items-center gap-1"><span class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span> Invoice Ready</span>
               <button onclick="window.print()" class="text-xs bg-slate-800 hover:bg-slate-700 text-white px-5 py-2 rounded-xl font-bold transition-colors">🖨️ Print</button>
-              <button onclick="window.print()" class="text-xs text-white px-5 py-2 rounded-xl font-bold shadow-lg shadow-sky-900/30 hover:scale-105 transition-transform" style="background-color: ${primaryColor}">Download PDF 📥</button>
+              <button onclick="window.print()" class="text-xs text-white px-5 py-2 rounded-xl font-bold shadow-lg transition-transform hover:scale-105" style="background-color: ${primaryColor}">Download PDF 📥</button>
             </div>
           </div>
 
-          <!-- Invoice Paper -->
-          ${invoiceHtml}
+          <div class="bg-white rounded-[24px] p-12 shadow-[0_20px_50px_rgba(0,0,0,0.3)] border border-slate-100 relative overflow-hidden" style="font-family: 'Inter', Arial, sans-serif;">
+            <div class="absolute top-0 left-0 w-full h-4" style="background-color: ${primaryColor}"></div>
+            <div class="absolute top-0 right-12 w-32 h-32 rounded-b-full opacity-[0.03]" style="background-color: ${primaryColor}"></div>
+
+            <div class="flex justify-between items-start border-b-2 border-slate-100 pb-12 mb-10">
+              <div>
+                <h1 class="text-4xl font-black text-slate-900 tracking-tighter mb-2 uppercase">Processed Document</h1>
+                <p class="text-sm font-bold text-slate-400 tracking-widest uppercase">System Generated Record</p>
+              </div>
+              <div class="text-right">
+                <div class="w-16 h-16 rounded-2xl flex items-center justify-center text-white font-bold shadow-lg text-2xl ml-auto mb-4" style="background-color: ${primaryColor}">📄</div>
+              </div>
+            </div>
+
+            <div class="space-y-1 mb-16">
+               ${gridHtml}
+               ${Object.keys(canonical).length === 0 ? '<div class="text-center py-20 text-slate-400 font-bold uppercase tracking-widest">No data available</div>' : ''}
+            </div>
+
+            <div class="mt-16 pt-8 border-t-2 border-slate-100 text-center text-xs text-slate-400 font-bold uppercase tracking-widest space-y-2">
+              <p>Generated by Logistics Document Automation Engine</p>
+              <p>Document ID: ${docId}</p>
+            </div>
+          </div>
         </main>
       `;
     }
