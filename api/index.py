@@ -34,7 +34,11 @@ async def global_exception_handler(request: Request, exc: Exception):
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DB_PATH = os.path.join(BASE_DIR, "prisma", "dev.db")
-POSTGRES_URL = os.getenv("POSTGRES_URL") or os.getenv("DATABASE_URL")
+POSTGRES_URL = os.getenv("POSTGRES_URL")
+if not POSTGRES_URL:
+    _db_url = os.getenv("DATABASE_URL", "")
+    if _db_url.startswith("postgres"):
+        POSTGRES_URL = _db_url
 
 DB_INITIALIZED = False
 
