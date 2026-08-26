@@ -1109,8 +1109,12 @@ async def upload_documents(request: Request):
     if not files:
         return JSONResponse({"error": "No files uploaded"}, status_code=400)
         
-    temp_dir = os.path.join(BASE_DIR, "tmp_uploads")
-    os.makedirs(temp_dir, exist_ok=True)
+    import tempfile
+    temp_dir = os.path.join(tempfile.gettempdir(), "tmp_uploads")
+    try:
+        os.makedirs(temp_dir, exist_ok=True)
+    except Exception:
+        temp_dir = "/tmp"
     
     app_base_url = os.getenv("APP_BASE_URL", "http://localhost:3000")
     webhook_url = os.getenv("N8N_WEBHOOK_URL", "https://n8n.provelopers.net/webhook/726784a2-239a-4a6d-a837-85828f4b2ca2")
