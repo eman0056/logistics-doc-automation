@@ -215,10 +215,11 @@ def _send_spa_html(path):
         try {
           const res = await fetch('/api/documents/upload', { method: 'POST', body: formData });
           const d = await res.json();
-          if (d.success) {
-            uploadStatus.textContent = "Upload successful! Redirecting to batch review...";
+          if (d.success && d.documentIds && d.documentIds.length > 0) {
+            uploadStatus.textContent = "Upload successful! Redirecting to review...";
             setTimeout(() => {
-              window.location.href = `/review-batch?ids=${d.documentIds.join(',')}`;
+              // Go directly to the first document's review page so polling works
+              window.location.href = `/documents/${d.documentIds[0]}/review`;
             }, 800);
           } else {
             alert(d.error || "Upload failed");
