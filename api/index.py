@@ -33,7 +33,11 @@ async def global_exception_handler(request: Request, exc: Exception):
     )
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-DB_PATH = os.path.join(BASE_DIR, "prisma", "dev.db")
+# On Vercel, filesystem is read-only except /tmp
+if os.getenv("VERCEL"):
+    DB_PATH = "/tmp/dev.db"
+else:
+    DB_PATH = os.path.join(BASE_DIR, "prisma", "dev.db")
 POSTGRES_URL = os.getenv("POSTGRES_URL")
 if not POSTGRES_URL:
     _db_url = os.getenv("DATABASE_URL", "")
