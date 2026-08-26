@@ -24,6 +24,14 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+import traceback
+@app.exception_handler(Exception)
+async def global_exception_handler(request: Request, exc: Exception):
+    return JSONResponse(
+        status_code=500,
+        content={"error": str(exc), "trace": traceback.format_exc()}
+    )
+
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DB_PATH = os.path.join(BASE_DIR, "prisma", "dev.db")
 POSTGRES_URL = os.getenv("POSTGRES_URL") or os.getenv("DATABASE_URL")
@@ -869,36 +877,40 @@ def get_customer():
 
 @app.get("/api/documents")
 def get_documents():
-    conn = get_db()
-    cursor = execute_query(conn, """
-        SELECT d.id, d.fileName, d.fileSize, d.mimeType, d.storagePath, d.documentType, d.status, d.overallConfidence, d.invoiceGeneratedAt, d.createdAt, e.canonicalJson, e.confidenceScores, e.finalSubmittedData
-        FROM Document d
-        LEFT JOIN Extraction e ON d.id = e.documentId
-        ORDER BY d.createdAt DESC;
-    """)
-    rows = cursor.fetchall()
-    conn.close()
-    
-    docs = []
-    for r in rows:
-        docs.append({
-            "id": r[0],
-            "fileName": r[1],
-            "fileSize": r[2],
-            "mimeType": r[3],
-            "storagePath": r[4],
-            "documentType": r[5],
-            "status": r[6],
-            "overallConfidence": r[7],
-            "invoiceGeneratedAt": r[8],
-            "createdAt": r[9],
-            "extraction": {
-                "canonicalJson": r[10],
-                "confidenceScores": r[11],
-                "finalSubmittedData": r[12]
-            } if r[10] else None
-        })
-    return {"success": True, "documents": docs}
+    try:
+        conn = get_db()
+        cursor = execute_query(conn, """
+            SELECT d.id, d.fileName, d.fileSize, d.mimeType, d.storagePath, d.documentType, d.status, d.overallConfidence, d.invoiceGeneratedAt, d.createdAt, e.canonicalJson, e.confidenceScores, e.finalSubmittedData
+            FROM Document d
+            LEFT JOIN Extraction e ON d.id = e.documentId
+            ORDER BY d.createdAt DESC;
+        """)
+        rows = cursor.fetchall()
+        conn.close()
+        
+        docs = []
+        for r in rows:
+            docs.append({
+                "id": r[0],
+                "fileName": r[1],
+                "fileSize": r[2],
+                "mimeType": r[3],
+                "storagePath": r[4],
+                "documentType": r[5],
+                "status": r[6],
+                "overallConfidence": r[7],
+                "invoiceGeneratedAt": r[8],
+                "createdAt": r[9],
+                "extraction": {
+                    "canonicalJson": r[10],
+                    "confidenceScores": r[11],
+                    "finalSubmittedData": r[12]
+                } if r[10] else None
+            })
+        return {"success": True, "documents": docs}
+    except Exception as e:
+        import traceback
+        return JSONResponse({"error": str(e), "trace": traceback.format_exc()}, status_code=500)
 
 @app.post("/api/documents/upload")
 async def upload_documents(request: Request):
