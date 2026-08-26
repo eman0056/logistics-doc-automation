@@ -44,7 +44,14 @@ def init_db(conn):
     for q in queries:
         cursor.execute(q)
     conn.commit()
+    
+    try:
+        cursor.execute("ALTER TABLE Document ADD COLUMN fileData TEXT;")
+    except Exception as e:
+        pass # Column might already exist
+    conn.commit()
     DB_INITIALIZED = True
+    
 
 def get_db():
     if POSTGRES_URL and psycopg2:
@@ -914,13 +921,7 @@ async def upload_documents(request: Request):
     if not files:
         return JSONResponse({"error": "No files uploaded"}, status_code=400)
         
-    import tempfile
-    temp_dir = os.path.join(tempfile.gettempdir(), "tmp_uploads")
-    try:
-        os.makedirs(temp_dir, exist_ok=True)
-    except Exception:
-        temp_dir = "/tmp"
-    
+    import base64
     app_base_url = os.getenv("APP_BASE_URL") or str(request.base_url).rstrip("/")
     webhook_url = os.getenv("N8N_WEBHOOK_URL", "https://n8n.provelopers.net/webhook/726784a2-239a-4a6d-a837-85828f4b2ca2")
     
@@ -934,33 +935,58 @@ async def upload_documents(request: Request):
     results = []
     try:
         for file_item in files:
-            temp_file_path = os.path.join(temp_dir, file_item.filename)
-            with open(temp_file_path, 'wb') as f:
-                f.write(await file_item.read())
+            file_bytes = await file_item.read()
+            file_b64 = base64.b64encode(file_bytes).decode('utf-8')
             
-            # Simple ingest_file mocking for Vercel
-            res = {"documentId": str(uuid.uuid4()), "storagePath": f"uploads/{file_item.filename}", "fileName": file_item.filename, "documentType": "INVOICE"}
-            
-            # For Vercel, upload to Blob would happen here!
+            doc_id = str(uuid.uuid4())
+            storage_path = f"api/documents/{doc_id}/file"
             
             payload = {
-                "documentId": res["documentId"],
-                "storagePath": res["storagePath"],
-                "fileName": res["fileName"],
-                "callbackUrl": f"{app_base_url}/api/documents/{res['documentId']}/extraction/callback"
+                "documentId": doc_id,
+                "storagePath": storage_path,
+                "fileName": file_item.filename,
+                "fileBase64": file_b64,
+                "callbackUrl": f"{app_base_url}/api/documents/{doc_id}/extraction/callback"
             }
             
             threading.Thread(target=trigger_webhook, args=(webhook_url, payload), daemon=True).start()
             
             conn = get_db()
-            execute_query(conn, "INSERT INTO Document (id, fileName, status) VALUES (?, ?, 'PREPROCESSED')", (res["documentId"], res["fileName"]))
+            execute_query(conn, "INSERT INTO Document (id, fileName, storagePath, status) VALUES (?, ?, ?, 'PREPROCESSED')", (doc_id, file_item.filename, storage_path))
+            
+            # Now update the fileData column
+            execute_query(conn, "UPDATE Document SET fileData = ? WHERE id = ?", (file_b64, doc_id))
+            
             conn.commit()
             conn.close()
-            results.append(res["documentId"])
+            results.append(doc_id)
             
         return {"success": True, "documentIds": results}
     except Exception as e:
         return JSONResponse({"error": str(e)}, status_code=500)
+
+@app.get("/api/documents/{doc_id}/file")
+def get_document_file(doc_id: str):
+    import base64
+    from fastapi.responses import Response
+    conn = get_db()
+    cursor = execute_query(conn, "SELECT fileData, fileName FROM Document WHERE id = ?", (doc_id,))
+    row = cursor.fetchone()
+    conn.close()
+    
+    if not row or not row[0]:
+        return JSONResponse({"error": "File not found"}, status_code=404)
+        
+    file_data_b64 = row[0]
+    file_name = row[1]
+    
+    try:
+        file_bytes = base64.b64decode(file_data_b64)
+        media_type = "application/pdf" if file_name.lower().endswith(".pdf") else "image/jpeg"
+        if file_name.lower().endswith(".png"): media_type = "image/png"
+        return Response(content=file_bytes, media_type=media_type)
+    except Exception:
+        return JSONResponse({"error": "Failed to decode file"}, status_code=500)
 
 @app.post("/api/batch-generate")
 async def batch_generate(request: Request):
