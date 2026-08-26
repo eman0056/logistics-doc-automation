@@ -92,6 +92,16 @@ def execute_query(conn, query, params=()):
     cursor.execute(query, params)
     return cursor
 
+@app.get("/api/debug-info")
+def debug_info():
+    return {
+        "status": "app_loaded",
+        "DB_PATH": DB_PATH,
+        "POSTGRES_URL_set": bool(POSTGRES_URL),
+        "psycopg2_available": psycopg2 is not None,
+        "VERCEL": os.getenv("VERCEL", "not_set"),
+        "DATABASE_URL_prefix": (os.getenv("DATABASE_URL", ""))[:20]
+    }
 
 
 def _send_spa_html(path):
