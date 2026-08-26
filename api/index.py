@@ -45,11 +45,16 @@ def init_db(conn):
         cursor.execute(q)
     conn.commit()
     
-    try:
-        cursor.execute("ALTER TABLE Document ADD COLUMN fileData TEXT;")
-    except Exception as e:
-        pass # Column might already exist
-    conn.commit()
+    # Safely add columns that might already exist
+    alter_statements = [
+        "ALTER TABLE Document ADD COLUMN fileData TEXT;",
+    ]
+    for stmt in alter_statements:
+        try:
+            cursor.execute(stmt)
+            conn.commit()
+        except Exception:
+            conn.rollback()  # Reset transaction so subsequent queries work
     DB_INITIALIZED = True
     
 
@@ -1049,27 +1054,44 @@ async def generate_invoice(doc_id: str, request: Request):
 
 @app.post("/api/documents/{doc_id}/extraction/callback")
 async def extraction_callback(doc_id: str, request: Request):
-    body = await request.json()
+    try:
+        body = await request.json()
+    except Exception as e:
+        return JSONResponse({"error": f"Invalid JSON body: {e}"}, status_code=400)
+
     extracted = body.get('extractedData') or body.get('canonicalJson')
 
     if not extracted:
-        return JSONResponse({"error": "Missing extracted payload"}, status_code=400)
+        return JSONResponse({"error": "Missing extracted payload", "received_keys": list(body.keys())}, status_code=400)
 
     json_str = json.dumps(extracted)
-    conn = get_db()
-    
-    # Check if row exists
-    cursor = execute_query(conn, "SELECT 1 FROM Extraction WHERE documentId=?", (doc_id,))
-    if cursor.fetchone():
-        execute_query(conn, "UPDATE Extraction SET canonicalJson = ? WHERE documentId = ?;", (json_str, doc_id))
-    else:
-        execute_query(conn, "INSERT INTO Extraction (documentId, canonicalJson) VALUES (?, ?);", (doc_id, json_str))
-        
-    execute_query(conn, "UPDATE Document SET status = 'EXTRACTED' WHERE id = ?;", (doc_id,))
-    conn.commit()
-    conn.close()
+    conn = None
+    try:
+        conn = get_db()
 
-    return {"success": True, "reviewUrl": f"/documents/{doc_id}/review"}
+        # Check if Extraction row exists for this document
+        cursor = execute_query(conn, "SELECT 1 FROM Extraction WHERE documentId=?", (doc_id,))
+        if cursor.fetchone():
+            execute_query(conn, "UPDATE Extraction SET canonicalJson = ? WHERE documentId = ?;", (json_str, doc_id))
+        else:
+            execute_query(conn, "INSERT INTO Extraction (documentId, canonicalJson) VALUES (?, ?);", (doc_id, json_str))
+
+        execute_query(conn, "UPDATE Document SET status = 'EXTRACTED' WHERE id = ?;", (doc_id,))
+        conn.commit()
+
+        return {"success": True, "reviewUrl": f"/documents/{doc_id}/review"}
+
+    except Exception as e:
+        if conn:
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+        import traceback
+        return JSONResponse({"error": str(e), "trace": traceback.format_exc()}, status_code=500)
+    finally:
+        if conn:
+            conn.close()
 
 @app.get("/api/review-tasks")
 def get_review_tasks():
