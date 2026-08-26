@@ -507,96 +507,65 @@ def _send_spa_html(path):
     }
 
     async function renderReviewPage(app, navHtml, primaryColor, docId) {
-      // Fetch with polling support
-      async function fetchDoc() {
-        const res = await fetch('/api/documents');
-        const d = await res.json();
-        return (d.documents || []).find(item => item.id === docId) || {};
-      }
+      const res = await fetch('/api/documents');
+      const d = await res.json();
+      const doc = (d.documents || []).find(item => item.id === docId) || {};
 
-      // Show loading state first
-      app.innerHTML = `
-        ${navHtml}
-        <main class="max-w-7xl mx-auto px-4 py-8">
-          <div class="flex flex-col items-center justify-center py-32 space-y-6">
-            <div class="w-16 h-16 rounded-full border-4 border-sky-500 border-t-transparent animate-spin"></div>
-            <div class="text-center">
-              <h2 class="text-2xl font-bold text-white">Processing Document</h2>
-              <p class="text-slate-400 mt-2">n8n is extracting data from your document. This usually takes 10-30 seconds...</p>
-            </div>
-            <div id="pollStatus" class="text-xs text-slate-500">Checking for extracted data...</div>
-          </div>
-        </main>
-      `;
-
-      // Poll until extraction data is available (max 2 minutes)
-      let doc = {};
       let canonical = {};
-      let pollCount = 0;
-      const maxPolls = 24; // 24 * 5s = 2 minutes
 
-      while (pollCount < maxPolls) {
-        doc = await fetchDoc();
-        const pollStatus = document.getElementById('pollStatus');
-        if (pollStatus) pollStatus.textContent = `Checking... (attempt ${pollCount + 1}/${maxPolls})`;
-
-        if (doc.extraction?.finalSubmittedData) {
-          try { canonical = JSON.parse(doc.extraction.finalSubmittedData); } catch(e) {}
-          if (Object.keys(canonical).length > 0) break;
-        }
-        if (doc.extraction?.canonicalJson) {
-          try { canonical = JSON.parse(doc.extraction.canonicalJson); } catch(e) {}
-          if (Object.keys(canonical).length > 0) break;
-        }
-
-        pollCount++;
-        if (pollCount < maxPolls) {
-          await new Promise(resolve => setTimeout(resolve, 5000)); // wait 5s
-        }
+      if (doc.extraction?.finalSubmittedData) {
+        try { canonical = JSON.parse(doc.extraction.finalSubmittedData); } catch(e) {}
+      } else if (doc.extraction?.canonicalJson) {
+        try { canonical = JSON.parse(doc.extraction.canonicalJson); } catch(e) {}
       }
 
-      // If still no data after polling, show a proper message
-      if (Object.keys(canonical).length === 0) {
-        canonical = { "Status": "Extraction timed out. Please check your n8n workflow and try again." };
-      }
+      const extractionPending = Object.keys(canonical).length === 0;
 
       let fieldsHtml = '';
-      for (const [key, value] of Object.entries(canonical)) {
-        let displayVal = value;
-        if (typeof value === 'object') {
-           try { displayVal = JSON.stringify(value); } catch(e) { displayVal = String(value); }
-        }
-        
-        fieldsHtml += `
-          <div class="space-y-1">
-            <label class="text-slate-400 block mb-1 font-bold text-[11px] uppercase tracking-wider">${key}</label>
-            <input data-key="${key}" type="text" value="${displayVal || ''}" class="dynamic-field w-full bg-slate-900 border border-slate-700 rounded-lg px-4 py-3 text-white focus:border-sky-500 focus:outline-none transition-colors shadow-inner font-mono text-sm" />
+      if (extractionPending) {
+        fieldsHtml = `
+          <div class="text-center py-12 space-y-4">
+            <p class="text-slate-400 text-sm">No extracted data yet. Wait a few seconds for n8n to complete, then refresh.</p>
+            <button onclick="location.reload()" class="text-xs bg-sky-600 hover:bg-sky-500 text-white px-5 py-2 rounded-xl font-bold transition-colors">Refresh Page</button>
           </div>
         `;
+      } else {
+        for (const [key, value] of Object.entries(canonical)) {
+          let displayVal = value;
+          if (typeof value === 'object') {
+            try { displayVal = JSON.stringify(value); } catch(e) { displayVal = String(value); }
+          }
+          fieldsHtml += `
+            <div class="space-y-1">
+              <label class="text-slate-400 block mb-1 font-bold text-[11px] uppercase tracking-wider">${key}</label>
+              <input data-key="${key}" type="text" value="${String(displayVal || '').replace(/"/g, '&quot;')}" class="dynamic-field w-full bg-slate-900 border border-slate-700 rounded-lg px-4 py-3 text-white focus:border-sky-500 focus:outline-none transition-colors shadow-inner font-mono text-sm" />
+            </div>
+          `;
+        }
       }
 
       app.innerHTML = `
         ${navHtml}
-        <main class="max-w-7xl mx-auto px-4 py-8 space-y-8 animate-in text-slate-100">
+        <main class="max-w-7xl mx-auto px-4 py-8 space-y-8 text-slate-100">
           <div class="flex items-center justify-between">
             <div>
-              <h1 class="text-3xl font-black tracking-tight text-white flex items-center gap-3">
-                Dynamic Review & Edit
-              </h1>
+              <h1 class="text-3xl font-black tracking-tight text-white">Dynamic Review &amp; Edit</h1>
               <p class="text-slate-400 mt-2">Edit the exact extracted key-value pairs before final generation.</p>
             </div>
             <div class="space-x-3">
-              <a href="/documents" class="text-xs bg-slate-800 hover:bg-slate-700 px-4 py-2 rounded-xl transition-colors">Discard</a>
-              <button id="saveReviewBtn" class="text-xs text-white px-6 py-2 rounded-xl font-bold shadow-lg shadow-sky-900/30 hover:scale-105 transition-transform" style="background-color: ${primaryColor}">Save & Approve</button>
-              <button id="genInvoiceBtn" class="text-xs bg-white text-slate-900 hover:bg-slate-200 px-6 py-2 rounded-xl font-bold transition-colors">Generate Invoice ✨</button>
+              <a href="/documents" class="text-xs bg-slate-800 hover:bg-slate-700 text-white px-4 py-2 rounded-xl transition-colors">Discard</a>
+              ${!extractionPending ? `
+              <button id="saveReviewBtn" class="text-xs text-white px-6 py-2 rounded-xl font-bold shadow-lg hover:scale-105 transition-transform" style="background-color: ${primaryColor}">Save &amp; Approve</button>
+              <button id="genInvoiceBtn" class="text-xs bg-white text-slate-900 hover:bg-slate-200 px-6 py-2 rounded-xl font-bold transition-colors">Generate Invoice</button>` : ''}
             </div>
           </div>
 
           <div class="grid grid-cols-1 xl:grid-cols-12 gap-8">
             <div class="xl:col-span-5 bg-slate-900 border border-slate-800 p-6 rounded-2xl shadow-2xl space-y-4">
               <h3 class="text-sm font-bold text-slate-300 border-b border-slate-800 pb-3">Original Document</h3>
-              <div class="bg-slate-950 rounded-xl overflow-hidden border border-slate-800 h-[600px] relative group">
-                <img src="/api/documents/${docId}/file" alt="Document Preview" class="w-full h-full object-contain p-2" onerror="this.src='https://placehold.co/600x800/1e293b/475569?text=No+Preview+Available'" />
+              <div class="bg-slate-950 rounded-xl overflow-hidden border border-slate-800 h-[600px]">
+                <img src="/api/documents/${docId}/file" alt="Document Preview" class="w-full h-full object-contain p-2"
+                  onerror="this.src='https://placehold.co/600x800/1e293b/475569?text=No+Preview+Available'" />
               </div>
             </div>
 
@@ -604,99 +573,73 @@ def _send_spa_html(path):
               <h3 class="text-base font-bold text-white border-b border-slate-800 pb-3 flex items-center gap-2">
                 <span class="text-sky-400">⚡</span> Dynamically Extracted Fields
               </h3>
-              
-              <div class="bg-slate-950/50 p-6 rounded-xl border border-slate-800/50 space-y-5 hover:border-slate-700 transition-colors max-h-[600px] overflow-y-auto">
-                 ${fieldsHtml}
-                 ${Object.keys(canonical).length === 0 ? '<div class="text-slate-500 text-center py-10">No data found.</div>' : ''}
+              <div class="bg-slate-950/50 p-6 rounded-xl border border-slate-800/50 space-y-5 max-h-[600px] overflow-y-auto">
+                ${fieldsHtml}
               </div>
             </div>
           </div>
         </main>
       `;
 
-      document.getElementById('saveReviewBtn').onclick = async () => {
-        const payload = {};
-        const inputs = document.querySelectorAll('.dynamic-field');
-        inputs.forEach(input => {
-          const key = input.getAttribute('data-key');
-          let val = input.value;
-          // Try parse back to object if it looks like JSON
-          if (val.trim().startsWith('{') || val.trim().startsWith('[')) {
-             try { val = JSON.parse(val); } catch(e) {}
-          }
-          payload[key] = val;
-        });
-
-        const btn = document.getElementById('saveReviewBtn');
-        btn.innerHTML = 'Saving...';
-        btn.disabled = true;
-
-        try {
-          const res = await fetch(`/api/documents/${docId}/review`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ editedData: payload })
+      if (!extractionPending) {
+        document.getElementById('saveReviewBtn').onclick = async () => {
+          const payload = {};
+          document.querySelectorAll('.dynamic-field').forEach(input => {
+            const key = input.getAttribute('data-key');
+            let val = input.value;
+            if (val.trim().startsWith('{') || val.trim().startsWith('[')) {
+              try { val = JSON.parse(val); } catch(e) {}
+            }
+            payload[key] = val;
           });
-          const resData = await res.json();
-          if (resData.success) {
-            btn.innerHTML = 'Saved ✓';
-            btn.classList.add('bg-emerald-600');
-            setTimeout(() => {
-              btn.innerHTML = 'Save & Approve';
-              btn.classList.remove('bg-emerald-600');
-              btn.disabled = false;
-            }, 2000);
-          } else {
-            alert(resData.error || 'Failed to save');
-            btn.innerHTML = 'Save & Approve';
-            btn.disabled = false;
-          }
-        } catch(err) {
-          alert('Network error');
-          btn.innerHTML = 'Save & Approve';
-          btn.disabled = false;
-        }
-      };
+          const btn = document.getElementById('saveReviewBtn');
+          btn.innerHTML = 'Saving...'; btn.disabled = true;
+          try {
+            const r = await fetch('/api/documents/' + docId + '/review', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ editedData: payload })
+            });
+            const rd = await r.json();
+            if (rd.success) {
+              btn.innerHTML = 'Saved ✓';
+              setTimeout(() => { btn.innerHTML = 'Save & Approve'; btn.disabled = false; }, 2000);
+            } else {
+              alert(rd.error || 'Failed to save');
+              btn.innerHTML = 'Save & Approve'; btn.disabled = false;
+            }
+          } catch(e) { alert('Network error'); btn.innerHTML = 'Save & Approve'; btn.disabled = false; }
+        };
 
-      document.getElementById('genInvoiceBtn').onclick = async () => {
-        const payload = {};
-        const inputs = document.querySelectorAll('.dynamic-field');
-        inputs.forEach(input => {
-          const key = input.getAttribute('data-key');
-          let val = input.value;
-          if (val.trim().startsWith('{') || val.trim().startsWith('[')) {
-             try { val = JSON.parse(val); } catch(e) {}
-          }
-          payload[key] = val;
-        });
-
-        const btn = document.getElementById('genInvoiceBtn');
-        btn.innerHTML = 'Generating... ⏳';
-        btn.disabled = true;
-
-        try {
-          const res = await fetch(`/api/documents/${docId}/generate-invoice`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ editedExtractedData: payload })
+        document.getElementById('genInvoiceBtn').onclick = async () => {
+          const payload = {};
+          document.querySelectorAll('.dynamic-field').forEach(input => {
+            const key = input.getAttribute('data-key');
+            let val = input.value;
+            if (val.trim().startsWith('{') || val.trim().startsWith('[')) {
+              try { val = JSON.parse(val); } catch(e) {}
+            }
+            payload[key] = val;
           });
-          const resData = await res.json();
-          if (resData.success && resData.invoiceUrl) {
-            window.location.href = resData.invoiceUrl;
-          } else {
-            alert(resData.error || 'Failed to generate invoice');
-            btn.innerHTML = 'Generate Invoice ✨';
-            btn.disabled = false;
-          }
-        } catch(err) {
-          alert('Network error');
-          btn.innerHTML = 'Generate Invoice ✨';
-          btn.disabled = false;
-        }
-      };
+          const btn = document.getElementById('genInvoiceBtn');
+          btn.innerHTML = 'Generating...'; btn.disabled = true;
+          try {
+            const r = await fetch('/api/documents/' + docId + '/generate-invoice', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ editedExtractedData: payload })
+            });
+            const rd = await r.json();
+            if (rd.success && rd.invoiceUrl) {
+              window.location.href = rd.invoiceUrl;
+            } else {
+              alert(rd.error || 'Failed to generate invoice');
+              btn.innerHTML = 'Generate Invoice'; btn.disabled = false;
+            }
+          } catch(e) { alert('Network error'); btn.innerHTML = 'Generate Invoice'; btn.disabled = false; }
+        };
+      }
     }
-
-
 
     async function renderInvoicePage(app, navHtml, primaryColor, docId) {
       const res = await fetch('/api/documents');
