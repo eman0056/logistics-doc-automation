@@ -65,15 +65,19 @@ def init_db(conn):
     # Safely add columns that might already exist
     alter_statements = [
         "ALTER TABLE Document ADD COLUMN fileData TEXT;",
+        "ALTER TABLE Extraction ADD COLUMN rawocrtext TEXT;",
         'ALTER TABLE Extraction ADD COLUMN "rawOcrText" TEXT;',
-        'ALTER TABLE Extraction ADD COLUMN rawOcrText TEXT;'
+        "ALTER TABLE Extraction ADD COLUMN rawOcrText TEXT;"
     ]
     for stmt in alter_statements:
         try:
             cursor.execute(stmt)
             conn.commit()
         except Exception:
-            conn.rollback()  # Reset transaction so subsequent queries work
+            try:
+                conn.rollback()
+            except Exception:
+                pass
     DB_INITIALIZED = True
     
 
@@ -1265,17 +1269,21 @@ async def upload_documents(request: Request):
             
             if raw_text:
                 try:
-                    execute_query(conn, "INSERT INTO Extraction (documentId, rawOcrText, canonicalJson, confidenceScores) VALUES (?, ?, '{}', '{}')", (doc_id, raw_text))
+                    execute_query(conn, "INSERT INTO Extraction (documentId, rawocrtext, canonicalJson, confidenceScores) VALUES (?, ?, '{}', '{}')", (doc_id, raw_text))
                 except Exception:
                     try:
                         conn.rollback()
-                        execute_query(conn, 'INSERT INTO Extraction (documentId, "rawOcrText", canonicalJson, confidenceScores) VALUES (?, ?, \'{}\', \'{}\')', (doc_id, raw_text))
+                        execute_query(conn, "INSERT INTO Extraction (documentId, rawOcrText, canonicalJson, confidenceScores) VALUES (?, ?, '{}', '{}')", (doc_id, raw_text))
                     except Exception:
                         try:
                             conn.rollback()
-                            execute_query(conn, "INSERT INTO Extraction (documentId, canonicalJson, confidenceScores) VALUES (?, '{}', '{}')", (doc_id,))
+                            execute_query(conn, 'INSERT INTO Extraction (documentId, "rawOcrText", canonicalJson, confidenceScores) VALUES (?, ?, \'{}\', \'{}\')', (doc_id, raw_text))
                         except Exception:
-                            pass
+                            try:
+                                conn.rollback()
+                                execute_query(conn, "INSERT INTO Extraction (documentId, canonicalJson, confidenceScores) VALUES (?, '{}', '{}')", (doc_id,))
+                            except Exception:
+                                pass
             
             conn.commit()
             conn.close()
