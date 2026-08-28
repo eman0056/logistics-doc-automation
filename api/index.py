@@ -65,19 +65,13 @@ def init_db(conn):
     # Safely add columns that might already exist
     alter_statements = [
         "ALTER TABLE Document ADD COLUMN fileData TEXT;",
-        "ALTER TABLE Extraction ADD COLUMN rawocrtext TEXT;",
-        'ALTER TABLE Extraction ADD COLUMN "rawOcrText" TEXT;',
-        "ALTER TABLE Extraction ADD COLUMN rawOcrText TEXT;"
     ]
     for stmt in alter_statements:
         try:
             cursor.execute(stmt)
             conn.commit()
         except Exception:
-            try:
-                conn.rollback()
-            except Exception:
-                pass
+            conn.rollback()  # Reset transaction so subsequent queries work
     DB_INITIALIZED = True
     
 
@@ -124,64 +118,6 @@ def debug_info():
 
 
 def _send_spa_html(path):
-        is_upload = (path == '/documents/upload' or path == '/upload')
-        initial_main = """
-          <main class="max-w-4xl mx-auto px-4 py-8 space-y-8">
-            <div class="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl flex justify-between items-center">
-              <div>
-                <h1 class="text-2xl font-bold text-white tracking-tight">Document Ingestion &amp; n8n AI Pipeline</h1>
-                <p class="text-sm text-slate-400 mt-1">Upload logistics paperwork to trigger automated AI extraction.</p>
-              </div>
-              <div class="space-x-3">
-                <a href="/documents" class="text-xs bg-slate-800 hover:bg-slate-700 text-slate-200 px-4 py-2 rounded-xl">View All Documents</a>
-              </div>
-            </div>
-
-            <div class="bg-slate-900 border border-slate-800 rounded-2xl p-8 shadow-2xl">
-              <input type="file" id="fileInput" style="display:none" accept=".pdf,.jpg,.jpeg,.png,.doc,.docx,.xls,.xlsx,.csv,.txt,.tif,.tiff" multiple />
-              <label for="fileInput" id="dropzone" style="display:block;cursor:pointer;border:2px dashed #475569;border-radius:1rem;padding:3rem;text-align:center;background:rgba(2,6,23,0.4);transition:border-color 0.2s">
-                <div style="width:4rem;height:4rem;border-radius:1rem;margin:0 auto 1rem;display:flex;align-items:center;justify-content:center;font-size:1.5rem;background:rgba(2,132,199,0.12);color:#0284c7">📤</div>
-                <p style="font-size:1.125rem;font-weight:600;color:#fff">Click to upload or drag &amp; drop</p>
-                <p style="font-size:0.875rem;color:#94a3b8;margin-top:0.25rem">PDF, JPG, JPEG, PNG, DOC, DOCX, XLS, XLSX, CSV, TXT, TIFF &mdash; up to 25 MB</p>
-                <div id="fileSelectedInfo" style="display:none;margin-top:1rem;font-size:0.875rem;color:#38bdf8;font-weight:500"></div>
-              </label>
-
-              <button id="uploadBtn" style="width:100%;margin-top:1.5rem;padding:0.75rem;border-radius:0.75rem;color:#fff;font-weight:700;font-size:0.875rem;border:none;cursor:pointer;background:#0284c7">
-                Start Upload &amp; AI Processing
-              </button>
-              <div id="uploadStatus" style="display:none;margin-top:1rem;text-align:center;font-size:0.875rem;font-weight:500;color:#34d399"></div>
-            </div>
-          </main>
-        """ if is_upload else """
-          <main class="max-w-7xl mx-auto px-4 py-8 space-y-6">
-            <div class="flex justify-between items-center">
-              <div>
-                <h1 class="text-2xl font-bold text-white tracking-tight">Documents Repository</h1>
-                <p class="text-sm text-slate-400">View and manage ingested logistics paperwork.</p>
-              </div>
-              <a href="/documents/upload" class="px-5 py-2.5 rounded-xl text-white font-bold text-sm shadow-lg" style="background-color: #0284c7">+ Upload New Document</a>
-            </div>
-
-            <div class="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden shadow-2xl">
-              <table class="w-full text-left text-sm text-slate-300">
-                <thead class="bg-slate-950 text-xs font-semibold text-slate-400 border-b border-slate-800">
-                  <tr>
-                    <th class="px-6 py-4">Filename</th>
-                    <th class="px-6 py-4">Type</th>
-                    <th class="px-6 py-4">Status</th>
-                    <th class="px-6 py-4">Size</th>
-                    <th class="px-6 py-4">Uploaded At</th>
-                    <th class="px-6 py-4 text-right">Actions</th>
-                  </tr>
-                </thead>
-                <tbody id="docsTableBody">
-                  <tr><td colspan="6" class="p-8 text-center text-slate-400">No documents found. <a href="/documents/upload" class="text-sky-400 underline font-medium">Click here to upload your first document</a></td></tr>
-                </tbody>
-              </table>
-            </div>
-          </main>
-        """
-
         html_code = """<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -191,32 +127,7 @@ def _send_spa_html(path):
   <script src="https://cdn.tailwindcss.com"></script>
 </head>
 <body class="bg-slate-950 text-slate-100 min-h-screen font-sans">
-  <div id="app">
-    <header class="bg-slate-900 border-b border-slate-800 sticky top-0 z-50 shadow-md">
-      <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-        <div class="flex items-center justify-between h-16">
-          <div class="flex items-center space-x-3">
-            <div class="w-10 h-10 rounded-xl flex items-center justify-center text-white font-bold shadow-lg" style="background-color: #0284c7">🚚</div>
-            <div>
-              <div class="flex items-center space-x-2">
-                <span class="text-white font-semibold text-lg tracking-tight">Apex Freight Logistics</span>
-                <span class="text-xs px-2 py-0.5 rounded-full font-medium text-white shadow-sm" style="background-color: #0284c7">APEX White-Label</span>
-              </div>
-              <p class="text-xs text-slate-400">Document Automation Engine</p>
-            </div>
-          </div>
-          <nav class="flex space-x-2 text-sm font-medium text-slate-300">
-            <a href="/" class="px-3 py-2 rounded-lg hover:bg-slate-800">Dashboard</a>
-            <a href="/documents" class="px-3 py-2 rounded-lg hover:bg-slate-800">Documents</a>
-            <a href="/documents/upload" class="px-3 py-2 rounded-lg hover:bg-slate-800">Upload</a>
-            <a href="/review-queue" class="px-3 py-2 rounded-lg hover:bg-slate-800">Review Queue</a>
-            <a href="/invoices" class="px-3 py-2 rounded-lg hover:bg-slate-800">Invoices</a>
-          </nav>
-        </div>
-      </div>
-    </header>
-    """ + initial_main + """
-  </div>
+  <div id="app"></div>
   <script>
     const PATH = """ + json.dumps(path) + """;
 
@@ -226,22 +137,15 @@ def _send_spa_html(path):
       return isNaN(parsed) ? defaultVal : parsed;
     }
 
-    async function fetchWithTimeout(url, options = {}, timeoutMs = 2500) {
-      const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), timeoutMs);
-      try {
-        const res = await fetch(url, { ...options, signal: controller.signal });
-        clearTimeout(timer);
-        return res;
-      } catch (err) {
-        clearTimeout(timer);
-        throw err;
-      }
-    }
-
-    function loadApp() {
+    async function loadApp() {
       const app = document.getElementById('app');
-      const customer = { name: 'Apex Freight Logistics', code: 'APEX', primaryColor: '#0284c7' };
+      let customer = { name: 'Apex Freight Logistics', code: 'APEX', primaryColor: '#0284c7' };
+      try {
+        const res = await fetch('/api/customer');
+        const d = await res.json();
+        if (d.customer) customer = d.customer;
+      } catch(e) {}
+
       const primaryColor = customer.primaryColor || '#0284c7';
 
       const navHtml = `
@@ -264,6 +168,7 @@ def _send_spa_html(path):
                 <a href="/documents/upload" class="px-3 py-2 rounded-lg hover:bg-slate-800">Upload</a>
                 <a href="/review-queue" class="px-3 py-2 rounded-lg hover:bg-slate-800">Review Queue</a>
                 <a href="/invoices" class="px-3 py-2 rounded-lg hover:bg-slate-800">Invoices</a>
+
               </nav>
             </div>
           </div>
@@ -271,133 +176,123 @@ def _send_spa_html(path):
       `;
 
       try {
-        const currentPath = (window.location.pathname || PATH || '/').split('?')[0].replace(RegExp('/+$'), '') || '/';
-        if (currentPath === '/documents/upload' || currentPath === '/upload') {
+        if (PATH === '/documents/upload') {
           renderUploadPage(app, navHtml, primaryColor);
-        } else if (currentPath.startsWith('/documents/') && currentPath.includes('/review')) {
-          const parts = currentPath.split('/');
+        } else if (PATH.startsWith('/documents/') && PATH.includes('/review')) {
+          const parts = PATH.split('/');
           renderReviewPage(app, navHtml, primaryColor, parts[2]);
-        } else if (currentPath.startsWith('/invoices/') && currentPath.split('/').length > 2) {
-          const parts = currentPath.split('/');
+        } else if (PATH.startsWith('/invoices/') && PATH.split('/').length > 2) {
+          const parts = PATH.split('/');
           renderInvoicePage(app, navHtml, primaryColor, parts[2]);
-        } else if (currentPath === '/invoices') {
+        } else if (PATH === '/invoices') {
           renderInvoicesDashboard(app, navHtml, primaryColor);
-        } else if (currentPath === '/review-queue') {
+        } else if (PATH === '/review-queue') {
           renderReviewQueue(app, navHtml, primaryColor);
         } else {
           renderDocumentsList(app, navHtml, primaryColor);
         }
       } catch (err) {
         console.error("Render Error:", err);
-        app.innerHTML = navHtml + '<div class="p-8 text-center text-rose-400 bg-slate-900 rounded-2xl m-4"><h2 class="text-xl font-bold mb-2">Page Render Error</h2><p class="font-mono text-sm">' + (err.message || String(err)) + '</p></div>';
+        app.innerHTML = navHtml + '<div class="p-8 text-center text-rose-400">Error rendering page: ' + err.message + '</div>';
       }
     }
 
     function renderUploadPage(app, navHtml, primaryColor) {
-      const safeColor = primaryColor || '#0284c7';
-
-      // Always rebuild the upload page HTML fresh.
-      // Use a <label for="fileInput"> which natively opens the file picker on click
-      // — NO JS event listeners needed for file picker opening.
       app.innerHTML = `
         ${navHtml}
-        <main style="max-width:56rem;margin:0 auto;padding:2rem 1rem;display:flex;flex-direction:column;gap:2rem">
-          <div style="background:#0f172a;border:1px solid #1e293b;border-radius:1rem;padding:1.5rem;display:flex;justify-content:space-between;align-items:center">
+        <main class="max-w-4xl mx-auto px-4 py-8 space-y-8">
+          <div class="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl flex justify-between items-center">
             <div>
-              <h1 style="font-size:1.5rem;font-weight:700;color:#fff">Document Ingestion &amp; n8n AI Pipeline</h1>
-              <p style="font-size:0.875rem;color:#94a3b8;margin-top:0.25rem">Upload logistics paperwork to trigger automated AI extraction.</p>
+              <h1 class="text-2xl font-bold text-white tracking-tight">Document Ingestion & n8n AI Pipeline</h1>
+              <p class="text-sm text-slate-400 mt-1">Upload PDF or image logistics paperwork to trigger automated extraction.</p>
             </div>
-            <a href="/documents" style="font-size:0.75rem;background:#1e293b;color:#e2e8f0;padding:0.5rem 1rem;border-radius:0.75rem;text-decoration:none">View All Documents</a>
+            <div class="space-x-3">
+
+              <a href="/documents" class="text-xs bg-slate-800 hover:bg-slate-700 text-slate-200 px-4 py-2 rounded-xl">View All Documents</a>
+            </div>
           </div>
 
-          <div style="background:#0f172a;border:1px solid #1e293b;border-radius:1rem;padding:2rem">
-            <input type="file" id="fileInput" style="position:absolute;width:1px;height:1px;opacity:0;overflow:hidden" accept=".pdf,.jpg,.jpeg,.png,.doc,.docx,.xls,.xlsx,.csv,.txt,.tif,.tiff" multiple />
-            <label for="fileInput" id="dropzone" style="display:block;cursor:pointer;border:2px dashed #475569;border-radius:1rem;padding:3rem 2rem;text-align:center;background:rgba(2,6,23,0.4);transition:border-color 0.2s">
-              <div style="width:4rem;height:4rem;border-radius:1rem;margin:0 auto 1rem;display:flex;align-items:center;justify-content:center;font-size:1.5rem;background:rgba(2,132,199,0.12);color:${safeColor}">📤</div>
-              <p style="font-size:1.125rem;font-weight:600;color:#fff">Click to upload or drag &amp; drop</p>
-              <p style="font-size:0.875rem;color:#94a3b8;margin-top:0.25rem">PDF, JPG, JPEG, PNG, DOC, DOCX, XLS, XLSX, CSV, TXT, TIFF &mdash; up to 25 MB</p>
-              <div id="fileSelectedInfo" style="display:none;margin-top:1rem;font-size:0.875rem;color:#38bdf8;font-weight:500"></div>
-            </label>
+          <div class="bg-slate-900 border border-slate-800 rounded-2xl p-8 shadow-2xl">
+            <div id="dropzone" class="border-2 border-dashed border-slate-700 hover:border-sky-500 rounded-2xl p-12 text-center cursor-pointer bg-slate-950/40 hover:bg-slate-950/80 transition">
+              <input type="file" id="fileInput" class="hidden" accept=".pdf,.jpg,.jpeg,.png" multiple />
+              <div class="w-16 h-16 rounded-2xl mx-auto flex items-center justify-center text-2xl shadow-lg mb-4" style="background-color: ${primaryColor}20; color: ${primaryColor}">📤</div>
+              <p class="text-lg font-semibold text-white">Click to upload or drag & drop document</p>
+              <p class="text-sm text-slate-400 mt-1">Supports PDF, JPG, PNG up to 25 MB</p>
+              <div id="fileSelectedInfo" class="hidden mt-4 text-sm text-sky-400 font-medium"></div>
+            </div>
 
-            <button id="uploadBtn" style="width:100%;margin-top:1.5rem;padding:0.75rem;border-radius:0.75rem;color:#fff;font-weight:700;font-size:0.875rem;border:none;cursor:pointer;background:${safeColor}">
-              Start Upload &amp; AI Processing
+            <button id="uploadBtn" class="w-full mt-6 py-3 rounded-xl text-white font-bold text-sm shadow-xl transition hover:opacity-90" style="background-color: ${primaryColor}">
+              Start Upload & AI Processing
             </button>
-            <div id="uploadStatus" style="display:none;margin-top:1rem;text-align:center;font-size:0.875rem;font-weight:500;color:#34d399"></div>
+            <div id="uploadStatus" class="hidden mt-4 text-center text-sm font-medium text-emerald-400"></div>
           </div>
         </main>
       `;
 
+      const dropzone = document.getElementById('dropzone');
       const fileInput = document.getElementById('fileInput');
-      const dropzone  = document.getElementById('dropzone');
       const uploadBtn = document.getElementById('uploadBtn');
       const fileSelectedInfo = document.getElementById('fileSelectedInfo');
-      const uploadStatus     = document.getElementById('uploadStatus');
+      const uploadStatus = document.getElementById('uploadStatus');
 
-      // Drag & drop highlight
-      dropzone.addEventListener('dragover',  (e) => { e.preventDefault(); dropzone.style.borderColor = '#38bdf8'; });
-      dropzone.addEventListener('dragleave', ()  => { dropzone.style.borderColor = '#475569'; });
-      dropzone.addEventListener('drop', (e) => {
-        e.preventDefault();
-        dropzone.style.borderColor = '#475569';
-        if (e.dataTransfer.files.length) {
-          // Manually update fileInput's file list via DataTransfer
-          const dt = new DataTransfer();
-          for (const f of e.dataTransfer.files) dt.items.add(f);
-          fileInput.files = dt.files;
-          fileInput.dispatchEvent(new Event('change'));
-        }
-      });
-
-      fileInput.addEventListener('change', (e) => {
+      dropzone.onclick = () => fileInput.click();
+      fileInput.onchange = (e) => {
         if (e.target.files.length > 0) {
-          fileSelectedInfo.textContent = 'Selected: ' + e.target.files.length + ' file(s) — ' + Array.from(e.target.files).map(f => f.name).join(', ');
-          fileSelectedInfo.style.display = 'block';
+          fileSelectedInfo.textContent = "Selected: " + e.target.files.length + " files";
+          fileSelectedInfo.classList.remove('hidden');
         }
-      });
+      };
 
-      uploadBtn.addEventListener('click', async () => {
-        if (!fileInput.files || fileInput.files.length === 0) {
-          alert('Please select document files first by clicking the upload area.');
+      uploadBtn.onclick = async () => {
+        if (fileInput.files.length === 0) {
+          alert('Please select document files first.');
           return;
         }
-        const allowedExts = ['pdf','jpg','jpeg','png','doc','docx','xls','xlsx','csv','txt','tif','tiff'];
-        for (const f of fileInput.files) {
-          const ext = f.name.split('.').pop().toLowerCase();
-          if (!allowedExts.includes(ext)) {
-            alert('Unsupported file type: ' + f.name + '\nAllowed: PDF, JPG, JPEG, PNG, DOC, DOCX, XLS, XLSX, CSV, TXT, TIFF');
-            return;
-          }
-        }
-        uploadBtn.disabled = true;
-        uploadBtn.textContent = 'Uploading...';
-        uploadStatus.textContent = 'Uploading & running AI extraction...';
-        uploadStatus.style.display = 'block';
+        uploadStatus.textContent = "Uploading & running AI extraction pipeline for all files...";
+        uploadStatus.classList.remove('hidden');
 
         const formData = new FormData();
-        for (const f of fileInput.files) formData.append('file', f);
+        for (let i = 0; i < fileInput.files.length; i++) {
+            formData.append('file', fileInput.files[i]);
+        }
 
         try {
           const res = await fetch('/api/documents/upload', { method: 'POST', body: formData });
           const d = await res.json();
           if (d.success && d.documentIds && d.documentIds.length > 0) {
-            uploadStatus.textContent = 'Upload successful! Redirecting to review...';
-            setTimeout(() => { window.location.href = '/documents/' + d.documentIds[0] + '/review'; }, 800);
+            uploadStatus.textContent = "Upload successful! Redirecting to review...";
+            setTimeout(() => {
+              // Go directly to the first document's review page so polling works
+              window.location.href = `/documents/${d.documentIds[0]}/review`;
+            }, 800);
           } else {
-            uploadBtn.disabled = false;
-            uploadBtn.textContent = 'Start Upload & AI Processing';
-            uploadStatus.style.display = 'none';
-            alert(d.error || 'Upload failed');
+            alert(d.error || "Upload failed");
           }
         } catch(err) {
-          uploadBtn.disabled = false;
-          uploadBtn.textContent = 'Start Upload & AI Processing';
-          uploadStatus.style.display = 'none';
-          alert('Upload error: ' + err.message);
+          alert(err.message);
         }
-      });
+      };
     }
 
     async function renderDocumentsList(app, navHtml, primaryColor) {
+      const res = await fetch('/api/documents');
+      const d = await res.json();
+      const docs = d.documents || [];
+
+      const rowsHtml = docs.map(doc => `
+        <tr class="border-b border-slate-800/60 hover:bg-slate-800/40 transition">
+          <td class="px-6 py-4 font-semibold text-white">${doc.fileName}</td>
+          <td class="px-6 py-4 text-xs font-bold text-sky-400">${doc.documentType}</td>
+          <td class="px-6 py-4 text-xs font-bold text-emerald-400">${doc.status}</td>
+          <td class="px-6 py-4 text-xs font-mono text-slate-400">${(doc.fileSize / 1024).toFixed(1)} KB</td>
+          <td class="px-6 py-4 text-xs text-slate-400">${new Date(doc.createdAt).toLocaleDateString()}</td>
+          <td class="px-6 py-4 text-right space-x-2">
+            <a href="/documents/${doc.id}/review" class="text-xs font-semibold text-sky-400 hover:underline">Review & Edit</a>
+            ${doc.status === 'INVOICE_GENERATED' ? `<a href="/invoices/${doc.id}" class="text-xs font-semibold text-emerald-400 hover:underline">View Invoice</a>` : ''}
+          </td>
+        </tr>
+      `).join('');
+
       app.innerHTML = `
         ${navHtml}
         <main class="max-w-7xl mx-auto px-4 py-8 space-y-6">
@@ -421,42 +316,13 @@ def _send_spa_html(path):
                   <th class="px-6 py-4 text-right">Actions</th>
                 </tr>
               </thead>
-              <tbody id="docsTableBody">
-                <tr><td colspan="6" class="p-8 text-center text-slate-400">
-                  <div class="inline-block w-6 h-6 border-2 border-sky-500 border-t-transparent rounded-full animate-spin mb-2"></div>
-                  <p>Loading documents...</p>
-                </td></tr>
+              <tbody>
+                ${rowsHtml || '<tr><td colspan="6" class="p-8 text-center text-slate-400">No documents found. Upload one to get started.</td></tr>'}
               </tbody>
             </table>
           </div>
         </main>
       `;
-
-      const tbody = document.getElementById('docsTableBody');
-      let docs = [];
-      try {
-        const res = await fetchWithTimeout('/api/documents', {}, 3000);
-        const d = await res.json();
-        docs = d.documents || [];
-      } catch(err) {
-        console.warn("Fetch documents warning:", err);
-      }
-
-      if (tbody) {
-        tbody.innerHTML = docs.length > 0 ? docs.map(doc => `
-          <tr class="border-b border-slate-800/60 hover:bg-slate-800/40 transition">
-            <td class="px-6 py-4 font-semibold text-white">${doc.fileName || 'Untitled Document'}</td>
-            <td class="px-6 py-4 text-xs font-bold text-sky-400">${doc.documentType || 'LOGISTICS'}</td>
-            <td class="px-6 py-4 text-xs font-bold text-emerald-400">${doc.status || 'PREPROCESSED'}</td>
-            <td class="px-6 py-4 text-xs font-mono text-slate-400">${doc.fileSize ? (doc.fileSize / 1024).toFixed(1) + ' KB' : 'N/A'}</td>
-            <td class="px-6 py-4 text-xs text-slate-400">${doc.createdAt ? new Date(doc.createdAt).toLocaleDateString() : 'Recent'}</td>
-            <td class="px-6 py-4 text-right space-x-2">
-              <a href="/documents/${doc.id}/review" class="text-xs font-semibold text-sky-400 hover:underline">Review &amp; Edit</a>
-              ${doc.status === 'INVOICE_GENERATED' ? `<a href="/invoices/${doc.id}" class="text-xs font-semibold text-emerald-400 hover:underline">View Invoice</a>` : ''}
-            </td>
-          </tr>
-        `).join('') : `<tr><td colspan="6" class="p-8 text-center text-slate-400">No documents found. <a href="/documents/upload" class="text-sky-400 underline font-medium">Click here to upload your first document</a></td></tr>`;
-      }
     }
 
         async function renderBatchReviewPage(app, navHtml, primaryColor) {
@@ -685,14 +551,9 @@ def _send_spa_html(path):
     }
 
     async function renderReviewPage(app, navHtml, primaryColor, docId) {
-      let doc = {};
-      try {
-        const res = await fetchWithTimeout('/api/documents', {}, 3000);
-        const d = await res.json();
-        doc = (d.documents || []).find(item => item.id === docId) || {};
-      } catch(err) {
-        console.warn("Fetch doc review warning:", err);
-      }
+      const res = await fetch('/api/documents');
+      const d = await res.json();
+      const doc = (d.documents || []).find(item => item.id === docId) || {};
 
       let canonical = {};
 
@@ -886,12 +747,6 @@ def _send_spa_html(path):
         }
       }
 
-      const fileExt = (doc.fileName || '').split('.').pop().toLowerCase();
-      const isImage = ['jpg', 'jpeg', 'png', 'tif', 'tiff'].includes(fileExt);
-      const previewElement = isImage ? 
-        `<img src="/api/documents/${docId}/file" alt="Document Preview" class="w-full h-full object-contain p-2" onerror="this.src='https://placehold.co/600x800/1e293b/475569?text=No+Preview+Available'" />` :
-        `<iframe src="/api/documents/${docId}/file" class="w-full h-full border-0 bg-white" title="Document Preview"></iframe>`;
-
       app.innerHTML = `
         ${navHtml}
         <main class="max-w-7xl mx-auto px-4 py-8 space-y-8 text-slate-100">
@@ -910,9 +765,10 @@ def _send_spa_html(path):
 
           <div class="grid grid-cols-1 xl:grid-cols-12 gap-8">
             <div class="xl:col-span-5 bg-slate-900 border border-slate-800 p-6 rounded-2xl shadow-2xl space-y-4">
-              <h3 class="text-sm font-bold text-slate-300 border-b border-slate-800 pb-3">Original Document (${doc.fileName || 'File'})</h3>
+              <h3 class="text-sm font-bold text-slate-300 border-b border-slate-800 pb-3">Original Document</h3>
               <div class="bg-slate-950 rounded-xl overflow-hidden border border-slate-800 h-[600px]">
-                ${previewElement}
+                <img src="/api/documents/${docId}/file" alt="Document Preview" class="w-full h-full object-contain p-2"
+                  onerror="this.src='https://placehold.co/600x800/1e293b/475569?text=No+Preview+Available'" />
               </div>
             </div>
 
@@ -1131,14 +987,9 @@ def _send_spa_html(path):
 
 
     async function renderInvoicesDashboard(app, navHtml, primaryColor) {
-      let docs = [];
-      try {
-        const res = await fetchWithTimeout('/api/documents', {}, 3000);
-        const d = await res.json();
-        docs = d.documents || [];
-      } catch(err) {
-        console.warn("Fetch invoices warning:", err);
-      }
+      const res = await fetch('/api/documents');
+      const d = await res.json();
+      const docs = d.documents || [];
 
       const invoices = docs.filter(doc => doc.status === 'INVOICE_GENERATED' || doc.extraction?.finalSubmittedData);
 
@@ -1193,21 +1044,16 @@ def _send_spa_html(path):
     }
 
     async function renderReviewQueue(app, navHtml, primaryColor) {
-      let tasks = [];
-      try {
-        const res = await fetchWithTimeout('/api/review-tasks', {}, 3000);
-        const d = await res.json();
-        tasks = d.tasks || [];
-      } catch(err) {
-        console.warn("Fetch review tasks warning:", err);
-      }
+      const res = await fetch('/api/review-tasks');
+      const d = await res.json();
+      const tasks = d.tasks || [];
 
       const rows = tasks.map(t => `
         <tr class="border-b border-slate-800/60 hover:bg-slate-800/40">
           <td class="px-6 py-4 font-semibold text-white">${t.document?.fileName || 'Document'}</td>
           <td class="px-6 py-4 text-xs font-bold text-amber-400">NORMAL</td>
-          <td class="px-6 py-4 text-xs text-slate-300">${t.reason || 'Manual Verification'}</td>
-          <td class="px-6 py-4 text-xs text-slate-400">${t.createdAt ? new Date(t.createdAt).toLocaleDateString() : 'Recent'}</td>
+          <td class="px-6 py-4 text-xs text-slate-300">${t.reason}</td>
+          <td class="px-6 py-4 text-xs text-slate-400">${new Date(t.createdAt).toLocaleDateString()}</td>
           <td class="px-6 py-4 text-right">
             <a href="/documents/${t.documentId}/review" class="text-xs font-bold text-white px-3 py-1.5 rounded-lg" style="background-color: ${primaryColor}">Open Review</a>
           </td>
@@ -1246,11 +1092,7 @@ def _send_spa_html(path):
   </script>
 </body>
 </html>"""
-        return HTMLResponse(content=html_code, headers={
-            "Cache-Control": "no-cache, no-store, must-revalidate, max-age=0, s-maxage=0",
-            "Pragma": "no-cache",
-            "Expires": "0"
-        })
+        return HTMLResponse(content=html_code)
 
 def run_server():
     with socketserver.TCPServer(("", PORT), LogisticsAutomationHandler) as httpd:
@@ -1345,45 +1187,20 @@ async def upload_documents(request: Request):
         except Exception as e:
             print("Webhook error:", e)
 
-    allowed_exts = {
-        ".pdf": "application/pdf",
-        ".jpg": "image/jpeg",
-        ".jpeg": "image/jpeg",
-        ".png": "image/png",
-        ".doc": "application/msword",
-        ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-        ".xls": "application/vnd.ms-excel",
-        ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        ".csv": "text/csv",
-        ".txt": "text/plain",
-        ".tif": "image/tiff",
-        ".tiff": "image/tiff"
-    }
-
     results = []
     try:
         for file_item in files:
-            ext = os.path.splitext(file_item.filename)[1].lower()
-            if ext not in allowed_exts:
-                return JSONResponse({"error": f"Unsupported file format '{ext}'. Allowed: PDF, JPG, JPEG, PNG, DOC, DOCX, XLS, XLSX, CSV, TXT, TIFF"}, status_code=400)
-
             file_bytes = await file_item.read()
             file_b64 = base64.b64encode(file_bytes).decode('utf-8')
             
             doc_id = str(uuid.uuid4())
             storage_path = f"api/documents/{doc_id}/file"
-
-            raw_text = ""
-            if ext in [".txt", ".csv"]:
-                try: raw_text = file_bytes.decode('utf-8', errors='ignore')
-                except Exception: pass
             
             payload = {
                 "documentId": doc_id,
                 "storagePath": storage_path,
                 "fileName": file_item.filename,
                 "fileBase64": file_b64,
-                "rawOcrText": raw_text,
                 "callbackUrl": f"{app_base_url}/api/documents/{doc_id}/extraction/callback"
             }
             
@@ -1391,25 +1208,9 @@ async def upload_documents(request: Request):
             
             conn = get_db()
             execute_query(conn, "INSERT INTO Document (id, fileName, storagePath, status) VALUES (?, ?, ?, 'PREPROCESSED')", (doc_id, file_item.filename, storage_path))
-            execute_query(conn, "UPDATE Document SET fileData = ? WHERE id = ?", (file_b64, doc_id))
             
-            if raw_text:
-                try:
-                    execute_query(conn, "INSERT INTO Extraction (documentId, rawocrtext, canonicalJson, confidenceScores) VALUES (?, ?, '{}', '{}')", (doc_id, raw_text))
-                except Exception:
-                    try:
-                        conn.rollback()
-                        execute_query(conn, "INSERT INTO Extraction (documentId, rawOcrText, canonicalJson, confidenceScores) VALUES (?, ?, '{}', '{}')", (doc_id, raw_text))
-                    except Exception:
-                        try:
-                            conn.rollback()
-                            execute_query(conn, 'INSERT INTO Extraction (documentId, "rawOcrText", canonicalJson, confidenceScores) VALUES (?, ?, \'{}\', \'{}\')', (doc_id, raw_text))
-                        except Exception:
-                            try:
-                                conn.rollback()
-                                execute_query(conn, "INSERT INTO Extraction (documentId, canonicalJson, confidenceScores) VALUES (?, '{}', '{}')", (doc_id,))
-                            except Exception:
-                                pass
+            # Now update the fileData column
+            execute_query(conn, "UPDATE Document SET fileData = ? WHERE id = ?", (file_b64, doc_id))
             
             conn.commit()
             conn.close()
@@ -1436,28 +1237,9 @@ def get_document_file(doc_id: str):
     
     try:
         file_bytes = base64.b64decode(file_data_b64)
-        ext = os.path.splitext(file_name)[1].lower()
-        
-        if ext in [".tif", ".tiff"]:
-            try:
-                from PIL import Image
-                import io
-                img = Image.open(io.BytesIO(file_bytes))
-                buf = io.BytesIO()
-                img.save(buf, format="PNG")
-                return Response(content=buf.getvalue(), media_type="image/png")
-            except Exception:
-                return Response(content=file_bytes, media_type="image/tiff")
-        elif ext in [".txt", ".csv"]:
-            return Response(content=file_bytes, media_type="text/plain; charset=utf-8")
-        elif ext == ".pdf":
-            return Response(content=file_bytes, media_type="application/pdf")
-        elif ext in [".jpg", ".jpeg"]:
-            return Response(content=file_bytes, media_type="image/jpeg")
-        elif ext == ".png":
-            return Response(content=file_bytes, media_type="image/png")
-        else:
-            return Response(content=file_bytes, media_type="application/octet-stream")
+        media_type = "application/pdf" if file_name.lower().endswith(".pdf") else "image/jpeg"
+        if file_name.lower().endswith(".png"): media_type = "image/png"
+        return Response(content=file_bytes, media_type=media_type)
     except Exception:
         return JSONResponse({"error": "Failed to decode file"}, status_code=500)
 
