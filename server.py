@@ -502,18 +502,18 @@ class LogisticsAutomationHandler(http.server.BaseHTTPRequestHandler):
             </div>
 
             <div class="bg-slate-900 border border-slate-800 rounded-2xl p-8 shadow-2xl">
-              <div id="dropzone" class="border-2 border-dashed border-slate-700 hover:border-sky-500 rounded-2xl p-12 text-center cursor-pointer bg-slate-950/40 hover:bg-slate-950/80 transition-colors duration-200">
-                <input type="file" id="fileInput" class="hidden" accept=".pdf,.jpg,.jpeg,.png,.doc,.docx,.xls,.xlsx,.csv,.txt,.tif,.tiff" multiple />
-                <div class="w-16 h-16 rounded-2xl mx-auto flex items-center justify-center text-2xl shadow-lg mb-4" style="background-color: rgba(2,132,199,0.12); color: #0284c7">📤</div>
-                <p class="text-lg font-semibold text-white">Click to upload or drag &amp; drop</p>
-                <p class="text-sm text-slate-400 mt-1">PDF, JPG, JPEG, PNG, DOC, DOCX, XLS, XLSX, CSV, TXT, TIFF &mdash; up to 25 MB</p>
-                <div id="fileSelectedInfo" class="hidden mt-4 text-sm text-sky-400 font-medium"></div>
-              </div>
+              <input type="file" id="fileInput" style="position:absolute;width:1px;height:1px;opacity:0;overflow:hidden" accept=".pdf,.jpg,.jpeg,.png,.doc,.docx,.xls,.xlsx,.csv,.txt,.tif,.tiff" multiple />
+              <label for="fileInput" id="dropzone" style="display:block;cursor:pointer;border:2px dashed #475569;border-radius:1rem;padding:3rem;text-align:center;background:rgba(2,6,23,0.4);transition:border-color 0.2s">
+                <div style="width:4rem;height:4rem;border-radius:1rem;margin:0 auto 1rem;display:flex;align-items:center;justify-content:center;font-size:1.5rem;background:rgba(2,132,199,0.12);color:#0284c7">📤</div>
+                <p style="font-size:1.125rem;font-weight:600;color:#fff">Click to upload or drag &amp; drop</p>
+                <p style="font-size:0.875rem;color:#94a3b8;margin-top:0.25rem">PDF, JPG, JPEG, PNG, DOC, DOCX, XLS, XLSX, CSV, TXT, TIFF &mdash; up to 25 MB</p>
+                <div id="fileSelectedInfo" style="display:none;margin-top:1rem;font-size:0.875rem;color:#38bdf8;font-weight:500"></div>
+              </label>
 
-              <button id="uploadBtn" class="w-full mt-6 py-3 rounded-xl text-white font-bold text-sm shadow-xl transition hover:opacity-90" style="background-color: #0284c7">
+              <button id="uploadBtn" style="width:100%;margin-top:1.5rem;padding:0.75rem;border-radius:0.75rem;color:#fff;font-weight:700;font-size:0.875rem;border:none;cursor:pointer;background:#0284c7">
                 Start Upload &amp; AI Processing
               </button>
-              <div id="uploadStatus" class="hidden mt-4 text-center text-sm font-medium text-emerald-400"></div>
+              <div id="uploadStatus" style="display:none;margin-top:1rem;text-align:center;font-size:0.875rem;font-weight:500;color:#34d399"></div>
             </div>
           </main>
         """ if is_upload else """
@@ -660,109 +660,98 @@ class LogisticsAutomationHandler(http.server.BaseHTTPRequestHandler):
     function renderUploadPage(app, navHtml, primaryColor) {
       const safeColor = primaryColor || '#0284c7';
 
-      // If server already pre-rendered the dropzone, skip innerHTML overwrite
-      const existingDropzone = document.getElementById('dropzone');
-      if (!existingDropzone) {
-        app.innerHTML = `
-          ${navHtml}
-          <main class="max-w-4xl mx-auto px-4 py-8 space-y-8">
-            <div class="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl flex justify-between items-center">
-              <div>
-                <h1 class="text-2xl font-bold text-white tracking-tight">Document Ingestion &amp; n8n AI Pipeline</h1>
-                <p class="text-sm text-slate-400 mt-1">Upload PDF or image logistics paperwork to trigger automated extraction.</p>
-              </div>
-              <div class="space-x-3">
-                <a href="/documents" class="text-xs bg-slate-800 hover:bg-slate-700 text-slate-200 px-4 py-2 rounded-xl">View All Documents</a>
-              </div>
+      // Always rebuild fresh. Use <label for="fileInput"> — opens file picker natively, no JS needed.
+      app.innerHTML = `
+        ${navHtml}
+        <main style="max-width:56rem;margin:0 auto;padding:2rem 1rem;display:flex;flex-direction:column;gap:2rem">
+          <div style="background:#0f172a;border:1px solid #1e293b;border-radius:1rem;padding:1.5rem;display:flex;justify-content:space-between;align-items:center">
+            <div>
+              <h1 style="font-size:1.5rem;font-weight:700;color:#fff">Document Ingestion &amp; n8n AI Pipeline</h1>
+              <p style="font-size:0.875rem;color:#94a3b8;margin-top:0.25rem">Upload logistics paperwork to trigger automated AI extraction.</p>
             </div>
+            <a href="/documents" style="font-size:0.75rem;background:#1e293b;color:#e2e8f0;padding:0.5rem 1rem;border-radius:0.75rem;text-decoration:none">View All Documents</a>
+          </div>
 
-            <div class="bg-slate-900 border border-slate-800 rounded-2xl p-8 shadow-2xl">
-              <div id="dropzone" class="border-2 border-dashed border-slate-700 hover:border-sky-500 rounded-2xl p-12 text-center cursor-pointer bg-slate-950/40 hover:bg-slate-950/80 transition">
-                <input type="file" id="fileInput" class="hidden" accept=".pdf,.jpg,.jpeg,.png,.doc,.docx,.xls,.xlsx,.csv,.txt,.tif,.tiff" multiple />
-                <div class="w-16 h-16 rounded-2xl mx-auto flex items-center justify-center text-2xl shadow-lg mb-4" style="background-color: rgba(2,132,199,0.12); color: ${safeColor}">📤</div>
-                <p class="text-lg font-semibold text-white">Click to upload or drag &amp; drop document</p>
-                <p class="text-sm text-slate-400 mt-1">Supports PDF, JPG, JPEG, PNG, DOC, DOCX, XLS, XLSX, CSV, TXT, TIFF up to 25 MB</p>
-                <div id="fileSelectedInfo" class="hidden mt-4 text-sm text-sky-400 font-medium"></div>
-              </div>
+          <div style="background:#0f172a;border:1px solid #1e293b;border-radius:1rem;padding:2rem">
+            <input type="file" id="fileInput" style="position:absolute;width:1px;height:1px;opacity:0;overflow:hidden" accept=".pdf,.jpg,.jpeg,.png,.doc,.docx,.xls,.xlsx,.csv,.txt,.tif,.tiff" multiple />
+            <label for="fileInput" id="dropzone" style="display:block;cursor:pointer;border:2px dashed #475569;border-radius:1rem;padding:3rem 2rem;text-align:center;background:rgba(2,6,23,0.4);transition:border-color 0.2s">
+              <div style="width:4rem;height:4rem;border-radius:1rem;margin:0 auto 1rem;display:flex;align-items:center;justify-content:center;font-size:1.5rem;background:rgba(2,132,199,0.12);color:${safeColor}">📤</div>
+              <p style="font-size:1.125rem;font-weight:600;color:#fff">Click to upload or drag &amp; drop</p>
+              <p style="font-size:0.875rem;color:#94a3b8;margin-top:0.25rem">Supports PDF, JPG, JPEG, PNG, DOC, DOCX, XLS, XLSX, CSV, TXT, TIFF up to 25 MB</p>
+              <div id="fileSelectedInfo" style="display:none;margin-top:1rem;font-size:0.875rem;color:#38bdf8;font-weight:500"></div>
+            </label>
 
-              <button id="uploadBtn" class="w-full mt-6 py-3 rounded-xl text-white font-bold text-sm shadow-xl transition hover:opacity-90" style="background-color: ${safeColor}">
-                Start Upload &amp; AI Processing
-              </button>
-              <div id="uploadStatus" class="hidden mt-4 text-center text-sm font-medium text-emerald-400"></div>
-            </div>
-          </main>
-        `;
-      }
+            <button id="uploadBtn" style="width:100%;margin-top:1.5rem;padding:0.75rem;border-radius:0.75rem;color:#fff;font-weight:700;font-size:0.875rem;border:none;cursor:pointer;background:${safeColor}">
+              Start Upload &amp; AI Processing
+            </button>
+            <div id="uploadStatus" style="display:none;margin-top:1rem;text-align:center;font-size:0.875rem;font-weight:500;color:#34d399"></div>
+          </div>
+        </main>
+      `;
 
-      // Attach event listeners to whichever DOM we have (pre-rendered or just built)
-      const dropzone = document.getElementById('dropzone');
       const fileInput = document.getElementById('fileInput');
+      const dropzone  = document.getElementById('dropzone');
       const uploadBtn = document.getElementById('uploadBtn');
       const fileSelectedInfo = document.getElementById('fileSelectedInfo');
-      const uploadStatus = document.getElementById('uploadStatus');
+      const uploadStatus     = document.getElementById('uploadStatus');
 
-      if (!dropzone || !fileInput || !uploadBtn) {
-        console.error('Upload page: required DOM elements not found');
-        return;
-      }
-
-      dropzone.addEventListener('click', () => fileInput.click());
-      dropzone.addEventListener('dragover', (e) => { e.preventDefault(); dropzone.classList.add('border-sky-400'); });
-      dropzone.addEventListener('dragleave', () => dropzone.classList.remove('border-sky-400'));
+      dropzone.addEventListener('dragover',  (e) => { e.preventDefault(); dropzone.style.borderColor = '#38bdf8'; });
+      dropzone.addEventListener('dragleave', ()  => { dropzone.style.borderColor = '#475569'; });
       dropzone.addEventListener('drop', (e) => {
         e.preventDefault();
-        dropzone.classList.remove('border-sky-400');
-        fileInput.files = e.dataTransfer.files;
-        fileInput.dispatchEvent(new Event('change'));
+        dropzone.style.borderColor = '#475569';
+        if (e.dataTransfer.files.length) {
+          const dt = new DataTransfer();
+          for (const f of e.dataTransfer.files) dt.items.add(f);
+          fileInput.files = dt.files;
+          fileInput.dispatchEvent(new Event('change'));
+        }
       });
 
       fileInput.addEventListener('change', (e) => {
         if (e.target.files.length > 0) {
-          fileSelectedInfo.textContent = "Selected: " + e.target.files.length + " file(s)";
-          fileSelectedInfo.classList.remove('hidden');
+          fileSelectedInfo.textContent = 'Selected: ' + e.target.files.length + ' file(s) — ' + Array.from(e.target.files).map(f => f.name).join(', ');
+          fileSelectedInfo.style.display = 'block';
         }
       });
 
       uploadBtn.addEventListener('click', async () => {
-        if (fileInput.files.length === 0) {
-          alert('Please select document files first.');
+        if (!fileInput.files || fileInput.files.length === 0) {
+          alert('Please select document files first by clicking the upload area.');
           return;
         }
-        const allowedExts = ['pdf', 'jpg', 'jpeg', 'png', 'doc', 'docx', 'xls', 'xlsx', 'csv', 'txt', 'tif', 'tiff'];
-        for (let i = 0; i < fileInput.files.length; i++) {
-          const ext = fileInput.files[i].name.split('.').pop().toLowerCase();
+        const allowedExts = ['pdf','jpg','jpeg','png','doc','docx','xls','xlsx','csv','txt','tif','tiff'];
+        for (const f of fileInput.files) {
+          const ext = f.name.split('.').pop().toLowerCase();
           if (!allowedExts.includes(ext)) {
-            alert('Unsupported file type: ' + fileInput.files[i].name + '\nAllowed formats: PDF, JPG, JPEG, PNG, DOC, DOCX, XLS, XLSX, CSV, TXT, TIFF');
+            alert('Unsupported file type: ' + f.name + '\nAllowed formats: PDF, JPG, JPEG, PNG, DOC, DOCX, XLS, XLSX, CSV, TXT, TIFF');
             return;
           }
         }
         uploadBtn.disabled = true;
-        uploadStatus.textContent = "Uploading & running AI extraction pipeline for all files...";
-        uploadStatus.classList.remove('hidden');
+        uploadBtn.textContent = 'Uploading...';
+        uploadStatus.textContent = 'Uploading & running AI extraction pipeline...';
+        uploadStatus.style.display = 'block';
 
         const formData = new FormData();
-        for (let i = 0; i < fileInput.files.length; i++) {
-          formData.append('file', fileInput.files[i]);
-        }
+        for (const f of fileInput.files) formData.append('file', f);
 
         try {
           const res = await fetch('/api/documents/upload', { method: 'POST', body: formData });
           const d = await res.json();
-          if (d.success) {
-            uploadStatus.textContent = "Upload successful! Redirecting to review...";
-            setTimeout(() => {
-              window.location.href = `/documents/${d.documentIds[0]}/review`;
-            }, 800);
+          if (d.success && d.documentIds && d.documentIds.length > 0) {
+            uploadStatus.textContent = 'Upload successful! Redirecting to review...';
+            setTimeout(() => { window.location.href = '/documents/' + d.documentIds[0] + '/review'; }, 800);
           } else {
             uploadBtn.disabled = false;
-            uploadStatus.textContent = '';
-            uploadStatus.classList.add('hidden');
-            alert(d.error || "Upload failed");
+            uploadBtn.textContent = 'Start Upload & AI Processing';
+            uploadStatus.style.display = 'none';
+            alert(d.error || 'Upload failed');
           }
         } catch(err) {
           uploadBtn.disabled = false;
-          uploadStatus.textContent = '';
-          uploadStatus.classList.add('hidden');
+          uploadBtn.textContent = 'Start Upload & AI Processing';
+          uploadStatus.style.display = 'none';
           alert('Upload error: ' + err.message);
         }
       });
