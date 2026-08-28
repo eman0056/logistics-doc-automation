@@ -548,15 +548,9 @@ class LogisticsAutomationHandler(http.server.BaseHTTPRequestHandler):
       }
     }
 
-    async function loadApp() {
+    function loadApp() {
       const app = document.getElementById('app');
-      let customer = { name: 'Apex Freight Logistics', code: 'APEX', primaryColor: '#0284c7' };
-      try {
-        const res = await fetchWithTimeout('/api/customer', {}, 1500);
-        const d = await res.json();
-        if (d && d.customer) customer = d.customer;
-      } catch(e) {}
-
+      const customer = { name: 'Apex Freight Logistics', code: 'APEX', primaryColor: '#0284c7' };
       const primaryColor = customer.primaryColor || '#0284c7';
 
       const navHtml = `
@@ -591,16 +585,16 @@ class LogisticsAutomationHandler(http.server.BaseHTTPRequestHandler):
           renderUploadPage(app, navHtml, primaryColor);
         } else if (currentPath.startsWith('/documents/') && currentPath.includes('/review')) {
           const parts = currentPath.split('/');
-          await renderReviewPage(app, navHtml, primaryColor, parts[2]);
+          renderReviewPage(app, navHtml, primaryColor, parts[2]);
         } else if (currentPath.startsWith('/invoices/') && currentPath.split('/').length > 2) {
           const parts = currentPath.split('/');
-          await renderInvoicePage(app, navHtml, primaryColor, parts[2]);
+          renderInvoicePage(app, navHtml, primaryColor, parts[2]);
         } else if (currentPath === '/invoices') {
-          await renderInvoicesDashboard(app, navHtml, primaryColor);
+          renderInvoicesDashboard(app, navHtml, primaryColor);
         } else if (currentPath === '/review-queue') {
-          await renderReviewQueue(app, navHtml, primaryColor);
+          renderReviewQueue(app, navHtml, primaryColor);
         } else {
-          await renderDocumentsList(app, navHtml, primaryColor);
+          renderDocumentsList(app, navHtml, primaryColor);
         }
       } catch (err) {
         console.error("Render Error:", err);
