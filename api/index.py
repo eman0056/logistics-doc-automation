@@ -794,16 +794,11 @@ def _send_spa_html(path):
           return payload;
         };
 
-        const SAVE_APPROVED_WEBHOOK_URL = "${SAVE_APPROVED_WEBHOOK_URL}";
-
         document.getElementById('saveReviewBtn').onclick = async () => {
           const payload = collectPayload();
           const btn = document.getElementById('saveReviewBtn');
           btn.innerHTML = 'Saving & Syncing...';
           btn.disabled = true;
-
-          let backendSuccess = false;
-          let backendError = '';
 
           try {
             const r = await fetch('/api/documents/' + docId + '/review', {
@@ -813,45 +808,22 @@ def _send_spa_html(path):
             });
             const rd = await r.json();
             if (rd.success) {
-              backendSuccess = true;
+              if (rd.webhookSynced) {
+                btn.innerHTML = 'Saved and synced ✓';
+              } else {
+                btn.innerHTML = 'Saved (Sync Warning ⚠️)';
+                alert('Saved to database successfully, but webhook sync failed: ' + (rd.webhookError || 'Sync warning'));
+              }
+              setTimeout(() => { btn.innerHTML = 'Save & Approve'; btn.disabled = false; }, 2500);
             } else {
-              backendError = rd.error || 'Failed to save to database';
+              alert(rd.error || 'Failed to save to database');
+              btn.innerHTML = 'Save & Approve';
+              btn.disabled = false;
             }
           } catch(e) {
-            backendError = 'Network error saving to database';
-          }
-
-          if (!backendSuccess) {
-            alert(backendError);
+            alert('Network error saving to database');
             btn.innerHTML = 'Save & Approve';
             btn.disabled = false;
-            return;
-          }
-
-          let webhookSuccess = false;
-          let webhookError = '';
-          try {
-            const wRes = await fetch(SAVE_APPROVED_WEBHOOK_URL, {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify(payload)
-            });
-            if (wRes.ok) {
-              webhookSuccess = true;
-            } else {
-              webhookError = 'Webhook returned status ' + wRes.status;
-            }
-          } catch(e) {
-            webhookError = 'Webhook network error: ' + (e.message || e);
-          }
-
-          if (webhookSuccess) {
-            btn.innerHTML = 'Saved and synced ✓';
-            setTimeout(() => { btn.innerHTML = 'Save & Approve'; btn.disabled = false; }, 2500);
-          } else {
-            btn.innerHTML = 'Saved (Sync Warning ⚠️)';
-            alert('Saved to database successfully, but webhook sync failed: ' + webhookError);
-            setTimeout(() => { btn.innerHTML = 'Save & Approve'; btn.disabled = false; }, 3000);
           }
         };
 
@@ -1277,7 +1249,30 @@ async def save_review(doc_id: str, request: Request):
     conn.commit()
     conn.close()
 
-    return {"success": True, "documentId": doc_id}
+    webhook_synced = False
+    webhook_error = None
+    try:
+        req = urllib.request.Request(
+            SAVE_APPROVED_WEBHOOK_URL,
+            data=json_str.encode('utf-8'),
+            headers={'Content-Type': 'application/json'},
+            method='POST'
+        )
+        with urllib.request.urlopen(req, timeout=10) as res:
+            if res.status in (200, 201, 204):
+                webhook_synced = True
+            else:
+                webhook_error = f"Status {res.status}"
+    except Exception as e:
+        webhook_error = str(e)
+        print(f"Server-side webhook sync warning for doc {doc_id}: {e}")
+
+    return {
+        "success": True,
+        "documentId": doc_id,
+        "webhookSynced": webhook_synced,
+        "webhookError": webhook_error
+    }
 
 @app.post("/api/documents/{doc_id}/generate-invoice")
 async def generate_invoice(doc_id: str, request: Request):
