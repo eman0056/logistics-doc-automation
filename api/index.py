@@ -214,10 +214,10 @@ def _send_spa_html(path):
 
           <div class="bg-slate-900 border border-slate-800 rounded-2xl p-8 shadow-2xl">
             <div id="dropzone" class="border-2 border-dashed border-slate-700 hover:border-sky-500 rounded-2xl p-12 text-center cursor-pointer bg-slate-950/40 hover:bg-slate-950/80 transition">
-              <input type="file" id="fileInput" class="hidden" accept=".pdf,.jpg,.jpeg,.png" multiple />
+              <input type="file" id="fileInput" class="hidden" accept=".pdf,.jpg,.jpeg,.png,.doc,.docx,.xls,.xlsx,.csv,.txt,.tif,.tiff" multiple />
               <div class="w-16 h-16 rounded-2xl mx-auto flex items-center justify-center text-2xl shadow-lg mb-4" style="background-color: ${primaryColor}20; color: ${primaryColor}">📤</div>
               <p class="text-lg font-semibold text-white">Click to upload or drag & drop document</p>
-              <p class="text-sm text-slate-400 mt-1">Supports PDF, JPG, PNG up to 25 MB</p>
+              <p class="text-sm text-slate-400 mt-1">Supports PDF, JPG, JPEG, PNG, DOC, DOCX, XLS, XLSX, CSV, TXT, TIFF up to 25 MB</p>
               <div id="fileSelectedInfo" class="hidden mt-4 text-sm text-sky-400 font-medium"></div>
             </div>
 
@@ -238,7 +238,7 @@ def _send_spa_html(path):
       dropzone.onclick = () => fileInput.click();
       fileInput.onchange = (e) => {
         if (e.target.files.length > 0) {
-          fileSelectedInfo.textContent = "Selected: " + e.target.files.length + " files";
+          fileSelectedInfo.textContent = "Selected: " + e.target.files.length + " file(s)";
           fileSelectedInfo.classList.remove('hidden');
         }
       };
@@ -247,6 +247,14 @@ def _send_spa_html(path):
         if (fileInput.files.length === 0) {
           alert('Please select document files first.');
           return;
+        }
+        const allowedExts = ['pdf', 'jpg', 'jpeg', 'png', 'doc', 'docx', 'xls', 'xlsx', 'csv', 'txt', 'tif', 'tiff'];
+        for (let i = 0; i < fileInput.files.length; i++) {
+          const ext = fileInput.files[i].name.split('.').pop().toLowerCase();
+          if (!allowedExts.includes(ext)) {
+            alert('Unsupported file type: ' + fileInput.files[i].name + '\nAllowed formats: PDF, JPG, JPEG, PNG, DOC, DOCX, XLS, XLSX, CSV, TXT, TIFF');
+            return;
+          }
         }
         uploadStatus.textContent = "Uploading & running AI extraction pipeline for all files...";
         uploadStatus.classList.remove('hidden');
@@ -747,6 +755,12 @@ def _send_spa_html(path):
         }
       }
 
+      const fileExt = (doc.fileName || '').split('.').pop().toLowerCase();
+      const isImage = ['jpg', 'jpeg', 'png', 'tif', 'tiff'].includes(fileExt);
+      const previewElement = isImage ? 
+        `<img src="/api/documents/${docId}/file" alt="Document Preview" class="w-full h-full object-contain p-2" onerror="this.src='https://placehold.co/600x800/1e293b/475569?text=No+Preview+Available'" />` :
+        `<iframe src="/api/documents/${docId}/file" class="w-full h-full border-0 bg-white" title="Document Preview"></iframe>`;
+
       app.innerHTML = `
         ${navHtml}
         <main class="max-w-7xl mx-auto px-4 py-8 space-y-8 text-slate-100">
@@ -765,10 +779,9 @@ def _send_spa_html(path):
 
           <div class="grid grid-cols-1 xl:grid-cols-12 gap-8">
             <div class="xl:col-span-5 bg-slate-900 border border-slate-800 p-6 rounded-2xl shadow-2xl space-y-4">
-              <h3 class="text-sm font-bold text-slate-300 border-b border-slate-800 pb-3">Original Document</h3>
+              <h3 class="text-sm font-bold text-slate-300 border-b border-slate-800 pb-3">Original Document (${doc.fileName || 'File'})</h3>
               <div class="bg-slate-950 rounded-xl overflow-hidden border border-slate-800 h-[600px]">
-                <img src="/api/documents/${docId}/file" alt="Document Preview" class="w-full h-full object-contain p-2"
-                  onerror="this.src='https://placehold.co/600x800/1e293b/475569?text=No+Preview+Available'" />
+                ${previewElement}
               </div>
             </div>
 
@@ -1187,20 +1200,45 @@ async def upload_documents(request: Request):
         except Exception as e:
             print("Webhook error:", e)
 
+    allowed_exts = {
+        ".pdf": "application/pdf",
+        ".jpg": "image/jpeg",
+        ".jpeg": "image/jpeg",
+        ".png": "image/png",
+        ".doc": "application/msword",
+        ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        ".xls": "application/vnd.ms-excel",
+        ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        ".csv": "text/csv",
+        ".txt": "text/plain",
+        ".tif": "image/tiff",
+        ".tiff": "image/tiff"
+    }
+
     results = []
     try:
         for file_item in files:
+            ext = os.path.splitext(file_item.filename)[1].lower()
+            if ext not in allowed_exts:
+                return JSONResponse({"error": f"Unsupported file format '{ext}'. Allowed: PDF, JPG, JPEG, PNG, DOC, DOCX, XLS, XLSX, CSV, TXT, TIFF"}, status_code=400)
+
             file_bytes = await file_item.read()
             file_b64 = base64.b64encode(file_bytes).decode('utf-8')
             
             doc_id = str(uuid.uuid4())
             storage_path = f"api/documents/{doc_id}/file"
+
+            raw_text = ""
+            if ext in [".txt", ".csv"]:
+                try: raw_text = file_bytes.decode('utf-8', errors='ignore')
+                except Exception: pass
             
             payload = {
                 "documentId": doc_id,
                 "storagePath": storage_path,
                 "fileName": file_item.filename,
                 "fileBase64": file_b64,
+                "rawOcrText": raw_text,
                 "callbackUrl": f"{app_base_url}/api/documents/{doc_id}/extraction/callback"
             }
             
@@ -1208,9 +1246,9 @@ async def upload_documents(request: Request):
             
             conn = get_db()
             execute_query(conn, "INSERT INTO Document (id, fileName, storagePath, status) VALUES (?, ?, ?, 'PREPROCESSED')", (doc_id, file_item.filename, storage_path))
-            
-            # Now update the fileData column
             execute_query(conn, "UPDATE Document SET fileData = ? WHERE id = ?", (file_b64, doc_id))
+            if raw_text:
+                execute_query(conn, "INSERT INTO Extraction (documentId, rawOcrText, canonicalJson, confidenceScores) VALUES (?, ?, '{}', '{}')", (doc_id, raw_text))
             
             conn.commit()
             conn.close()
@@ -1237,9 +1275,28 @@ def get_document_file(doc_id: str):
     
     try:
         file_bytes = base64.b64decode(file_data_b64)
-        media_type = "application/pdf" if file_name.lower().endswith(".pdf") else "image/jpeg"
-        if file_name.lower().endswith(".png"): media_type = "image/png"
-        return Response(content=file_bytes, media_type=media_type)
+        ext = os.path.splitext(file_name)[1].lower()
+        
+        if ext in [".tif", ".tiff"]:
+            try:
+                from PIL import Image
+                import io
+                img = Image.open(io.BytesIO(file_bytes))
+                buf = io.BytesIO()
+                img.save(buf, format="PNG")
+                return Response(content=buf.getvalue(), media_type="image/png")
+            except Exception:
+                return Response(content=file_bytes, media_type="image/tiff")
+        elif ext in [".txt", ".csv"]:
+            return Response(content=file_bytes, media_type="text/plain; charset=utf-8")
+        elif ext == ".pdf":
+            return Response(content=file_bytes, media_type="application/pdf")
+        elif ext in [".jpg", ".jpeg"]:
+            return Response(content=file_bytes, media_type="image/jpeg")
+        elif ext == ".png":
+            return Response(content=file_bytes, media_type="image/png")
+        else:
+            return Response(content=file_bytes, media_type="application/octet-stream")
     except Exception:
         return JSONResponse({"error": "Failed to decode file"}, status_code=500)
 
