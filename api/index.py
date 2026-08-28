@@ -180,20 +180,20 @@ def _send_spa_html(path):
           renderUploadPage(app, navHtml, primaryColor);
         } else if (PATH.startsWith('/documents/') && PATH.includes('/review')) {
           const parts = PATH.split('/');
-          renderReviewPage(app, navHtml, primaryColor, parts[2]);
+          await renderReviewPage(app, navHtml, primaryColor, parts[2]);
         } else if (PATH.startsWith('/invoices/') && PATH.split('/').length > 2) {
           const parts = PATH.split('/');
-          renderInvoicePage(app, navHtml, primaryColor, parts[2]);
+          await renderInvoicePage(app, navHtml, primaryColor, parts[2]);
         } else if (PATH === '/invoices') {
-          renderInvoicesDashboard(app, navHtml, primaryColor);
+          await renderInvoicesDashboard(app, navHtml, primaryColor);
         } else if (PATH === '/review-queue') {
-          renderReviewQueue(app, navHtml, primaryColor);
+          await renderReviewQueue(app, navHtml, primaryColor);
         } else {
-          renderDocumentsList(app, navHtml, primaryColor);
+          await renderDocumentsList(app, navHtml, primaryColor);
         }
       } catch (err) {
         console.error("Render Error:", err);
-        app.innerHTML = navHtml + '<div class="p-8 text-center text-rose-400">Error rendering page: ' + err.message + '</div>';
+        app.innerHTML = navHtml + '<div class="p-8 text-center text-rose-400 bg-slate-900 rounded-2xl m-4"><h2 class="text-xl font-bold mb-2">Page Render Error</h2><p class="font-mono text-sm">' + (err.message || String(err)) + '</p></div>';
       }
     }
 
