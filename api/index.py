@@ -124,13 +124,71 @@ def debug_info():
 
 
 def _send_spa_html(path):
+        is_upload = (path == '/documents/upload' or path == '/upload')
+        initial_main = """
+          <main class="max-w-4xl mx-auto px-4 py-8 space-y-8">
+            <div class="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl flex justify-between items-center">
+              <div>
+                <h1 class="text-2xl font-bold text-white tracking-tight">Document Ingestion &amp; n8n AI Pipeline</h1>
+                <p class="text-sm text-slate-400 mt-1">Upload logistics paperwork to trigger automated AI extraction.</p>
+              </div>
+              <div class="space-x-3">
+                <a href="/documents" class="text-xs bg-slate-800 hover:bg-slate-700 text-slate-200 px-4 py-2 rounded-xl">View All Documents</a>
+              </div>
+            </div>
+
+            <div class="bg-slate-900 border border-slate-800 rounded-2xl p-8 shadow-2xl">
+              <div id="dropzone" class="border-2 border-dashed border-slate-700 hover:border-sky-500 rounded-2xl p-12 text-center cursor-pointer bg-slate-950/40 hover:bg-slate-950/80 transition-colors duration-200">
+                <input type="file" id="fileInput" class="hidden" accept=".pdf,.jpg,.jpeg,.png,.doc,.docx,.xls,.xlsx,.csv,.txt,.tif,.tiff" multiple />
+                <div class="w-16 h-16 rounded-2xl mx-auto flex items-center justify-center text-2xl shadow-lg mb-4" style="background-color: rgba(2,132,199,0.12); color: #0284c7">📤</div>
+                <p class="text-lg font-semibold text-white">Click to upload or drag &amp; drop</p>
+                <p class="text-sm text-slate-400 mt-1">PDF, JPG, JPEG, PNG, DOC, DOCX, XLS, XLSX, CSV, TXT, TIFF &mdash; up to 25 MB</p>
+                <div id="fileSelectedInfo" class="hidden mt-4 text-sm text-sky-400 font-medium"></div>
+              </div>
+
+              <button id="uploadBtn" class="w-full mt-6 py-3 rounded-xl text-white font-bold text-sm shadow-xl transition hover:opacity-90" style="background-color: #0284c7">
+                Start Upload &amp; AI Processing
+              </button>
+              <div id="uploadStatus" class="hidden mt-4 text-center text-sm font-medium text-emerald-400"></div>
+            </div>
+          </main>
+        """ if is_upload else """
+          <main class="max-w-7xl mx-auto px-4 py-8 space-y-6">
+            <div class="flex justify-between items-center">
+              <div>
+                <h1 class="text-2xl font-bold text-white tracking-tight">Documents Repository</h1>
+                <p class="text-sm text-slate-400">View and manage ingested logistics paperwork.</p>
+              </div>
+              <a href="/documents/upload" class="px-5 py-2.5 rounded-xl text-white font-bold text-sm shadow-lg" style="background-color: #0284c7">+ Upload New Document</a>
+            </div>
+
+            <div class="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden shadow-2xl">
+              <table class="w-full text-left text-sm text-slate-300">
+                <thead class="bg-slate-950 text-xs font-semibold text-slate-400 border-b border-slate-800">
+                  <tr>
+                    <th class="px-6 py-4">Filename</th>
+                    <th class="px-6 py-4">Type</th>
+                    <th class="px-6 py-4">Status</th>
+                    <th class="px-6 py-4">Size</th>
+                    <th class="px-6 py-4">Uploaded At</th>
+                    <th class="px-6 py-4 text-right">Actions</th>
+                  </tr>
+                </thead>
+                <tbody id="docsTableBody">
+                  <tr><td colspan="6" class="p-8 text-center text-slate-400">No documents found. <a href="/documents/upload" class="text-sky-400 underline font-medium">Click here to upload your first document</a></td></tr>
+                </tbody>
+              </table>
+            </div>
+          </main>
+        """
+
         html_code = """<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Logistics Document Automation PoC</title>
-  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdn.tailwindcss.com" defer></script>
 </head>
 <body class="bg-slate-950 text-slate-100 min-h-screen font-sans">
   <div id="app">
@@ -157,10 +215,7 @@ def _send_spa_html(path):
         </div>
       </div>
     </header>
-    <main class="max-w-7xl mx-auto px-4 py-16 text-center space-y-4">
-      <div class="inline-block w-8 h-8 border-4 border-sky-500 border-t-transparent rounded-full animate-spin"></div>
-      <p class="text-slate-400 font-medium text-sm">Loading Logistics Automation Portal...</p>
-    </main>
+    """ + initial_main + """
   </div>
   <script>
     const PATH = """ + json.dumps(path) + """;
@@ -1185,7 +1240,11 @@ def _send_spa_html(path):
   </script>
 </body>
 </html>"""
-        return HTMLResponse(content=html_code)
+        return HTMLResponse(content=html_code, headers={
+            "Cache-Control": "no-cache, no-store, must-revalidate, max-age=0, s-maxage=0",
+            "Pragma": "no-cache",
+            "Expires": "0"
+        })
 
 def run_server():
     with socketserver.TCPServer(("", PORT), LogisticsAutomationHandler) as httpd:
