@@ -693,24 +693,6 @@ class LogisticsAutomationHandler(http.server.BaseHTTPRequestHandler):
     }
 
     async function renderDocumentsList(app, navHtml, primaryColor) {
-      const res = await fetch('/api/documents');
-      const d = await res.json();
-      const docs = d.documents || [];
-
-      const rowsHtml = docs.map(doc => `
-        <tr class="border-b border-slate-800/60 hover:bg-slate-800/40 transition">
-          <td class="px-6 py-4 font-semibold text-white">${doc.fileName}</td>
-          <td class="px-6 py-4 text-xs font-bold text-sky-400">${doc.documentType}</td>
-          <td class="px-6 py-4 text-xs font-bold text-emerald-400">${doc.status}</td>
-          <td class="px-6 py-4 text-xs font-mono text-slate-400">${(doc.fileSize / 1024).toFixed(1)} KB</td>
-          <td class="px-6 py-4 text-xs text-slate-400">${new Date(doc.createdAt).toLocaleDateString()}</td>
-          <td class="px-6 py-4 text-right space-x-2">
-            <a href="/documents/${doc.id}/review" class="text-xs font-semibold text-sky-400 hover:underline">Review & Edit</a>
-            ${doc.status === 'INVOICE_GENERATED' ? `<a href="/invoices/${doc.id}" class="text-xs font-semibold text-emerald-400 hover:underline">View Invoice</a>` : ''}
-          </td>
-        </tr>
-      `).join('');
-
       app.innerHTML = `
         ${navHtml}
         <main class="max-w-7xl mx-auto px-4 py-8 space-y-6">
@@ -734,13 +716,42 @@ class LogisticsAutomationHandler(http.server.BaseHTTPRequestHandler):
                   <th class="px-6 py-4 text-right">Actions</th>
                 </tr>
               </thead>
-              <tbody>
-                ${rowsHtml || '<tr><td colspan="6" class="p-8 text-center text-slate-400">No documents found. Upload one to get started.</td></tr>'}
+              <tbody id="docsTableBody">
+                <tr><td colspan="6" class="p-8 text-center text-slate-400">
+                  <div class="inline-block w-6 h-6 border-2 border-sky-500 border-t-transparent rounded-full animate-spin mb-2"></div>
+                  <p>Loading documents...</p>
+                </td></tr>
               </tbody>
             </table>
           </div>
         </main>
       `;
+
+      const tbody = document.getElementById('docsTableBody');
+      let docs = [];
+      try {
+        const res = await fetchWithTimeout('/api/documents', {}, 3000);
+        const d = await res.json();
+        docs = d.documents || [];
+      } catch(err) {
+        console.warn("Fetch documents warning:", err);
+      }
+
+      if (tbody) {
+        tbody.innerHTML = docs.length > 0 ? docs.map(doc => `
+          <tr class="border-b border-slate-800/60 hover:bg-slate-800/40 transition">
+            <td class="px-6 py-4 font-semibold text-white">${doc.fileName || 'Untitled Document'}</td>
+            <td class="px-6 py-4 text-xs font-bold text-sky-400">${doc.documentType || 'LOGISTICS'}</td>
+            <td class="px-6 py-4 text-xs font-bold text-emerald-400">${doc.status || 'PREPROCESSED'}</td>
+            <td class="px-6 py-4 text-xs font-mono text-slate-400">${doc.fileSize ? (doc.fileSize / 1024).toFixed(1) + ' KB' : 'N/A'}</td>
+            <td class="px-6 py-4 text-xs text-slate-400">${doc.createdAt ? new Date(doc.createdAt).toLocaleDateString() : 'Recent'}</td>
+            <td class="px-6 py-4 text-right space-x-2">
+              <a href="/documents/${doc.id}/review" class="text-xs font-semibold text-sky-400 hover:underline">Review &amp; Edit</a>
+              ${doc.status === 'INVOICE_GENERATED' ? `<a href="/invoices/${doc.id}" class="text-xs font-semibold text-emerald-400 hover:underline">View Invoice</a>` : ''}
+            </td>
+          </tr>
+        `).join('') : `<tr><td colspan="6" class="p-8 text-center text-slate-400">No documents found. <a href="/documents/upload" class="text-sky-400 underline font-medium">Click here to upload your first document</a></td></tr>`;
+      }
     }
 
         async function renderBatchReviewPage(app, navHtml, primaryColor) {
