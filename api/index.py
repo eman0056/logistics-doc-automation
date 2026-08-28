@@ -65,6 +65,8 @@ def init_db(conn):
     # Safely add columns that might already exist
     alter_statements = [
         "ALTER TABLE Document ADD COLUMN fileData TEXT;",
+        'ALTER TABLE Extraction ADD COLUMN "rawOcrText" TEXT;',
+        'ALTER TABLE Extraction ADD COLUMN rawOcrText TEXT;'
     ]
     for stmt in alter_statements:
         try:
@@ -1260,8 +1262,20 @@ async def upload_documents(request: Request):
             conn = get_db()
             execute_query(conn, "INSERT INTO Document (id, fileName, storagePath, status) VALUES (?, ?, ?, 'PREPROCESSED')", (doc_id, file_item.filename, storage_path))
             execute_query(conn, "UPDATE Document SET fileData = ? WHERE id = ?", (file_b64, doc_id))
+            
             if raw_text:
-                execute_query(conn, "INSERT INTO Extraction (documentId, rawOcrText, canonicalJson, confidenceScores) VALUES (?, ?, '{}', '{}')", (doc_id, raw_text))
+                try:
+                    execute_query(conn, "INSERT INTO Extraction (documentId, rawOcrText, canonicalJson, confidenceScores) VALUES (?, ?, '{}', '{}')", (doc_id, raw_text))
+                except Exception:
+                    try:
+                        conn.rollback()
+                        execute_query(conn, 'INSERT INTO Extraction (documentId, "rawOcrText", canonicalJson, confidenceScores) VALUES (?, ?, \'{}\', \'{}\')', (doc_id, raw_text))
+                    except Exception:
+                        try:
+                            conn.rollback()
+                            execute_query(conn, "INSERT INTO Extraction (documentId, canonicalJson, confidenceScores) VALUES (?, '{}', '{}')", (doc_id,))
+                        except Exception:
+                            pass
             
             conn.commit()
             conn.close()
