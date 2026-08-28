@@ -12,10 +12,89 @@ ALLOWED_MIME_TYPES = {
     ".pdf": "application/pdf",
     ".jpg": "image/jpeg",
     ".jpeg": "image/jpeg",
-    ".png": "image/png"
+    ".png": "image/png",
+    ".doc": "application/msword",
+    ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    ".xls": "application/vnd.ms-excel",
+    ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    ".csv": "text/csv",
+    ".txt": "text/plain",
+    ".tif": "image/tiff",
+    ".tiff": "image/tiff"
 }
 
 MAX_FILE_SIZE_BYTES = 25 * 1024 * 1024  # 25 MB
+
+def extract_raw_text_from_file(file_path: str) -> str:
+    ext = os.path.splitext(file_path)[1].lower()
+    if ext == ".txt":
+        try:
+            with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
+                return f.read().strip()
+        except Exception:
+            return ""
+    elif ext == ".csv":
+        try:
+            import csv
+            rows = []
+            with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
+                reader = csv.reader(f)
+                for row in reader:
+                    if any(row):
+                        rows.append(" | ".join([cell.strip() for cell in row if cell.strip()]))
+            return "\n".join(rows)
+        except Exception:
+            return ""
+    elif ext == ".docx":
+        try:
+            import docx
+            doc = docx.Document(file_path)
+            lines = [p.text.strip() for p in doc.paragraphs if p.text.strip()]
+            for table in doc.tables:
+                for row in table.rows:
+                    row_txt = " | ".join([cell.text.strip() for cell in row.cells if cell.text.strip()])
+                    if row_txt:
+                        lines.append(row_txt)
+            return "\n".join(lines)
+        except Exception:
+            try:
+                import zipfile, xml.etree.ElementTree as ET
+                with zipfile.ZipFile(file_path) as z:
+                    xml_content = z.read('word/document.xml')
+                    tree = ET.fromstring(xml_content)
+                    texts = [node.text for node in tree.iter('{http://schemas.openxmlformats.org/wordprocessingml/2006/main}t') if node.text]
+                    return "\n".join(texts)
+            except Exception:
+                return ""
+    elif ext == ".doc":
+        try:
+            import re
+            with open(file_path, "rb") as f:
+                content = f.read().decode("latin1", errors="ignore")
+                strings = re.findall(r'[\x20-\x7E]{4,}', content)
+                return "\n".join(strings)
+        except Exception:
+            return ""
+    elif ext in [".xlsx", ".xls"]:
+        try:
+            import openpyxl
+            wb = openpyxl.load_workbook(file_path, data_only=True)
+            lines = []
+            for sheetname in wb.sheetnames:
+                ws = wb[sheetname]
+                lines.append(f"--- Sheet: {sheetname} ---")
+                for row in ws.iter_rows(values_only=True):
+                    row_vals = [str(val).strip() for val in row if val is not None and str(val).strip() != ""]
+                    if row_vals:
+                        lines.append(" | ".join(row_vals))
+            return "\n".join(lines)
+        except Exception:
+            import re
+            with open(file_path, "rb") as f:
+                content = f.read().decode("latin1", errors="ignore")
+                strings = re.findall(r'[\x20-\x7E]{4,}', content)
+                return "\n".join(strings)
+    return ""
 
 def ingest_file(file_path: str, customer_id: str = None) -> dict:
     if not os.path.exists(file_path):
@@ -27,7 +106,7 @@ def ingest_file(file_path: str, customer_id: str = None) -> dict:
 
     ext = os.path.splitext(file_path)[1].lower()
     if ext not in ALLOWED_MIME_TYPES:
-        raise ValueError(f"Unsupported file extension '{ext}'. Allowed: PDF, JPG, PNG")
+        raise ValueError(f"Unsupported file extension '{ext}'. Allowed: PDF, JPG, JPEG, PNG, DOC, DOCX, XLS, XLSX, CSV, TXT, TIFF")
 
     mime_type = ALLOWED_MIME_TYPES[ext]
     file_name = os.path.basename(file_path)
@@ -81,11 +160,18 @@ def ingest_file(file_path: str, customer_id: str = None) -> dict:
 
     conn.commit()
 
-    # 4. Perform Preprocessing Step
+    # 4. Perform Preprocessing Step & Text Extraction
     page_count = 1
     if mime_type == "application/pdf":
         page_count = max(1, int(file_size / 150000) + 1)
     scan_quality = "HIGH" if file_size > 50000 else "MEDIUM"
+
+    raw_text = extract_raw_text_from_file(target_storage_path)
+    if raw_text:
+        cursor.execute("""
+            INSERT OR REPLACE INTO Extraction (id, documentId, rawOcrText, canonicalJson, confidenceScores, extractedAt)
+            VALUES (?, ?, ?, '{}', '{}', CURRENT_TIMESTAMP)
+        """, (str(uuid.uuid4()), document_id, raw_text))
 
     cursor.execute("""
         INSERT INTO WorkflowRun (id, documentId, workflowName, stepName, status, startedAt, completedAt)
