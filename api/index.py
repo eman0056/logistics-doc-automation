@@ -572,7 +572,9 @@ def _send_spa_html(path):
             <p class="text-slate-400 text-sm">No extracted data yet. Wait a few seconds for n8n to complete, then refresh.</p>
             <button onclick="location.reload()" class="text-xs bg-sky-600 hover:bg-sky-500 text-white px-5 py-2 rounded-xl font-bold transition-colors">Refresh Page</button>
           </div>
-        `;        const hasKnownNested = ('invoiceHeader' in canonical) || ('shipmentDetails' in canonical) || ('shipmentDetail' in canonical) || ('chargeLineItems' in canonical);
+        `;
+      } else {
+        const hasKnownNested = ('invoiceHeader' in canonical) || ('shipmentDetails' in canonical) || ('shipmentDetail' in canonical) || ('chargeLineItems' in canonical);
 
         if (hasKnownNested) {
           // 1. invoiceHeader section
