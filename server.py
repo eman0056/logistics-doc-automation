@@ -535,13 +535,26 @@ class LogisticsAutomationHandler(http.server.BaseHTTPRequestHandler):
       return isNaN(parsed) ? defaultVal : parsed;
     }
 
+    async function fetchWithTimeout(url, options = {}, timeoutMs = 2500) {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), timeoutMs);
+      try {
+        const res = await fetch(url, { ...options, signal: controller.signal });
+        clearTimeout(timer);
+        return res;
+      } catch (err) {
+        clearTimeout(timer);
+        throw err;
+      }
+    }
+
     async function loadApp() {
       const app = document.getElementById('app');
       let customer = { name: 'Apex Freight Logistics', code: 'APEX', primaryColor: '#0284c7' };
       try {
-        const res = await fetch('/api/customer');
+        const res = await fetchWithTimeout('/api/customer', {}, 1500);
         const d = await res.json();
-        if (d.customer) customer = d.customer;
+        if (d && d.customer) customer = d.customer;
       } catch(e) {}
 
       const primaryColor = customer.primaryColor || '#0284c7';
