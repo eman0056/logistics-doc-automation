@@ -76,6 +76,9 @@ class LogisticsAutomationHandler(http.server.BaseHTTPRequestHandler):
         elif path.startswith("/api/documents/") and path.endswith("/status"):
             doc_id = path.split("/")[3]
             return self._handle_get_document_status(doc_id)
+        elif path.startswith("/api/documents/") and path.endswith("/file"):
+            doc_id = path.split("/")[3]
+            return self._handle_get_document_file(doc_id)
         elif path == "/api/review-tasks":
             return self._handle_get_review_tasks()
         
@@ -224,6 +227,65 @@ class LogisticsAutomationHandler(http.server.BaseHTTPRequestHandler):
             "reviewUrl": f"/documents/{row[0]}/review"
         })
 
+    def _handle_get_document_file(self, doc_id):
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        cursor.execute("SELECT storagePath, fileName FROM Document WHERE id = ?;", (doc_id,))
+        row = cursor.fetchone()
+        conn.close()
+
+        if not row:
+            return self._send_json({"error": "File not found"}, 404)
+
+        rel_storage_path = row[0]
+        file_name = row[1]
+        full_path = os.path.join(BASE_DIR, rel_storage_path)
+
+        if not os.path.exists(full_path):
+            return self._send_json({"error": "File not found on disk"}, 404)
+
+        ext = os.path.splitext(file_name)[1].lower()
+
+        if ext in [".tif", ".tiff"]:
+            try:
+                from PIL import Image
+                import io
+                img = Image.open(full_path)
+                buf = io.BytesIO()
+                img.save(buf, format="PNG")
+                content = buf.getvalue()
+                mime_type = "image/png"
+            except Exception:
+                with open(full_path, "rb") as f:
+                    content = f.read()
+                mime_type = "image/tiff"
+        elif ext in [".txt", ".csv"]:
+            with open(full_path, "rb") as f:
+                content = f.read()
+            mime_type = "text/plain; charset=utf-8"
+        elif ext == ".pdf":
+            with open(full_path, "rb") as f:
+                content = f.read()
+            mime_type = "application/pdf"
+        elif ext in [".jpg", ".jpeg"]:
+            with open(full_path, "rb") as f:
+                content = f.read()
+            mime_type = "image/jpeg"
+        elif ext == ".png":
+            with open(full_path, "rb") as f:
+                content = f.read()
+            mime_type = "image/png"
+        else:
+            with open(full_path, "rb") as f:
+                content = f.read()
+            mime_type = "application/octet-stream"
+
+        self.send_response(200)
+        self.send_header("Content-Type", mime_type)
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.end_headers()
+        self.wfile.write(content)
+
     def _handle_upload_document(self):
         content_type = self.headers.get('Content-Type')
         if not content_type or 'multipart/form-data' not in content_type:
@@ -276,14 +338,24 @@ class LogisticsAutomationHandler(http.server.BaseHTTPRequestHandler):
                 
                 res = ingest_file(temp_file_path)
                 os.remove(temp_file_path)
-                
+
+                raw_ocr_txt = ""
+                conn_tmp = sqlite3.connect(DB_PATH)
+                cur_tmp = conn_tmp.cursor()
+                cur_tmp.execute("SELECT rawOcrText FROM Extraction WHERE documentId = ?;", (res["documentId"],))
+                e_row = cur_tmp.fetchone()
+                if e_row and e_row[0]:
+                    raw_ocr_txt = e_row[0]
+                conn_tmp.close()
+
                 payload = {
                     "documentId": res["documentId"],
                     "storagePath": res["storagePath"],
                     "fileName": res["fileName"],
+                    "rawOcrText": raw_ocr_txt,
                     "callbackUrl": f"{app_base_url}/api/documents/{res['documentId']}/extraction/callback"
                 }
-                
+
                 import threading
                 threading.Thread(target=trigger_webhook, args=(webhook_url, payload), daemon=True).start()
                 
@@ -512,10 +584,10 @@ class LogisticsAutomationHandler(http.server.BaseHTTPRequestHandler):
 
           <div class="bg-slate-900 border border-slate-800 rounded-2xl p-8 shadow-2xl">
             <div id="dropzone" class="border-2 border-dashed border-slate-700 hover:border-sky-500 rounded-2xl p-12 text-center cursor-pointer bg-slate-950/40 hover:bg-slate-950/80 transition">
-              <input type="file" id="fileInput" class="hidden" accept=".pdf,.jpg,.jpeg,.png" multiple />
+              <input type="file" id="fileInput" class="hidden" accept=".pdf,.jpg,.jpeg,.png,.doc,.docx,.xls,.xlsx,.csv,.txt,.tif,.tiff" multiple />
               <div class="w-16 h-16 rounded-2xl mx-auto flex items-center justify-center text-2xl shadow-lg mb-4" style="background-color: ${primaryColor}20; color: ${primaryColor}">📤</div>
               <p class="text-lg font-semibold text-white">Click to upload or drag & drop document</p>
-              <p class="text-sm text-slate-400 mt-1">Supports PDF, JPG, PNG up to 25 MB</p>
+              <p class="text-sm text-slate-400 mt-1">Supports PDF, JPG, JPEG, PNG, DOC, DOCX, XLS, XLSX, CSV, TXT, TIFF up to 25 MB</p>
               <div id="fileSelectedInfo" class="hidden mt-4 text-sm text-sky-400 font-medium"></div>
             </div>
 
@@ -536,7 +608,7 @@ class LogisticsAutomationHandler(http.server.BaseHTTPRequestHandler):
       dropzone.onclick = () => fileInput.click();
       fileInput.onchange = (e) => {
         if (e.target.files.length > 0) {
-          fileSelectedInfo.textContent = "Selected: " + e.target.files.length + " files";
+          fileSelectedInfo.textContent = "Selected: " + e.target.files.length + " file(s)";
           fileSelectedInfo.classList.remove('hidden');
         }
       };
@@ -545,6 +617,14 @@ class LogisticsAutomationHandler(http.server.BaseHTTPRequestHandler):
         if (fileInput.files.length === 0) {
           alert('Please select document files first.');
           return;
+        }
+        const allowedExts = ['pdf', 'jpg', 'jpeg', 'png', 'doc', 'docx', 'xls', 'xlsx', 'csv', 'txt', 'tif', 'tiff'];
+        for (let i = 0; i < fileInput.files.length; i++) {
+          const ext = fileInput.files[i].name.split('.').pop().toLowerCase();
+          if (!allowedExts.includes(ext)) {
+            alert('Unsupported file type: ' + fileInput.files[i].name + '\nAllowed formats: PDF, JPG, JPEG, PNG, DOC, DOCX, XLS, XLSX, CSV, TXT, TIFF');
+            return;
+          }
         }
         uploadStatus.textContent = "Uploading & running AI extraction pipeline for all files...";
         uploadStatus.classList.remove('hidden');
@@ -1042,6 +1122,12 @@ class LogisticsAutomationHandler(http.server.BaseHTTPRequestHandler):
         }
       }
 
+      const fileExt = (doc.fileName || '').split('.').pop().toLowerCase();
+      const isImage = ['jpg', 'jpeg', 'png', 'tif', 'tiff'].includes(fileExt);
+      const previewElement = isImage ? 
+        `<img src="/api/documents/${docId}/file" alt="Document Preview" class="w-full h-full object-contain p-2" onerror="this.src='https://placehold.co/600x800/1e293b/475569?text=No+Preview+Available'" />` :
+        `<iframe src="/api/documents/${docId}/file" class="w-full h-full border-0 bg-white" title="Document Preview"></iframe>`;
+
       app.innerHTML = `
         ${navHtml}
         <main class="max-w-7xl mx-auto px-4 py-8 space-y-8 text-slate-100">
@@ -1060,10 +1146,9 @@ class LogisticsAutomationHandler(http.server.BaseHTTPRequestHandler):
 
           <div class="grid grid-cols-1 xl:grid-cols-12 gap-8">
             <div class="xl:col-span-5 bg-slate-900 border border-slate-800 p-6 rounded-2xl shadow-2xl space-y-4">
-              <h3 class="text-sm font-bold text-slate-300 border-b border-slate-800 pb-3">Original Document</h3>
+              <h3 class="text-sm font-bold text-slate-300 border-b border-slate-800 pb-3">Original Document (${doc.fileName || 'File'})</h3>
               <div class="bg-slate-950 rounded-xl overflow-hidden border border-slate-800 h-[600px]">
-                <img src="/api/documents/${docId}/file" alt="Document Preview" class="w-full h-full object-contain p-2"
-                  onerror="this.src='https://placehold.co/600x800/1e293b/475569?text=No+Preview+Available'" />
+                ${previewElement}
               </div>
             </div>
 
