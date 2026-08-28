@@ -869,7 +869,7 @@ class LogisticsAutomationHandler(http.server.BaseHTTPRequestHandler):
           </div>
         `;
       } else {
-        const hasKnownNested = ('invoiceHeader' in canonical) || ('shipmentDetail' in canonical) || ('chargeLineItems' in canonical);
+        const hasKnownNested = ('invoiceHeader' in canonical) || ('shipmentDetails' in canonical) || ('shipmentDetail' in canonical) || ('chargeLineItems' in canonical);
 
         if (hasKnownNested) {
           // 1. invoiceHeader section
@@ -893,15 +893,18 @@ class LogisticsAutomationHandler(http.server.BaseHTTPRequestHandler):
             fieldsHtml += `</div></div>`;
           }
 
-          // 2. shipmentDetail section (Array)
-          if (Array.isArray(canonical.shipmentDetail) && canonical.shipmentDetail.length > 0) {
+          // 2. shipmentDetails / shipmentDetail section (Array)
+          const shipmentsArr = (Array.isArray(canonical.shipmentDetails) && canonical.shipmentDetails.length > 0) ? canonical.shipmentDetails : ((Array.isArray(canonical.shipmentDetail) && canonical.shipmentDetail.length > 0) ? canonical.shipmentDetail : []);
+          const shipmentSecName = (Array.isArray(canonical.shipmentDetails) && canonical.shipmentDetails.length > 0) ? 'shipmentDetails' : 'shipmentDetail';
+          
+          if (shipmentsArr.length > 0) {
             fieldsHtml += `
               <div class="space-y-4 mb-6">
                 <div class="flex items-center gap-2 font-bold text-sky-400 text-xs uppercase tracking-wider border-b border-slate-800 pb-2">
-                  <span class="p-1.5 bg-sky-500/10 rounded-lg text-sky-400">🚚</span> Shipment Details (${canonical.shipmentDetail.length})
+                  <span class="p-1.5 bg-sky-500/10 rounded-lg text-sky-400">🚚</span> Shipment Details (${shipmentsArr.length})
                 </div>
             `;
-            canonical.shipmentDetail.forEach((shipment, sIdx) => {
+            shipmentsArr.forEach((shipment, sIdx) => {
               fieldsHtml += `
                 <div class="bg-slate-900/90 p-5 rounded-2xl border border-slate-800 space-y-4 shadow-md">
                   <div class="text-xs font-bold text-sky-300 flex items-center justify-between border-b border-slate-800/80 pb-2.5">
@@ -914,26 +917,55 @@ class LogisticsAutomationHandler(http.server.BaseHTTPRequestHandler):
               `;
               if (typeof shipment === 'object' && shipment !== null) {
                 for (const [key, value] of Object.entries(shipment)) {
+                  if (key === 'chargeLineItems') continue; // Handled separately below if nested
                   const valStr = value === null || value === undefined ? '' : String(value);
                   fieldsHtml += `
                     <div class="space-y-1.5">
                       <label class="text-slate-400 block font-semibold text-[11px] uppercase tracking-wider">${key}</label>
-                      <input data-section="shipmentDetail" data-index="${sIdx}" data-key="${key.replace(/"/g, '&quot;')}" type="text" value="${valStr.replace(/"/g, '&quot;')}" class="nested-field w-full bg-slate-950 border border-slate-700/80 rounded-xl px-3.5 py-2.5 text-white focus:border-sky-500 focus:outline-none transition-colors font-mono text-sm shadow-inner" />
+                      <input data-section="${shipmentSecName}" data-index="${sIdx}" data-key="${key.replace(/"/g, '&quot;')}" type="text" value="${valStr.replace(/"/g, '&quot;')}" class="nested-field w-full bg-slate-950 border border-slate-700/80 rounded-xl px-3.5 py-2.5 text-white focus:border-sky-500 focus:outline-none transition-colors font-mono text-sm shadow-inner" />
                     </div>
                   `;
                 }
               }
-              fieldsHtml += `</div></div>`;
+              fieldsHtml += `</div>`;
+
+              // Check for nested chargeLineItems inside shipment
+              if (shipment && Array.isArray(shipment.chargeLineItems) && shipment.chargeLineItems.length > 0) {
+                fieldsHtml += `
+                  <div class="mt-4 pt-4 border-t border-slate-800/80 space-y-3">
+                    <div class="text-xs font-bold text-emerald-400 flex items-center gap-2">
+                      <span>💳</span> Charge Line Items (${shipment.chargeLineItems.length})
+                    </div>
+                `;
+                shipment.chargeLineItems.forEach((charge, cIdx) => {
+                  fieldsHtml += `
+                    <div class="bg-slate-950/80 p-3.5 rounded-xl border border-slate-800 grid grid-cols-1 md:grid-cols-2 gap-3">
+                  `;
+                  for (const [ckey, cval] of Object.entries(charge)) {
+                    const cvalStr = cval === null || cval === undefined ? '' : String(cval);
+                    fieldsHtml += `
+                      <div class="space-y-1">
+                        <label class="text-slate-400 block font-semibold text-[10px] uppercase tracking-wider">${ckey}</label>
+                        <input data-section="${shipmentSecName}" data-ship-idx="${sIdx}" data-charge-idx="${cIdx}" data-charge-key="${ckey.replace(/"/g, '&quot;')}" type="text" value="${cvalStr.replace(/"/g, '&quot;')}" class="nested-charge-field w-full bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-1.5 text-white font-mono text-xs" />
+                      </div>
+                    `;
+                  }
+                  fieldsHtml += `</div>`;
+                });
+                fieldsHtml += `</div>`;
+              }
+
+              fieldsHtml += `</div>`;
             });
             fieldsHtml += `</div>`;
           }
 
-          // 3. chargeLineItems section (Array)
+          // 3. Standalone chargeLineItems section (Array, if top-level)
           if (Array.isArray(canonical.chargeLineItems) && canonical.chargeLineItems.length > 0) {
             fieldsHtml += `
               <div class="space-y-4 mb-6">
                 <div class="flex items-center gap-2 font-bold text-sky-400 text-xs uppercase tracking-wider border-b border-slate-800 pb-2">
-                  <span class="p-1.5 bg-sky-500/10 rounded-lg text-sky-400">💳</span> Charge Line Items (${canonical.chargeLineItems.length})
+                  <span class="p-1.5 bg-sky-500/10 rounded-lg text-sky-400">💳</span> Standalone Charge Line Items (${canonical.chargeLineItems.length})
                 </div>
             `;
             canonical.chargeLineItems.forEach((charge, cIdx) => {
@@ -964,7 +996,7 @@ class LogisticsAutomationHandler(http.server.BaseHTTPRequestHandler):
           }
 
           // 4. Other root keys
-          const knownKeys = ['invoiceHeader', 'shipmentDetail', 'chargeLineItems'];
+          const knownKeys = ['invoiceHeader', 'shipmentDetails', 'shipmentDetail', 'chargeLineItems'];
           const otherKeys = Object.keys(canonical).filter(k => !knownKeys.includes(k));
           if (otherKeys.length > 0) {
             fieldsHtml += `
@@ -1059,11 +1091,12 @@ class LogisticsAutomationHandler(http.server.BaseHTTPRequestHandler):
             if (section === 'invoiceHeader') {
               if (!payload.invoiceHeader) payload.invoiceHeader = {};
               payload.invoiceHeader[key] = val;
-            } else if (section === 'shipmentDetail') {
-              if (!payload.shipmentDetail) payload.shipmentDetail = [];
+            } else if (section === 'shipmentDetails' || section === 'shipmentDetail') {
+              const secKey = section;
+              if (!payload[secKey]) payload[secKey] = [];
               const idx = parseInt(indexStr, 10);
-              if (!payload.shipmentDetail[idx]) payload.shipmentDetail[idx] = {};
-              payload.shipmentDetail[idx][key] = val;
+              if (!payload[secKey][idx]) payload[secKey][idx] = {};
+              payload[secKey][idx][key] = val;
             } else if (section === 'chargeLineItems') {
               if (!payload.chargeLineItems) payload.chargeLineItems = [];
               const idx = parseInt(indexStr, 10);
@@ -1086,6 +1119,22 @@ class LogisticsAutomationHandler(http.server.BaseHTTPRequestHandler):
               }
             }
           });
+
+          // Collect nested charge fields inside shipments
+          document.querySelectorAll('.nested-charge-field').forEach(input => {
+            const section = input.getAttribute('data-section');
+            const sIdx = parseInt(input.getAttribute('data-ship-idx'), 10);
+            const cIdx = parseInt(input.getAttribute('data-charge-idx'), 10);
+            const cKey = input.getAttribute('data-charge-key');
+            const val = input.value;
+
+            if (!payload[section]) payload[section] = [];
+            if (!payload[section][sIdx]) payload[section][sIdx] = {};
+            if (!payload[section][sIdx].chargeLineItems) payload[section][sIdx].chargeLineItems = [];
+            if (!payload[section][sIdx].chargeLineItems[cIdx]) payload[section][sIdx].chargeLineItems[cIdx] = {};
+            payload[section][sIdx].chargeLineItems[cIdx][cKey] = val;
+          });
+
           return payload;
         };
 
