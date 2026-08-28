@@ -16,6 +16,7 @@ PORT = 3000
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.path.join(BASE_DIR, "prisma", "dev.db")
 WORKFLOW_PATH = os.path.join(BASE_DIR, "n8n", "workflows", "Document_Processing_Full.json")
+SAVE_APPROVED_WEBHOOK_URL = "https://n8n.provelopers.net/webhook/e7761187-ad68-4fa4-a8e8-87f6eee47314"
 
 sys.path.append(os.path.join(BASE_DIR, "scripts"))
 from ingest_document import ingest_file
@@ -102,11 +103,32 @@ class LogisticsAutomationHandler(http.server.BaseHTTPRequestHandler):
         elif path.startswith("/api/documents/") and "/extraction/callback" in path:
             doc_id = path.split("/")[3]
             return self._handle_extraction_callback(doc_id)
+        elif path.startswith("/api/documents/") and path.endswith("/review"):
+            doc_id = path.split("/")[3]
+            return self._handle_save_review(doc_id)
         elif path.startswith("/api/review-tasks/") and path.endswith("/submit-review"):
             task_id = path.split("/")[3]
             return self._handle_submit_review(task_id)
 
         self._send_json({"error": "Endpoint not found"}, 404)
+
+    def _handle_save_review(self, doc_id):
+        content_length = int(self.headers.get('Content-Length', 0))
+        body = json.loads(self.rfile.read(content_length).decode('utf-8'))
+        submitted = body.get('editedData') or body.get('editedExtractedData')
+
+        if not submitted:
+            return self._send_json({"error": "Payload missing"}, 400)
+
+        json_str = json.dumps(submitted)
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        cursor.execute("UPDATE Extraction SET finalSubmittedData = ? WHERE documentId = ?;", (json_str, doc_id))
+        cursor.execute("UPDATE Document SET status = 'APPROVED' WHERE id = ?;", (doc_id,))
+        conn.commit()
+        conn.close()
+
+        self._send_json({"success": True, "documentId": doc_id})
 
     def _handle_get_customer(self):
         conn = sqlite3.connect(DB_PATH)
@@ -793,8 +815,6 @@ class LogisticsAutomationHandler(http.server.BaseHTTPRequestHandler):
                 <span>$${grandTotal.toFixed(2)} USD</span>
               </div>
             </div>
-          </div>
-          
           <div style="margin-top: 80px; font-size: 12px; color: #666; text-align: center;">
             <p>This is a consolidated invoice report generated from multiple uploaded documents.</p>
           </div>
@@ -807,253 +827,326 @@ class LogisticsAutomationHandler(http.server.BaseHTTPRequestHandler):
       const d = await res.json();
       const doc = (d.documents || []).find(item => item.id === docId) || {};
 
-      let canonical = {
-        documentNumber: 'DHL-9982412',
-        shipmentNumber: '8492019482',
-        documentType: 'INVOICE',
-        shipperName: 'Apex Logistics Hub',
-        consigneeName: 'Global Distribution Center',
-        carrierName: 'DHL Express Freight',
-        pickupDate: '2026-08-15',
-        deliveryDate: '2026-08-18',
-        purchaseOrderNumber: 'PO-2026-9912',
-        weightLb: 1450,
-        totalQuantity: 4,
-        subtotalCost: 1250.00,
-        freightCost: 150.00,
-        taxCost: 75.00,
-        totalAmount: 1475.00,
-        lineItems: [
-          { description: "Industrial Machinery Components", quantity: 2, unitPrice: 400.0, totalPrice: 800.0 },
-          { description: "Electronic Control Modules", quantity: 2, unitPrice: 225.0, totalPrice: 450.0 }
-        ]
-      };
+      let canonical = {};
 
       if (doc.extraction?.finalSubmittedData) {
-        try { canonical = { ...canonical, ...JSON.parse(doc.extraction.finalSubmittedData) }; } catch(e) {}
+        try { canonical = JSON.parse(doc.extraction.finalSubmittedData); } catch(e) {}
       } else if (doc.extraction?.canonicalJson) {
-        try { canonical = { ...canonical, ...JSON.parse(doc.extraction.canonicalJson) }; } catch(e) {}
+        try { canonical = JSON.parse(doc.extraction.canonicalJson); } catch(e) {}
       }
-      
-      const lineItemsHtml = (canonical.lineItems || []).map((item, idx) => `
-        <div class="line-item-row grid grid-cols-12 gap-3 mb-2" data-idx="${idx}">
-          <div class="col-span-6">
-            <input type="text" value="${item.description || ''}" class="item-desc w-full bg-slate-900 border border-slate-700 rounded px-3 py-2 text-white" />
+
+      const extractionPending = Object.keys(canonical).length === 0;
+
+      let fieldsHtml = '';
+      if (extractionPending) {
+        fieldsHtml = `
+          <div class="text-center py-12 space-y-4">
+            <p class="text-slate-400 text-sm">No extracted data yet. Wait a few seconds for n8n to complete, then refresh.</p>
+            <button onclick="location.reload()" class="text-xs bg-sky-600 hover:bg-sky-500 text-white px-5 py-2 rounded-xl font-bold transition-colors">Refresh Page</button>
           </div>
-          <div class="col-span-2">
-            <input type="number" value="${item.quantity || 0}" class="item-qty w-full bg-slate-900 border border-slate-700 rounded px-3 py-2 text-white text-center font-mono" />
-          </div>
-          <div class="col-span-2">
-            <input type="number" step="0.01" value="${item.unitPrice || 0}" class="item-price w-full bg-slate-900 border border-slate-700 rounded px-3 py-2 text-white text-right font-mono" />
-          </div>
-          <div class="col-span-2">
-            <input type="number" step="0.01" value="${item.totalPrice || 0}" class="item-total w-full bg-slate-900 border border-slate-700 rounded px-3 py-2 text-emerald-400 font-bold text-right font-mono" />
-          </div>
-        </div>
-      `).join('');
+        `;
+      } else {
+        const hasKnownNested = ('invoiceHeader' in canonical) || ('shipmentDetail' in canonical) || ('chargeLineItems' in canonical);
+
+        if (hasKnownNested) {
+          // 1. invoiceHeader section
+          if (canonical.invoiceHeader && typeof canonical.invoiceHeader === 'object' && !Array.isArray(canonical.invoiceHeader)) {
+            fieldsHtml += `
+              <div class="bg-slate-900/90 p-5 rounded-2xl border border-slate-800 space-y-4 shadow-md mb-6">
+                <div class="flex items-center gap-2 font-bold text-sky-400 text-xs uppercase tracking-wider border-b border-slate-800 pb-3">
+                  <span class="p-1.5 bg-sky-500/10 rounded-lg text-sky-400">📄</span> Invoice Header
+                </div>
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+            `;
+            for (const [key, value] of Object.entries(canonical.invoiceHeader)) {
+              const valStr = value === null || value === undefined ? '' : String(value);
+              fieldsHtml += `
+                <div class="space-y-1.5">
+                  <label class="text-slate-400 block font-semibold text-[11px] uppercase tracking-wider">${key}</label>
+                  <input data-section="invoiceHeader" data-key="${key.replace(/"/g, '&quot;')}" type="text" value="${valStr.replace(/"/g, '&quot;')}" class="nested-field w-full bg-slate-950 border border-slate-700/80 rounded-xl px-3.5 py-2.5 text-white focus:border-sky-500 focus:outline-none transition-colors font-mono text-sm shadow-inner" />
+                </div>
+              `;
+            }
+            fieldsHtml += `</div></div>`;
+          }
+
+          // 2. shipmentDetail section (Array)
+          if (Array.isArray(canonical.shipmentDetail) && canonical.shipmentDetail.length > 0) {
+            fieldsHtml += `
+              <div class="space-y-4 mb-6">
+                <div class="flex items-center gap-2 font-bold text-sky-400 text-xs uppercase tracking-wider border-b border-slate-800 pb-2">
+                  <span class="p-1.5 bg-sky-500/10 rounded-lg text-sky-400">🚚</span> Shipment Details (${canonical.shipmentDetail.length})
+                </div>
+            `;
+            canonical.shipmentDetail.forEach((shipment, sIdx) => {
+              fieldsHtml += `
+                <div class="bg-slate-900/90 p-5 rounded-2xl border border-slate-800 space-y-4 shadow-md">
+                  <div class="text-xs font-bold text-sky-300 flex items-center justify-between border-b border-slate-800/80 pb-2.5">
+                    <span class="flex items-center gap-2">
+                      <span class="w-5 h-5 rounded-full bg-sky-500/20 text-sky-400 flex items-center justify-center text-[10px]">${sIdx + 1}</span>
+                      Shipment ${sIdx + 1}
+                    </span>
+                  </div>
+                  <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+              `;
+              if (typeof shipment === 'object' && shipment !== null) {
+                for (const [key, value] of Object.entries(shipment)) {
+                  const valStr = value === null || value === undefined ? '' : String(value);
+                  fieldsHtml += `
+                    <div class="space-y-1.5">
+                      <label class="text-slate-400 block font-semibold text-[11px] uppercase tracking-wider">${key}</label>
+                      <input data-section="shipmentDetail" data-index="${sIdx}" data-key="${key.replace(/"/g, '&quot;')}" type="text" value="${valStr.replace(/"/g, '&quot;')}" class="nested-field w-full bg-slate-950 border border-slate-700/80 rounded-xl px-3.5 py-2.5 text-white focus:border-sky-500 focus:outline-none transition-colors font-mono text-sm shadow-inner" />
+                    </div>
+                  `;
+                }
+              }
+              fieldsHtml += `</div></div>`;
+            });
+            fieldsHtml += `</div>`;
+          }
+
+          // 3. chargeLineItems section (Array)
+          if (Array.isArray(canonical.chargeLineItems) && canonical.chargeLineItems.length > 0) {
+            fieldsHtml += `
+              <div class="space-y-4 mb-6">
+                <div class="flex items-center gap-2 font-bold text-sky-400 text-xs uppercase tracking-wider border-b border-slate-800 pb-2">
+                  <span class="p-1.5 bg-sky-500/10 rounded-lg text-sky-400">💳</span> Charge Line Items (${canonical.chargeLineItems.length})
+                </div>
+            `;
+            canonical.chargeLineItems.forEach((charge, cIdx) => {
+              fieldsHtml += `
+                <div class="bg-slate-900/90 p-5 rounded-2xl border border-slate-800 space-y-4 shadow-md">
+                  <div class="text-xs font-bold text-emerald-400 flex items-center justify-between border-b border-slate-800/80 pb-2.5">
+                    <span class="flex items-center gap-2">
+                      <span class="w-5 h-5 rounded-full bg-emerald-500/20 text-emerald-400 flex items-center justify-center text-[10px]">${cIdx + 1}</span>
+                      Charge ${cIdx + 1}
+                    </span>
+                  </div>
+                  <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+              `;
+              if (typeof charge === 'object' && charge !== null) {
+                for (const [key, value] of Object.entries(charge)) {
+                  const valStr = value === null || value === undefined ? '' : String(value);
+                  fieldsHtml += `
+                    <div class="space-y-1.5">
+                      <label class="text-slate-400 block font-semibold text-[11px] uppercase tracking-wider">${key}</label>
+                      <input data-section="chargeLineItems" data-index="${cIdx}" data-key="${key.replace(/"/g, '&quot;')}" type="text" value="${valStr.replace(/"/g, '&quot;')}" class="nested-field w-full bg-slate-950 border border-slate-700/80 rounded-xl px-3.5 py-2.5 text-white focus:border-sky-500 focus:outline-none transition-colors font-mono text-sm shadow-inner" />
+                    </div>
+                  `;
+                }
+              }
+              fieldsHtml += `</div></div>`;
+            });
+            fieldsHtml += `</div>`;
+          }
+
+          // 4. Other root keys
+          const knownKeys = ['invoiceHeader', 'shipmentDetail', 'chargeLineItems'];
+          const otherKeys = Object.keys(canonical).filter(k => !knownKeys.includes(k));
+          if (otherKeys.length > 0) {
+            fieldsHtml += `
+              <div class="bg-slate-900/90 p-5 rounded-2xl border border-slate-800 space-y-4 shadow-md mb-6">
+                <div class="flex items-center gap-2 font-bold text-slate-300 text-xs uppercase tracking-wider border-b border-slate-800 pb-3">
+                  <span class="p-1.5 bg-slate-800 rounded-lg text-slate-300">⚙️</span> Additional Fields
+                </div>
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+            `;
+            for (const key of otherKeys) {
+              const val = canonical[key];
+              let displayVal = val;
+              if (typeof val === 'object' && val !== null) {
+                try { displayVal = JSON.stringify(val); } catch(e) { displayVal = String(val); }
+              }
+              const valStr = displayVal === null || displayVal === undefined ? '' : String(displayVal);
+              fieldsHtml += `
+                <div class="space-y-1.5">
+                  <label class="text-slate-400 block font-semibold text-[11px] uppercase tracking-wider">${key}</label>
+                  <input data-section="root" data-key="${key.replace(/"/g, '&quot;')}" type="text" value="${valStr.replace(/"/g, '&quot;')}" class="nested-field w-full bg-slate-950 border border-slate-700/80 rounded-xl px-3.5 py-2.5 text-white focus:border-sky-500 focus:outline-none transition-colors font-mono text-sm shadow-inner" />
+                </div>
+              `;
+            }
+            fieldsHtml += `</div></div>`;
+          }
+        } else {
+          // Flat structure fallback
+          fieldsHtml += `<div class="grid grid-cols-1 gap-4">`;
+          for (const [key, value] of Object.entries(canonical)) {
+            let displayVal = value;
+            if (typeof value === 'object' && value !== null) {
+              try { displayVal = JSON.stringify(value); } catch(e) { displayVal = String(value); }
+            }
+            const valStr = displayVal === null || displayVal === undefined ? '' : String(displayVal);
+            fieldsHtml += `
+              <div class="space-y-1.5">
+                <label class="text-slate-400 block font-semibold text-[11px] uppercase tracking-wider">${key}</label>
+                <input data-section="root" data-key="${key.replace(/"/g, '&quot;')}" type="text" value="${valStr.replace(/"/g, '&quot;')}" class="nested-field w-full bg-slate-950 border border-slate-700/80 rounded-xl px-3.5 py-2.5 text-white focus:border-sky-500 focus:outline-none transition-colors shadow-inner font-mono text-sm" />
+              </div>
+            `;
+          }
+          fieldsHtml += `</div>`;
+        }
+      }
 
       app.innerHTML = `
         ${navHtml}
-        <main class="max-w-7xl mx-auto px-4 py-8 space-y-6">
-          <div class="flex justify-between items-center bg-slate-900 border border-slate-800 p-6 rounded-2xl shadow-xl transition-all hover:shadow-sky-900/20">
+        <main class="max-w-7xl mx-auto px-4 py-8 space-y-8 text-slate-100">
+          <div class="flex items-center justify-between">
             <div>
-              <h1 class="text-xl font-bold text-white flex items-center gap-2">
-                <span class="bg-sky-500/20 text-sky-400 p-2 rounded-lg">👁️</span> 
-                Human-in-the-Loop Review: ${doc.fileName || 'Document'}
-              </h1>
-              <p class="text-xs text-slate-400 mt-1 ml-10">Review the AI-extracted data below. Make any necessary corrections, then generate the final invoice.</p>
+              <h1 class="text-3xl font-black tracking-tight text-white">Dynamic Review &amp; Edit</h1>
+              <p class="text-slate-400 mt-2">Edit the exact extracted key-value pairs before final generation.</p>
             </div>
-            <button id="genInvoiceBtn" class="px-6 py-3 rounded-xl text-white font-bold text-sm shadow-xl hover:scale-105 transition-transform flex items-center gap-2" style="background-color: ${primaryColor}">
-              Generate Invoice ✨
-            </button>
+            <div class="space-x-3">
+              <a href="/documents" class="text-xs bg-slate-800 hover:bg-slate-700 text-white px-4 py-2 rounded-xl transition-colors">Discard</a>
+              ${!extractionPending ? `
+              <button id="saveReviewBtn" class="text-xs text-white px-6 py-2 rounded-xl font-bold shadow-lg hover:scale-105 transition-transform" style="background-color: ${primaryColor}">Save &amp; Approve</button>
+              <button id="genInvoiceBtn" class="text-xs bg-white text-slate-900 hover:bg-slate-200 px-6 py-2 rounded-xl font-bold transition-colors">Generate Invoice</button>` : ''}
+            </div>
           </div>
 
           <div class="grid grid-cols-1 xl:grid-cols-12 gap-8">
-            <!-- Left Side: Original Document -->
-            <div class="xl:col-span-5 flex flex-col space-y-4">
-              <div class="bg-slate-900 border border-slate-800 p-6 rounded-2xl shadow-2xl flex-1 flex flex-col">
-                <h3 class="text-sm font-bold text-white border-b border-slate-800 pb-3 mb-4 flex items-center gap-2">
-                  <span class="text-slate-400">📄</span> Original Document
-                </h3>
-                <div class="bg-slate-950 p-4 rounded-xl border border-slate-800 text-xs space-y-2 mb-4">
-                  <div class="flex justify-between text-slate-400"><span>Filename</span><span class="text-white font-medium">${doc.fileName || 'PDF Document'}</span></div>
-                  <div class="flex justify-between text-slate-400"><span>File Size</span><span class="text-slate-200">${((doc.fileSize||0)/1024).toFixed(1)} KB</span></div>
-                </div>
-                <div class="border border-slate-800 rounded-xl bg-slate-950/50 p-6 flex-1 min-h-[500px] flex flex-col items-center justify-center space-y-4 relative overflow-hidden group">
-                  <div class="absolute inset-0 bg-gradient-to-br from-sky-500/5 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-500"></div>
-                  <div class="w-24 h-32 bg-slate-900 border border-slate-700 shadow-2xl rounded-lg p-3 flex flex-col space-y-2 relative z-10">
-                    <div class="h-2 bg-sky-500/40 w-3/4 rounded-full"></div>
-                    <div class="h-1 bg-slate-700 w-full rounded-full"></div>
-                    <div class="h-1 bg-slate-700 w-5/6 rounded-full"></div>
-                    <div class="h-1 bg-slate-700 w-full rounded-full"></div>
-                    <div class="mt-auto h-2 bg-emerald-500/40 w-1/2 rounded-full"></div>
-                  </div>
-                  <p class="text-xs text-slate-500 relative z-10 text-center px-8">High-resolution document preview is active. The AI has scanned this document for key-value pairs and line items.</p>
-                </div>
+            <div class="xl:col-span-5 bg-slate-900 border border-slate-800 p-6 rounded-2xl shadow-2xl space-y-4">
+              <h3 class="text-sm font-bold text-slate-300 border-b border-slate-800 pb-3">Original Document</h3>
+              <div class="bg-slate-950 rounded-xl overflow-hidden border border-slate-800 h-[600px]">
+                <img src="/api/documents/${docId}/file" alt="Document Preview" class="w-full h-full object-contain p-2"
+                  onerror="this.src='https://placehold.co/600x800/1e293b/475569?text=No+Preview+Available'" />
               </div>
             </div>
 
-            <!-- Right Side: Editable Data -->
-            <div class="xl:col-span-7 bg-slate-900 border border-slate-800 p-6 rounded-2xl shadow-2xl space-y-6 text-xs">
+            <div class="xl:col-span-7 bg-slate-900 border border-slate-800 p-8 rounded-2xl shadow-2xl space-y-6">
               <h3 class="text-base font-bold text-white border-b border-slate-800 pb-3 flex items-center gap-2">
-                <span class="text-sky-400">⚡</span> Extracted Data Fields
+                <span class="text-sky-400">⚡</span> Dynamically Extracted Fields
               </h3>
-
-              <div class="bg-slate-950/50 p-5 rounded-xl border border-slate-800/50 space-y-4 hover:border-slate-700 transition-colors">
-                <div class="font-bold text-sky-400/80 text-[10px] tracking-wider uppercase">1. Identifiers & Dates</div>
-                <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
-                  <div class="col-span-2">
-                    <label class="text-slate-400 block mb-1">Invoice Number</label>
-                    <input id="inputDocNum" type="text" value="${canonical.documentNumber || ''}" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white font-mono focus:border-sky-500 focus:outline-none transition-colors" />
-                  </div>
-                  <div class="col-span-2">
-                    <label class="text-slate-400 block mb-1">Shipment Number</label>
-                    <input id="inputShipNum" type="text" value="${canonical.shipmentNumber || ''}" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white font-mono focus:border-sky-500 focus:outline-none transition-colors" />
-                  </div>
-                  <div class="col-span-2">
-                    <label class="text-slate-400 block mb-1">PO Number</label>
-                    <input id="inputPoNum" type="text" value="${canonical.purchaseOrderNumber || ''}" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white font-mono focus:border-sky-500 focus:outline-none transition-colors" />
-                  </div>
-                  <div>
-                    <label class="text-slate-400 block mb-1">Pickup Date</label>
-                    <input id="inputPickup" type="text" value="${canonical.pickupDate || ''}" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white font-mono focus:border-sky-500 focus:outline-none transition-colors" />
-                  </div>
-                  <div>
-                    <label class="text-slate-400 block mb-1">Delivery Date</label>
-                    <input id="inputDelivery" type="text" value="${canonical.deliveryDate || ''}" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white font-mono focus:border-sky-500 focus:outline-none transition-colors" />
-                  </div>
-                </div>
-              </div>
-
-              <div class="bg-slate-950/50 p-5 rounded-xl border border-slate-800/50 space-y-4 hover:border-slate-700 transition-colors">
-                <div class="font-bold text-sky-400/80 text-[10px] tracking-wider uppercase">2. Logistics Parties</div>
-                <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
-                  <div>
-                    <label class="text-slate-400 block mb-1">Shipper / Sender</label>
-                    <input id="inputShipper" type="text" value="${canonical.shipperName || ''}" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white focus:border-sky-500 focus:outline-none transition-colors" />
-                  </div>
-                  <div>
-                    <label class="text-slate-400 block mb-1">Consignee / Receiver</label>
-                    <input id="inputConsignee" type="text" value="${canonical.consigneeName || ''}" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white focus:border-sky-500 focus:outline-none transition-colors" />
-                  </div>
-                  <div>
-                    <label class="text-slate-400 block mb-1">Carrier Name</label>
-                    <input id="inputCarrier" type="text" value="${canonical.carrierName || ''}" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white focus:border-sky-500 focus:outline-none transition-colors" />
-                  </div>
-                </div>
-              </div>
-              
-              <div class="bg-slate-950/50 p-5 rounded-xl border border-slate-800/50 space-y-4 hover:border-slate-700 transition-colors">
-                <div class="flex justify-between items-end">
-                  <div class="font-bold text-sky-400/80 text-[10px] tracking-wider uppercase">3. Line Items</div>
-                  <div class="text-[10px] text-slate-500">Edit descriptions and prices</div>
-                </div>
-                
-                <div class="border border-slate-800 rounded-lg overflow-hidden bg-slate-900">
-                  <div class="grid grid-cols-12 gap-3 px-3 py-2 bg-slate-800/50 text-[10px] font-bold text-slate-400 uppercase tracking-wide">
-                    <div class="col-span-6">Description</div>
-                    <div class="col-span-2 text-center">Qty</div>
-                    <div class="col-span-2 text-right">Unit Price</div>
-                    <div class="col-span-2 text-right">Total</div>
-                  </div>
-                  <div class="p-3 bg-slate-950" id="lineItemsContainer">
-                    ${lineItemsHtml}
-                  </div>
-                </div>
-              </div>
-
-              <div class="bg-slate-950/50 p-5 rounded-xl border border-slate-800/50 space-y-4 hover:border-slate-700 transition-colors">
-                <div class="font-bold text-emerald-400/80 text-[10px] tracking-wider uppercase">4. Amounts & Totals</div>
-                <div class="grid grid-cols-2 md:grid-cols-6 gap-4">
-                  <div>
-                    <label class="text-slate-400 block mb-1">Weight (Lb)</label>
-                    <input id="inputWeight" type="number" value="${numVal(canonical.weightLb, 0)}" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white font-mono focus:border-sky-500 focus:outline-none" />
-                  </div>
-                  <div>
-                    <label class="text-slate-400 block mb-1">Qty (Total)</label>
-                    <input id="inputTotalQty" type="number" value="${numVal(canonical.totalQuantity, 0)}" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white font-mono focus:border-sky-500 focus:outline-none" />
-                  </div>
-                  <div>
-                    <label class="text-slate-400 block mb-1">Subtotal ($)</label>
-                    <input id="inputSubtotal" type="number" step="0.01" value="${numVal(canonical.subtotalCost, 1250)}" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white font-mono focus:border-sky-500 focus:outline-none" />
-                  </div>
-                  <div>
-                    <label class="text-slate-400 block mb-1">Freight ($)</label>
-                    <input id="inputFreight" type="number" step="0.01" value="${numVal(canonical.freightCost, 150)}" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white font-mono focus:border-sky-500 focus:outline-none" />
-                  </div>
-                  <div>
-                    <label class="text-slate-400 block mb-1">Tax ($)</label>
-                    <input id="inputTax" type="number" step="0.01" value="${numVal(canonical.taxCost, 75)}" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white font-mono focus:border-sky-500 focus:outline-none" />
-                  </div>
-                  <div>
-                    <label class="text-emerald-400 font-bold block mb-1">Total ($)</label>
-                    <input id="inputTotal" type="number" step="0.01" value="${numVal(canonical.totalAmount, 1475)}" class="w-full bg-emerald-900/20 border border-emerald-500/50 rounded-lg px-3 py-2 text-emerald-400 font-bold font-mono shadow-inner focus:border-emerald-400 focus:outline-none transition-colors" />
-                  </div>
-                </div>
+              <div class="bg-slate-950/50 p-6 rounded-xl border border-slate-800/50 space-y-5 max-h-[600px] overflow-y-auto">
+                ${fieldsHtml}
               </div>
             </div>
           </div>
         </main>
       `;
 
-      document.getElementById('genInvoiceBtn').onclick = async () => {
-        const lineItemRows = document.querySelectorAll('.line-item-row');
-        const updatedLineItems = Array.from(lineItemRows).map(row => {
-          return {
-            description: row.querySelector('.item-desc').value,
-            quantity: parseFloat(row.querySelector('.item-qty').value) || 0,
-            unitPrice: parseFloat(row.querySelector('.item-price').value) || 0,
-            totalPrice: parseFloat(row.querySelector('.item-total').value) || 0
-          };
-        });
+      if (!extractionPending) {
+        const collectPayload = () => {
+          const payload = {};
+          document.querySelectorAll('.nested-field').forEach(input => {
+            const section = input.getAttribute('data-section');
+            const key = input.getAttribute('data-key');
+            const indexStr = input.getAttribute('data-index');
+            let val = input.value;
 
-        const payload = {
-          documentNumber: document.getElementById('inputDocNum').value,
-          shipmentNumber: document.getElementById('inputShipNum').value,
-          purchaseOrderNumber: document.getElementById('inputPoNum').value,
-          pickupDate: document.getElementById('inputPickup').value,
-          deliveryDate: document.getElementById('inputDelivery').value,
-          shipperName: document.getElementById('inputShipper').value,
-          consigneeName: document.getElementById('inputConsignee').value,
-          carrierName: document.getElementById('inputCarrier').value,
-          weightLb: parseFloat(document.getElementById('inputWeight').value) || 0,
-          totalQuantity: parseFloat(document.getElementById('inputTotalQty').value) || 0,
-          subtotalCost: parseFloat(document.getElementById('inputSubtotal').value) || 0,
-          freightCost: parseFloat(document.getElementById('inputFreight').value) || 0,
-          taxCost: parseFloat(document.getElementById('inputTax').value) || 0,
-          totalAmount: parseFloat(document.getElementById('inputTotal').value) || 0,
-          currency: 'USD',
-          lineItems: updatedLineItems
+            if (section === 'invoiceHeader') {
+              if (!payload.invoiceHeader) payload.invoiceHeader = {};
+              payload.invoiceHeader[key] = val;
+            } else if (section === 'shipmentDetail') {
+              if (!payload.shipmentDetail) payload.shipmentDetail = [];
+              const idx = parseInt(indexStr, 10);
+              if (!payload.shipmentDetail[idx]) payload.shipmentDetail[idx] = {};
+              payload.shipmentDetail[idx][key] = val;
+            } else if (section === 'chargeLineItems') {
+              if (!payload.chargeLineItems) payload.chargeLineItems = [];
+              const idx = parseInt(indexStr, 10);
+              if (!payload.chargeLineItems[idx]) payload.chargeLineItems[idx] = {};
+              payload.chargeLineItems[idx][key] = val;
+            } else if (section === 'root') {
+              if (val.trim().startsWith('{') || val.trim().startsWith('[')) {
+                try { val = JSON.parse(val); } catch(e) {}
+              }
+              payload[key] = val;
+            } else {
+              if (indexStr !== null && indexStr !== undefined) {
+                if (!payload[section]) payload[section] = [];
+                const idx = parseInt(indexStr, 10);
+                if (!payload[section][idx]) payload[section][idx] = {};
+                payload[section][idx][key] = val;
+              } else {
+                if (!payload[section]) payload[section] = {};
+                payload[section][key] = val;
+              }
+            }
+          });
+          return payload;
         };
 
-        const btn = document.getElementById('genInvoiceBtn');
-        btn.innerHTML = 'Generating... ⏳';
-        btn.disabled = true;
-        btn.classList.add('opacity-50', 'cursor-not-allowed');
+        const SAVE_APPROVED_WEBHOOK_URL = "${SAVE_APPROVED_WEBHOOK_URL}";
 
-        try {
-          const res = await fetch(`/api/documents/${docId}/generate-invoice`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ editedExtractedData: payload })
-          });
+        document.getElementById('saveReviewBtn').onclick = async () => {
+          const payload = collectPayload();
+          const btn = document.getElementById('saveReviewBtn');
+          btn.innerHTML = 'Saving & Syncing...';
+          btn.disabled = true;
 
-          const resData = await res.json();
-          if (resData.success && resData.invoiceUrl) {
-            window.location.href = resData.invoiceUrl;
-          } else {
-            alert(resData.error || 'Failed to generate invoice');
-            btn.innerHTML = 'Generate Invoice ✨';
-            btn.disabled = false;
-            btn.classList.remove('opacity-50', 'cursor-not-allowed');
+          let backendSuccess = false;
+          let backendError = '';
+
+          try {
+            const r = await fetch('/api/documents/' + docId + '/review', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ editedData: payload })
+            });
+            const rd = await r.json();
+            if (rd.success) {
+              backendSuccess = true;
+            } else {
+              backendError = rd.error || 'Failed to save to database';
+            }
+          } catch(e) {
+            backendError = 'Network error saving to database';
           }
-        } catch(err) {
-          alert('Network error');
-          btn.innerHTML = 'Generate Invoice ✨';
-          btn.disabled = false;
-          btn.classList.remove('opacity-50', 'cursor-not-allowed');
-        }
-      };
+
+          if (!backendSuccess) {
+            alert(backendError);
+            btn.innerHTML = 'Save & Approve';
+            btn.disabled = false;
+            return;
+          }
+
+          let webhookSuccess = false;
+          let webhookError = '';
+          try {
+            const wRes = await fetch(SAVE_APPROVED_WEBHOOK_URL, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(payload)
+            });
+            if (wRes.ok) {
+              webhookSuccess = true;
+            } else {
+              webhookError = 'Webhook returned status ' + wRes.status;
+            }
+          } catch(e) {
+            webhookError = 'Webhook network error: ' + (e.message || e);
+          }
+
+          if (webhookSuccess) {
+            btn.innerHTML = 'Saved and synced ✓';
+            setTimeout(() => { btn.innerHTML = 'Save & Approve'; btn.disabled = false; }, 2500);
+          } else {
+            btn.innerHTML = 'Saved (Sync Warning ⚠️)';
+            alert('Saved to database successfully, but webhook sync failed: ' + webhookError);
+            setTimeout(() => { btn.innerHTML = 'Save & Approve'; btn.disabled = false; }, 3000);
+          }
+        };
+
+        document.getElementById('genInvoiceBtn').onclick = async () => {
+          const payload = collectPayload();
+          const btn = document.getElementById('genInvoiceBtn');
+          btn.innerHTML = 'Generating...'; btn.disabled = true;
+          try {
+            const r = await fetch('/api/documents/' + docId + '/generate-invoice', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ editedExtractedData: payload })
+            });
+            const rd = await r.json();
+            if (rd.success && rd.invoiceUrl) {
+              window.location.href = rd.invoiceUrl;
+            } else {
+              alert(rd.error || 'Failed to generate invoice');
+              btn.innerHTML = 'Generate Invoice'; btn.disabled = false;
+            }
+          } catch(e) { alert('Network error'); btn.innerHTML = 'Generate Invoice'; btn.disabled = false; }
+        };
+      }
     }
 
     async function renderInvoicePage(app, navHtml, primaryColor, docId) {

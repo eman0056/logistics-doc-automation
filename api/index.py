@@ -33,6 +33,7 @@ async def global_exception_handler(request: Request, exc: Exception):
     )
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+SAVE_APPROVED_WEBHOOK_URL = "https://n8n.provelopers.net/webhook/e7761187-ad68-4fa4-a8e8-87f6eee47314"
 # On Vercel, filesystem is read-only except /tmp
 if os.getenv("VERCEL"):
     DB_PATH = "/tmp/dev.db"
@@ -573,17 +574,144 @@ def _send_spa_html(path):
           </div>
         `;
       } else {
-        for (const [key, value] of Object.entries(canonical)) {
-          let displayVal = value;
-          if (typeof value === 'object') {
-            try { displayVal = JSON.stringify(value); } catch(e) { displayVal = String(value); }
+        const hasKnownNested = ('invoiceHeader' in canonical) || ('shipmentDetail' in canonical) || ('chargeLineItems' in canonical);
+
+        if (hasKnownNested) {
+          // 1. invoiceHeader section
+          if (canonical.invoiceHeader && typeof canonical.invoiceHeader === 'object' && !Array.isArray(canonical.invoiceHeader)) {
+            fieldsHtml += `
+              <div class="bg-slate-900/90 p-5 rounded-2xl border border-slate-800 space-y-4 shadow-md mb-6">
+                <div class="flex items-center gap-2 font-bold text-sky-400 text-xs uppercase tracking-wider border-b border-slate-800 pb-3">
+                  <span class="p-1.5 bg-sky-500/10 rounded-lg text-sky-400">📄</span> Invoice Header
+                </div>
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+            `;
+            for (const [key, value] of Object.entries(canonical.invoiceHeader)) {
+              const valStr = value === null || value === undefined ? '' : String(value);
+              fieldsHtml += `
+                <div class="space-y-1.5">
+                  <label class="text-slate-400 block font-semibold text-[11px] uppercase tracking-wider">${key}</label>
+                  <input data-section="invoiceHeader" data-key="${key.replace(/"/g, '&quot;')}" type="text" value="${valStr.replace(/"/g, '&quot;')}" class="nested-field w-full bg-slate-950 border border-slate-700/80 rounded-xl px-3.5 py-2.5 text-white focus:border-sky-500 focus:outline-none transition-colors font-mono text-sm shadow-inner" />
+                </div>
+              `;
+            }
+            fieldsHtml += `</div></div>`;
           }
-          fieldsHtml += `
-            <div class="space-y-1">
-              <label class="text-slate-400 block mb-1 font-bold text-[11px] uppercase tracking-wider">${key}</label>
-              <input data-key="${key}" type="text" value="${String(displayVal || '').replace(/"/g, '&quot;')}" class="dynamic-field w-full bg-slate-900 border border-slate-700 rounded-lg px-4 py-3 text-white focus:border-sky-500 focus:outline-none transition-colors shadow-inner font-mono text-sm" />
-            </div>
-          `;
+
+          // 2. shipmentDetail section (Array)
+          if (Array.isArray(canonical.shipmentDetail) && canonical.shipmentDetail.length > 0) {
+            fieldsHtml += `
+              <div class="space-y-4 mb-6">
+                <div class="flex items-center gap-2 font-bold text-sky-400 text-xs uppercase tracking-wider border-b border-slate-800 pb-2">
+                  <span class="p-1.5 bg-sky-500/10 rounded-lg text-sky-400">🚚</span> Shipment Details (${canonical.shipmentDetail.length})
+                </div>
+            `;
+            canonical.shipmentDetail.forEach((shipment, sIdx) => {
+              fieldsHtml += `
+                <div class="bg-slate-900/90 p-5 rounded-2xl border border-slate-800 space-y-4 shadow-md">
+                  <div class="text-xs font-bold text-sky-300 flex items-center justify-between border-b border-slate-800/80 pb-2.5">
+                    <span class="flex items-center gap-2">
+                      <span class="w-5 h-5 rounded-full bg-sky-500/20 text-sky-400 flex items-center justify-center text-[10px]">${sIdx + 1}</span>
+                      Shipment ${sIdx + 1}
+                    </span>
+                  </div>
+                  <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+              `;
+              if (typeof shipment === 'object' && shipment !== null) {
+                for (const [key, value] of Object.entries(shipment)) {
+                  const valStr = value === null || value === undefined ? '' : String(value);
+                  fieldsHtml += `
+                    <div class="space-y-1.5">
+                      <label class="text-slate-400 block font-semibold text-[11px] uppercase tracking-wider">${key}</label>
+                      <input data-section="shipmentDetail" data-index="${sIdx}" data-key="${key.replace(/"/g, '&quot;')}" type="text" value="${valStr.replace(/"/g, '&quot;')}" class="nested-field w-full bg-slate-950 border border-slate-700/80 rounded-xl px-3.5 py-2.5 text-white focus:border-sky-500 focus:outline-none transition-colors font-mono text-sm shadow-inner" />
+                    </div>
+                  `;
+                }
+              }
+              fieldsHtml += `</div></div>`;
+            });
+            fieldsHtml += `</div>`;
+          }
+
+          // 3. chargeLineItems section (Array)
+          if (Array.isArray(canonical.chargeLineItems) && canonical.chargeLineItems.length > 0) {
+            fieldsHtml += `
+              <div class="space-y-4 mb-6">
+                <div class="flex items-center gap-2 font-bold text-sky-400 text-xs uppercase tracking-wider border-b border-slate-800 pb-2">
+                  <span class="p-1.5 bg-sky-500/10 rounded-lg text-sky-400">💳</span> Charge Line Items (${canonical.chargeLineItems.length})
+                </div>
+            `;
+            canonical.chargeLineItems.forEach((charge, cIdx) => {
+              fieldsHtml += `
+                <div class="bg-slate-900/90 p-5 rounded-2xl border border-slate-800 space-y-4 shadow-md">
+                  <div class="text-xs font-bold text-emerald-400 flex items-center justify-between border-b border-slate-800/80 pb-2.5">
+                    <span class="flex items-center gap-2">
+                      <span class="w-5 h-5 rounded-full bg-emerald-500/20 text-emerald-400 flex items-center justify-center text-[10px]">${cIdx + 1}</span>
+                      Charge ${cIdx + 1}
+                    </span>
+                  </div>
+                  <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+              `;
+              if (typeof charge === 'object' && charge !== null) {
+                for (const [key, value] of Object.entries(charge)) {
+                  const valStr = value === null || value === undefined ? '' : String(value);
+                  fieldsHtml += `
+                    <div class="space-y-1.5">
+                      <label class="text-slate-400 block font-semibold text-[11px] uppercase tracking-wider">${key}</label>
+                      <input data-section="chargeLineItems" data-index="${cIdx}" data-key="${key.replace(/"/g, '&quot;')}" type="text" value="${valStr.replace(/"/g, '&quot;')}" class="nested-field w-full bg-slate-950 border border-slate-700/80 rounded-xl px-3.5 py-2.5 text-white focus:border-sky-500 focus:outline-none transition-colors font-mono text-sm shadow-inner" />
+                    </div>
+                  `;
+                }
+              }
+              fieldsHtml += `</div></div>`;
+            });
+            fieldsHtml += `</div>`;
+          }
+
+          // 4. Other root keys
+          const knownKeys = ['invoiceHeader', 'shipmentDetail', 'chargeLineItems'];
+          const otherKeys = Object.keys(canonical).filter(k => !knownKeys.includes(k));
+          if (otherKeys.length > 0) {
+            fieldsHtml += `
+              <div class="bg-slate-900/90 p-5 rounded-2xl border border-slate-800 space-y-4 shadow-md mb-6">
+                <div class="flex items-center gap-2 font-bold text-slate-300 text-xs uppercase tracking-wider border-b border-slate-800 pb-3">
+                  <span class="p-1.5 bg-slate-800 rounded-lg text-slate-300">⚙️</span> Additional Fields
+                </div>
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+            `;
+            for (const key of otherKeys) {
+              const val = canonical[key];
+              let displayVal = val;
+              if (typeof val === 'object' && val !== null) {
+                try { displayVal = JSON.stringify(val); } catch(e) { displayVal = String(val); }
+              }
+              const valStr = displayVal === null || displayVal === undefined ? '' : String(displayVal);
+              fieldsHtml += `
+                <div class="space-y-1.5">
+                  <label class="text-slate-400 block font-semibold text-[11px] uppercase tracking-wider">${key}</label>
+                  <input data-section="root" data-key="${key.replace(/"/g, '&quot;')}" type="text" value="${valStr.replace(/"/g, '&quot;')}" class="nested-field w-full bg-slate-950 border border-slate-700/80 rounded-xl px-3.5 py-2.5 text-white focus:border-sky-500 focus:outline-none transition-colors font-mono text-sm shadow-inner" />
+                </div>
+              `;
+            }
+            fieldsHtml += `</div></div>`;
+          }
+        } else {
+          // Flat structure fallback
+          fieldsHtml += `<div class="grid grid-cols-1 gap-4">`;
+          for (const [key, value] of Object.entries(canonical)) {
+            let displayVal = value;
+            if (typeof value === 'object' && value !== null) {
+              try { displayVal = JSON.stringify(value); } catch(e) { displayVal = String(value); }
+            }
+            const valStr = displayVal === null || displayVal === undefined ? '' : String(displayVal);
+            fieldsHtml += `
+              <div class="space-y-1.5">
+                <label class="text-slate-400 block font-semibold text-[11px] uppercase tracking-wider">${key}</label>
+                <input data-section="root" data-key="${key.replace(/"/g, '&quot;')}" type="text" value="${valStr.replace(/"/g, '&quot;')}" class="nested-field w-full bg-slate-950 border border-slate-700/80 rounded-xl px-3.5 py-2.5 text-white focus:border-sky-500 focus:outline-none transition-colors shadow-inner font-mono text-sm" />
+              </div>
+            `;
+          }
+          fieldsHtml += `</div>`;
         }
       }
 
@@ -625,18 +753,58 @@ def _send_spa_html(path):
       `;
 
       if (!extractionPending) {
-        document.getElementById('saveReviewBtn').onclick = async () => {
+        const collectPayload = () => {
           const payload = {};
-          document.querySelectorAll('.dynamic-field').forEach(input => {
+          document.querySelectorAll('.nested-field').forEach(input => {
+            const section = input.getAttribute('data-section');
             const key = input.getAttribute('data-key');
+            const indexStr = input.getAttribute('data-index');
             let val = input.value;
-            if (val.trim().startsWith('{') || val.trim().startsWith('[')) {
-              try { val = JSON.parse(val); } catch(e) {}
+
+            if (section === 'invoiceHeader') {
+              if (!payload.invoiceHeader) payload.invoiceHeader = {};
+              payload.invoiceHeader[key] = val;
+            } else if (section === 'shipmentDetail') {
+              if (!payload.shipmentDetail) payload.shipmentDetail = [];
+              const idx = parseInt(indexStr, 10);
+              if (!payload.shipmentDetail[idx]) payload.shipmentDetail[idx] = {};
+              payload.shipmentDetail[idx][key] = val;
+            } else if (section === 'chargeLineItems') {
+              if (!payload.chargeLineItems) payload.chargeLineItems = [];
+              const idx = parseInt(indexStr, 10);
+              if (!payload.chargeLineItems[idx]) payload.chargeLineItems[idx] = {};
+              payload.chargeLineItems[idx][key] = val;
+            } else if (section === 'root') {
+              if (val.trim().startsWith('{') || val.trim().startsWith('[')) {
+                try { val = JSON.parse(val); } catch(e) {}
+              }
+              payload[key] = val;
+            } else {
+              if (indexStr !== null && indexStr !== undefined) {
+                if (!payload[section]) payload[section] = [];
+                const idx = parseInt(indexStr, 10);
+                if (!payload[section][idx]) payload[section][idx] = {};
+                payload[section][idx][key] = val;
+              } else {
+                if (!payload[section]) payload[section] = {};
+                payload[section][key] = val;
+              }
             }
-            payload[key] = val;
           });
+          return payload;
+        };
+
+        const SAVE_APPROVED_WEBHOOK_URL = "${SAVE_APPROVED_WEBHOOK_URL}";
+
+        document.getElementById('saveReviewBtn').onclick = async () => {
+          const payload = collectPayload();
           const btn = document.getElementById('saveReviewBtn');
-          btn.innerHTML = 'Saving...'; btn.disabled = true;
+          btn.innerHTML = 'Saving & Syncing...';
+          btn.disabled = true;
+
+          let backendSuccess = false;
+          let backendError = '';
+
           try {
             const r = await fetch('/api/documents/' + docId + '/review', {
               method: 'POST',
@@ -645,25 +813,50 @@ def _send_spa_html(path):
             });
             const rd = await r.json();
             if (rd.success) {
-              btn.innerHTML = 'Saved ✓';
-              setTimeout(() => { btn.innerHTML = 'Save & Approve'; btn.disabled = false; }, 2000);
+              backendSuccess = true;
             } else {
-              alert(rd.error || 'Failed to save');
-              btn.innerHTML = 'Save & Approve'; btn.disabled = false;
+              backendError = rd.error || 'Failed to save to database';
             }
-          } catch(e) { alert('Network error'); btn.innerHTML = 'Save & Approve'; btn.disabled = false; }
+          } catch(e) {
+            backendError = 'Network error saving to database';
+          }
+
+          if (!backendSuccess) {
+            alert(backendError);
+            btn.innerHTML = 'Save & Approve';
+            btn.disabled = false;
+            return;
+          }
+
+          let webhookSuccess = false;
+          let webhookError = '';
+          try {
+            const wRes = await fetch(SAVE_APPROVED_WEBHOOK_URL, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(payload)
+            });
+            if (wRes.ok) {
+              webhookSuccess = true;
+            } else {
+              webhookError = 'Webhook returned status ' + wRes.status;
+            }
+          } catch(e) {
+            webhookError = 'Webhook network error: ' + (e.message || e);
+          }
+
+          if (webhookSuccess) {
+            btn.innerHTML = 'Saved and synced ✓';
+            setTimeout(() => { btn.innerHTML = 'Save & Approve'; btn.disabled = false; }, 2500);
+          } else {
+            btn.innerHTML = 'Saved (Sync Warning ⚠️)';
+            alert('Saved to database successfully, but webhook sync failed: ' + webhookError);
+            setTimeout(() => { btn.innerHTML = 'Save & Approve'; btn.disabled = false; }, 3000);
+          }
         };
 
         document.getElementById('genInvoiceBtn').onclick = async () => {
-          const payload = {};
-          document.querySelectorAll('.dynamic-field').forEach(input => {
-            const key = input.getAttribute('data-key');
-            let val = input.value;
-            if (val.trim().startsWith('{') || val.trim().startsWith('[')) {
-              try { val = JSON.parse(val); } catch(e) {}
-            }
-            payload[key] = val;
-          });
+          const payload = collectPayload();
           const btn = document.getElementById('genInvoiceBtn');
           btn.innerHTML = 'Generating...'; btn.disabled = true;
           try {
@@ -1069,6 +1262,22 @@ def get_document_status(doc_id: str):
         "overallConfidence": row[3],
         "reviewUrl": f"/documents/{row[0]}/review"
     }
+
+@app.post("/api/documents/{doc_id}/review")
+async def save_review(doc_id: str, request: Request):
+    body = await request.json()
+    edited_data = body.get('editedData') or body.get('editedExtractedData')
+    if not edited_data:
+        return JSONResponse({"error": "Payload missing"}, status_code=400)
+
+    json_str = json.dumps(edited_data)
+    conn = get_db()
+    execute_query(conn, "UPDATE Extraction SET finalSubmittedData = ? WHERE documentId = ?;", (json_str, doc_id))
+    execute_query(conn, "UPDATE Document SET status = 'APPROVED' WHERE id = ?;", (doc_id,))
+    conn.commit()
+    conn.close()
+
+    return {"success": True, "documentId": doc_id}
 
 @app.post("/api/documents/{doc_id}/generate-invoice")
 async def generate_invoice(doc_id: str, request: Request):
