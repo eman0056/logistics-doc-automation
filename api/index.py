@@ -171,13 +171,27 @@ def _send_spa_html(path):
       return isNaN(parsed) ? defaultVal : parsed;
     }
 
+    async function fetchWithTimeout(url, options = {}, timeoutMs = 2500) {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), timeoutMs);
+      try {
+        const res = await fetch(url, { ...options, signal: controller.signal });
+        clearTimeout(timer);
+        return res;
+      } catch (err) {
+        clearTimeout(timer);
+        throw err;
+      }
+    }
+
     async function loadApp() {
       const app = document.getElementById('app');
       let customer = { name: 'Apex Freight Logistics', code: 'APEX', primaryColor: '#0284c7' };
+      
       try {
-        const res = await fetch('/api/customer');
+        const res = await fetchWithTimeout('/api/customer', {}, 1500);
         const d = await res.json();
-        if (d.customer) customer = d.customer;
+        if (d && d.customer) customer = d.customer;
       } catch(e) {}
 
       const primaryColor = customer.primaryColor || '#0284c7';
@@ -330,23 +344,28 @@ def _send_spa_html(path):
     }
 
     async function renderDocumentsList(app, navHtml, primaryColor) {
-      const res = await fetch('/api/documents');
-      const d = await res.json();
-      const docs = d.documents || [];
+      let docs = [];
+      try {
+        const res = await fetchWithTimeout('/api/documents', {}, 3000);
+        const d = await res.json();
+        docs = d.documents || [];
+      } catch(err) {
+        console.warn("Fetch documents warning:", err);
+      }
 
-      const rowsHtml = docs.map(doc => `
+      const rowsHtml = docs.length > 0 ? docs.map(doc => `
         <tr class="border-b border-slate-800/60 hover:bg-slate-800/40 transition">
-          <td class="px-6 py-4 font-semibold text-white">${doc.fileName}</td>
-          <td class="px-6 py-4 text-xs font-bold text-sky-400">${doc.documentType}</td>
-          <td class="px-6 py-4 text-xs font-bold text-emerald-400">${doc.status}</td>
-          <td class="px-6 py-4 text-xs font-mono text-slate-400">${(doc.fileSize / 1024).toFixed(1)} KB</td>
-          <td class="px-6 py-4 text-xs text-slate-400">${new Date(doc.createdAt).toLocaleDateString()}</td>
+          <td class="px-6 py-4 font-semibold text-white">${doc.fileName || 'Untitled Document'}</td>
+          <td class="px-6 py-4 text-xs font-bold text-sky-400">${doc.documentType || 'LOGISTICS'}</td>
+          <td class="px-6 py-4 text-xs font-bold text-emerald-400">${doc.status || 'PREPROCESSED'}</td>
+          <td class="px-6 py-4 text-xs font-mono text-slate-400">${doc.fileSize ? (doc.fileSize / 1024).toFixed(1) + ' KB' : 'N/A'}</td>
+          <td class="px-6 py-4 text-xs text-slate-400">${doc.createdAt ? new Date(doc.createdAt).toLocaleDateString() : 'Recent'}</td>
           <td class="px-6 py-4 text-right space-x-2">
-            <a href="/documents/${doc.id}/review" class="text-xs font-semibold text-sky-400 hover:underline">Review & Edit</a>
+            <a href="/documents/${doc.id}/review" class="text-xs font-semibold text-sky-400 hover:underline">Review &amp; Edit</a>
             ${doc.status === 'INVOICE_GENERATED' ? `<a href="/invoices/${doc.id}" class="text-xs font-semibold text-emerald-400 hover:underline">View Invoice</a>` : ''}
           </td>
         </tr>
-      `).join('');
+      `).join('') : `<tr><td colspan="6" class="p-8 text-center text-slate-400">No documents found. <a href="/documents/upload" class="text-sky-400 underline font-medium">Click here to upload your first document</a></td></tr>`;
 
       app.innerHTML = `
         ${navHtml}
@@ -606,9 +625,14 @@ def _send_spa_html(path):
     }
 
     async function renderReviewPage(app, navHtml, primaryColor, docId) {
-      const res = await fetch('/api/documents');
-      const d = await res.json();
-      const doc = (d.documents || []).find(item => item.id === docId) || {};
+      let doc = {};
+      try {
+        const res = await fetchWithTimeout('/api/documents', {}, 3000);
+        const d = await res.json();
+        doc = (d.documents || []).find(item => item.id === docId) || {};
+      } catch(err) {
+        console.warn("Fetch doc review warning:", err);
+      }
 
       let canonical = {};
 
@@ -1047,9 +1071,14 @@ def _send_spa_html(path):
 
 
     async function renderInvoicesDashboard(app, navHtml, primaryColor) {
-      const res = await fetch('/api/documents');
-      const d = await res.json();
-      const docs = d.documents || [];
+      let docs = [];
+      try {
+        const res = await fetchWithTimeout('/api/documents', {}, 3000);
+        const d = await res.json();
+        docs = d.documents || [];
+      } catch(err) {
+        console.warn("Fetch invoices warning:", err);
+      }
 
       const invoices = docs.filter(doc => doc.status === 'INVOICE_GENERATED' || doc.extraction?.finalSubmittedData);
 
@@ -1104,16 +1133,21 @@ def _send_spa_html(path):
     }
 
     async function renderReviewQueue(app, navHtml, primaryColor) {
-      const res = await fetch('/api/review-tasks');
-      const d = await res.json();
-      const tasks = d.tasks || [];
+      let tasks = [];
+      try {
+        const res = await fetchWithTimeout('/api/review-tasks', {}, 3000);
+        const d = await res.json();
+        tasks = d.tasks || [];
+      } catch(err) {
+        console.warn("Fetch review tasks warning:", err);
+      }
 
       const rows = tasks.map(t => `
         <tr class="border-b border-slate-800/60 hover:bg-slate-800/40">
           <td class="px-6 py-4 font-semibold text-white">${t.document?.fileName || 'Document'}</td>
           <td class="px-6 py-4 text-xs font-bold text-amber-400">NORMAL</td>
-          <td class="px-6 py-4 text-xs text-slate-300">${t.reason}</td>
-          <td class="px-6 py-4 text-xs text-slate-400">${new Date(t.createdAt).toLocaleDateString()}</td>
+          <td class="px-6 py-4 text-xs text-slate-300">${t.reason || 'Manual Verification'}</td>
+          <td class="px-6 py-4 text-xs text-slate-400">${t.createdAt ? new Date(t.createdAt).toLocaleDateString() : 'Recent'}</td>
           <td class="px-6 py-4 text-right">
             <a href="/documents/${t.documentId}/review" class="text-xs font-bold text-white px-3 py-1.5 rounded-lg" style="background-color: ${primaryColor}">Open Review</a>
           </td>
