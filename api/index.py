@@ -133,7 +133,35 @@ def _send_spa_html(path):
   <script src="https://cdn.tailwindcss.com"></script>
 </head>
 <body class="bg-slate-950 text-slate-100 min-h-screen font-sans">
-  <div id="app"></div>
+  <div id="app">
+    <header class="bg-slate-900 border-b border-slate-800 sticky top-0 z-50 shadow-md">
+      <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+        <div class="flex items-center justify-between h-16">
+          <div class="flex items-center space-x-3">
+            <div class="w-10 h-10 rounded-xl flex items-center justify-center text-white font-bold shadow-lg" style="background-color: #0284c7">🚚</div>
+            <div>
+              <div class="flex items-center space-x-2">
+                <span class="text-white font-semibold text-lg tracking-tight">Apex Freight Logistics</span>
+                <span class="text-xs px-2 py-0.5 rounded-full font-medium text-white shadow-sm" style="background-color: #0284c7">APEX White-Label</span>
+              </div>
+              <p class="text-xs text-slate-400">Document Automation Engine</p>
+            </div>
+          </div>
+          <nav class="flex space-x-2 text-sm font-medium text-slate-300">
+            <a href="/" class="px-3 py-2 rounded-lg hover:bg-slate-800">Dashboard</a>
+            <a href="/documents" class="px-3 py-2 rounded-lg hover:bg-slate-800">Documents</a>
+            <a href="/documents/upload" class="px-3 py-2 rounded-lg hover:bg-slate-800">Upload</a>
+            <a href="/review-queue" class="px-3 py-2 rounded-lg hover:bg-slate-800">Review Queue</a>
+            <a href="/invoices" class="px-3 py-2 rounded-lg hover:bg-slate-800">Invoices</a>
+          </nav>
+        </div>
+      </div>
+    </header>
+    <main class="max-w-7xl mx-auto px-4 py-16 text-center space-y-4">
+      <div class="inline-block w-8 h-8 border-4 border-sky-500 border-t-transparent rounded-full animate-spin"></div>
+      <p class="text-slate-400 font-medium text-sm">Loading Logistics Automation Portal...</p>
+    </main>
+  </div>
   <script>
     const PATH = """ + json.dumps(path) + """;
 
@@ -174,7 +202,6 @@ def _send_spa_html(path):
                 <a href="/documents/upload" class="px-3 py-2 rounded-lg hover:bg-slate-800">Upload</a>
                 <a href="/review-queue" class="px-3 py-2 rounded-lg hover:bg-slate-800">Review Queue</a>
                 <a href="/invoices" class="px-3 py-2 rounded-lg hover:bg-slate-800">Invoices</a>
-
               </nav>
             </div>
           </div>
@@ -182,17 +209,18 @@ def _send_spa_html(path):
       `;
 
       try {
-        if (PATH === '/documents/upload') {
+        const currentPath = (window.location.pathname || PATH || '/').split('?')[0].replace(RegExp('/+$'), '') || '/';
+        if (currentPath === '/documents/upload' || currentPath === '/upload') {
           renderUploadPage(app, navHtml, primaryColor);
-        } else if (PATH.startsWith('/documents/') && PATH.includes('/review')) {
-          const parts = PATH.split('/');
+        } else if (currentPath.startsWith('/documents/') && currentPath.includes('/review')) {
+          const parts = currentPath.split('/');
           await renderReviewPage(app, navHtml, primaryColor, parts[2]);
-        } else if (PATH.startsWith('/invoices/') && PATH.split('/').length > 2) {
-          const parts = PATH.split('/');
+        } else if (currentPath.startsWith('/invoices/') && currentPath.split('/').length > 2) {
+          const parts = currentPath.split('/');
           await renderInvoicePage(app, navHtml, primaryColor, parts[2]);
-        } else if (PATH === '/invoices') {
+        } else if (currentPath === '/invoices') {
           await renderInvoicesDashboard(app, navHtml, primaryColor);
-        } else if (PATH === '/review-queue') {
+        } else if (currentPath === '/review-queue') {
           await renderReviewQueue(app, navHtml, primaryColor);
         } else {
           await renderDocumentsList(app, navHtml, primaryColor);
