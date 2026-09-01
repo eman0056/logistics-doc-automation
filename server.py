@@ -502,7 +502,7 @@ class LogisticsAutomationHandler(http.server.BaseHTTPRequestHandler):
           <div class="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl flex justify-between items-center">
             <div>
               <h1 class="text-2xl font-bold text-white tracking-tight">Document Ingestion & n8n AI Pipeline</h1>
-              <p class="text-sm text-slate-400 mt-1">Upload PDF or image logistics paperwork to trigger automated extraction.</p>
+              <p class="text-sm text-slate-400 mt-1">Upload PDF, DOC, DOCX, or image logistics paperwork to trigger automated extraction.</p>
             </div>
             <div class="space-x-3">
               
@@ -512,10 +512,10 @@ class LogisticsAutomationHandler(http.server.BaseHTTPRequestHandler):
 
           <div class="bg-slate-900 border border-slate-800 rounded-2xl p-8 shadow-2xl">
             <div id="dropzone" class="border-2 border-dashed border-slate-700 hover:border-sky-500 rounded-2xl p-12 text-center cursor-pointer bg-slate-950/40 hover:bg-slate-950/80 transition">
-              <input type="file" id="fileInput" class="hidden" accept=".pdf,.jpg,.jpeg,.png" multiple />
+              <input type="file" id="fileInput" class="hidden" accept=".pdf,.doc,.docx,.jpg,.jpeg,.png" multiple />
               <div class="w-16 h-16 rounded-2xl mx-auto flex items-center justify-center text-2xl shadow-lg mb-4" style="background-color: ${primaryColor}20; color: ${primaryColor}">📤</div>
               <p class="text-lg font-semibold text-white">Click to upload or drag & drop document</p>
-              <p class="text-sm text-slate-400 mt-1">Supports PDF, JPG, PNG up to 25 MB</p>
+              <p class="text-sm text-slate-400 mt-1">Supports PDF, DOC, DOCX, JPG, PNG up to 25 MB</p>
               <div id="fileSelectedInfo" class="hidden mt-4 text-sm text-sky-400 font-medium"></div>
             </div>
 
