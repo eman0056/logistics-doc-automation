@@ -127,30 +127,30 @@ def _send_spa_html(path):
   <script src="https://cdn.tailwindcss.com"></script>
   <style>
     :root {
-      --bg: #0B1624;
-      --bg-alt: #0F1D2D;
-      --card: #111F2E;
-      --card-strong: #142538;
-      --table-header: #0D1B2A;
-      --border: #263A4D;
-      --text: #F1F5F9;
-      --text-soft: #C9D6E3;
-      --text-muted: #94A3B8;
-      --primary: #1597D4;
-      --primary-strong: #0E7BB5;
-      --primary-soft: rgba(21, 151, 212, 0.12);
-      --success: #20C997;
-      --success-soft: rgba(32, 201, 151, 0.12);
-      --warning: #F0B25F;
-      --warning-soft: rgba(240, 178, 95, 0.12);
-      --danger: #F87171;
-      --danger-soft: rgba(248, 113, 113, 0.12);
-      --shadow: 0 10px 24px rgba(2, 6, 23, 0.28);
+      --bg: #E8EEF5;
+      --bg-alt: #E6EDF5;
+      --card: #0F2033;
+      --card-strong: #172B3F;
+      --table-header: #172B3F;
+      --border: #294157;
+      --text: #FFFFFF;
+      --text-soft: #C9D4DF;
+      --text-muted: #A9B9C8;
+      --primary: #0B8FD3;
+      --primary-strong: #0A7BB4;
+      --primary-soft: rgba(11, 143, 211, 0.12);
+      --success: #1FBF88;
+      --success-soft: rgba(31, 191, 136, 0.12);
+      --warning: #D9A35B;
+      --warning-soft: rgba(217, 163, 91, 0.12);
+      --danger: #EA6A6A;
+      --danger-soft: rgba(234, 106, 106, 0.12);
+      --shadow: 0 10px 24px rgba(15, 32, 51, 0.12);
     }
 
     body {
       background: var(--bg);
-      color: var(--text);
+      color: var(--card-strong);
       font-family: Inter, "Segoe UI", sans-serif;
     }
 
@@ -169,7 +169,7 @@ def _send_spa_html(path):
 
     .nav-link:hover {
       background: var(--primary-soft);
-      border-color: rgba(21, 151, 212, 0.2);
+      border-color: rgba(11, 143, 211, 0.2);
       color: var(--text);
       transform: translateY(-1px);
     }
@@ -185,12 +185,13 @@ def _send_spa_html(path):
       align-items: center;
       justify-content: center;
       transition: all 0.2s ease;
-      box-shadow: 0 10px 20px rgba(21, 151, 212, 0.18);
+      background: var(--primary) !important;
+      box-shadow: none;
     }
 
     .soft-button:hover {
       transform: translateY(-1px);
-      filter: brightness(1.03);
+      background: var(--primary-strong) !important;
     }
 
     .status-pill {
@@ -247,7 +248,7 @@ def _send_spa_html(path):
     }
   </style>
 </head>
-<body class="bg-slate-50 text-slate-900 min-h-screen font-sans antialiased">
+<body class="bg-[#E8EEF5] text-slate-900 min-h-screen font-sans antialiased">
   <div id="app"></div>
   <script>
     const PATH = """ + json.dumps(path) + """;
@@ -270,20 +271,20 @@ def _send_spa_html(path):
       const primaryColor = customer.primaryColor || '#0284c7';
 
       const navHtml = `
-        <header class="sticky top-0 z-50 border-b border-slate-700/80 bg-[#0D1B2A]/90 backdrop-blur-md shadow-[0_8px_24px_rgba(2,6,23,0.22)]">
+        <header class="sticky top-0 z-50 border-b border-[#294157] bg-[#172B3F] shadow-[0_8px_24px_rgba(15,32,51,0.12)]">
           <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
             <div class="flex items-center justify-between h-18 py-2.5">
               <div class="flex items-center space-x-3">
-                <div class="w-11 h-11 rounded-xl flex items-center justify-center text-white font-bold shadow-md" style="background: linear-gradient(135deg, ${primaryColor}, ${primaryColor}cc);">🚚</div>
+                <div class="w-11 h-11 rounded-xl flex items-center justify-center text-white font-bold shadow-md" style="background: ${primaryColor};">🚚</div>
                 <div>
                   <div class="flex items-center space-x-2">
-                    <span class="text-slate-50 font-semibold text-lg tracking-tight">Apex Freight Logistics</span>
+                    <span class="text-white font-semibold text-lg tracking-tight">Apex Freight Logistics</span>
                     <span class="text-[10px] px-2 py-1 rounded-full font-bold text-white shadow-sm" style="background-color: ${primaryColor}">${customer.code} White-Label</span>
                   </div>
-                  <p class="text-[11px] uppercase tracking-[0.18em] text-slate-400">Document Automation Engine</p>
+                  <p class="text-[11px] uppercase tracking-[0.18em] text-[#C9D4DF]">Document Automation Engine</p>
                 </div>
               </div>
-              <nav class="flex items-center space-x-2 text-sm font-medium text-slate-300">
+              <nav class="flex items-center space-x-2 text-sm font-medium text-[#C9D4DF]">
                 <a href="/" class="nav-link">Dashboard</a>
                 <a href="/documents" class="nav-link">Documents</a>
                 <a href="/documents/upload" class="nav-link">Upload</a>
@@ -324,27 +325,27 @@ def _send_spa_html(path):
           <div class="premium-card rounded-2xl p-6 mb-6">
             <div class="flex justify-between items-center gap-4 flex-wrap">
               <div>
-                <p class="text-[11px] uppercase tracking-[0.2em] text-slate-400 mb-2">Workflow</p>
-                <h1 class="text-2xl md:text-3xl font-bold tracking-tight text-slate-50">Document Ingestion & AI Pipeline</h1>
-                <p class="text-sm text-slate-300 mt-2">Upload PDF, DOC, DOCX, or image logistics paperwork to trigger automated extraction.</p>
+                <p class="text-[11px] uppercase tracking-[0.2em] text-[#C9D4DF] mb-2">Workflow</p>
+                <h1 class="text-2xl md:text-3xl font-bold tracking-tight text-white">Document Ingestion & AI Pipeline</h1>
+                <p class="text-sm text-[#C9D4DF] mt-2">Upload PDF, DOC, DOCX, or image logistics paperwork to trigger automated extraction.</p>
               </div>
-              <a href="/documents" class="soft-button text-xs font-semibold bg-slate-800 hover:bg-slate-700 text-slate-100 px-4 py-2.5 rounded-xl border border-slate-600">View All Documents</a>
+              <a href="/documents" class="soft-button text-xs font-semibold text-white px-4 py-2.5 rounded-xl border border-[#294157]">View All Documents</a>
             </div>
           </div>
 
           <div class="premium-card rounded-2xl p-7 md:p-8">
-            <div id="dropzone" class="group border-2 border-dashed border-slate-600 bg-[#0D1B2A] hover:border-[#1597D4] rounded-2xl p-10 text-center cursor-pointer transition-all duration-200">
+            <div id="dropzone" class="group border-2 border-dashed border-[#294157] bg-[#EAF2F9] hover:border-[#0B8FD3] rounded-2xl p-10 text-center cursor-pointer transition-all duration-200">
               <input type="file" id="fileInput" class="hidden" accept=".pdf,.doc,.docx,.jpg,.jpeg,.png" multiple />
-              <div class="w-16 h-16 rounded-xl mx-auto flex items-center justify-center text-2xl shadow-md mb-4 ring-8 ring-[#111F2E]" style="background: rgba(21, 151, 212, 0.12); color: ${primaryColor}">📤</div>
-              <p class="text-xl font-semibold text-slate-50">Click to upload or drag & drop document</p>
-              <p class="text-sm text-slate-300 mt-2">Supports PDF, DOC, DOCX, JPG, PNG up to 25 MB</p>
-              <div id="fileSelectedInfo" class="hidden mt-5 text-sm text-sky-300 font-semibold bg-[#0F1F31] border border-slate-600 rounded-full inline-flex px-3 py-1.5"></div>
+              <div class="w-16 h-16 rounded-xl mx-auto flex items-center justify-center text-2xl shadow-md mb-4 ring-8 ring-[#EAF2F9]" style="background: ${primaryColor}; color: white;">📤</div>
+              <p class="text-xl font-semibold text-[#0F2033]">Click to upload or drag & drop document</p>
+              <p class="text-sm text-[#294157] mt-2">Supports PDF, DOC, DOCX, JPG, PNG up to 25 MB</p>
+              <div id="fileSelectedInfo" class="hidden mt-5 text-sm text-[#0F2033] font-semibold bg-white border border-[#294157] rounded-full inline-flex px-3 py-1.5"></div>
             </div>
 
-            <button id="uploadBtn" class="soft-button w-full mt-6 py-3.5 rounded-xl text-white font-bold text-sm" style="background: linear-gradient(135deg, ${primaryColor}, ${primaryColor}dd);">
+            <button id="uploadBtn" class="soft-button w-full mt-6 py-3.5 rounded-xl text-white font-bold text-sm" style="background: ${primaryColor};">
               Start Upload & AI Processing
             </button>
-            <div id="uploadStatus" class="hidden mt-4 text-center text-sm font-semibold text-emerald-300 bg-emerald-500/10 border border-emerald-500/20 rounded-xl py-2.5"></div>
+            <div id="uploadStatus" class="hidden mt-4 text-center text-sm font-semibold text-[#0F2033] bg-white border border-[#294157] rounded-xl py-2.5"></div>
           </div>
         </main>
       `;
@@ -407,17 +408,17 @@ def _send_spa_html(path):
         else if (status === 'FAILED') statusClass = 'danger';
 
         return `
-          <tr class="border-b border-slate-200 hover:bg-slate-50 transition">
-            <td class="px-6 py-4 font-semibold text-slate-900">${doc.fileName}</td>
-            <td class="px-6 py-4 text-xs font-bold uppercase tracking-wide text-slate-600">${doc.documentType}</td>
+          <tr class="border-b border-[#294157] hover:bg-[#18304A] transition">
+            <td class="px-6 py-4 font-semibold text-white">${doc.fileName}</td>
+            <td class="px-6 py-4 text-xs font-bold uppercase tracking-wide text-[#C9D4DF]">${doc.documentType}</td>
             <td class="px-6 py-4">
               <span class="status-pill ${statusClass}">${status}</span>
             </td>
-            <td class="px-6 py-4 text-xs font-mono text-slate-600">${(doc.fileSize / 1024).toFixed(1)} KB</td>
-            <td class="px-6 py-4 text-xs text-slate-600">${new Date(doc.createdAt).toLocaleDateString()}</td>
+            <td class="px-6 py-4 text-xs font-mono text-[#C9D4DF]">${(doc.fileSize / 1024).toFixed(1)} KB</td>
+            <td class="px-6 py-4 text-xs text-[#C9D4DF]">${new Date(doc.createdAt).toLocaleDateString()}</td>
             <td class="px-6 py-4 text-right space-x-2">
-              <a href="/documents/${doc.id}/review" class="text-xs font-semibold text-[#176B9E] hover:underline">Review & Edit</a>
-              ${doc.status === 'INVOICE_GENERATED' ? `<a href="/invoices/${doc.id}" class="text-xs font-semibold text-[#176B9E] hover:underline">View Invoice</a>` : ''}
+              <a href="/documents/${doc.id}/review" class="text-xs font-semibold text-[#0B8FD3] hover:underline">Review & Edit</a>
+              ${doc.status === 'INVOICE_GENERATED' ? `<a href="/invoices/${doc.id}" class="text-xs font-semibold text-[#0B8FD3] hover:underline">View Invoice</a>` : ''}
             </td>
           </tr>
         `;
@@ -429,17 +430,17 @@ def _send_spa_html(path):
           <div class="premium-card rounded-2xl p-6">
             <div class="flex justify-between items-center gap-4 flex-wrap">
               <div>
-                <p class="text-[11px] uppercase tracking-[0.2em] text-slate-400 mb-2">Overview</p>
-                <h1 class="text-2xl md:text-3xl font-bold tracking-tight text-slate-50">Documents Repository</h1>
-                <p class="text-sm text-slate-300 mt-2">View and manage ingested logistics paperwork.</p>
+                <p class="text-[11px] uppercase tracking-[0.2em] text-[#C9D4DF] mb-2">Overview</p>
+                <h1 class="text-2xl md:text-3xl font-bold tracking-tight text-white">Documents Repository</h1>
+                <p class="text-sm text-[#C9D4DF] mt-2">View and manage ingested logistics paperwork.</p>
               </div>
-              <a href="/documents/upload" class="soft-button text-sm font-bold text-white px-5 py-3 rounded-xl" style="background: linear-gradient(135deg, ${primaryColor}, ${primaryColor}dd);">+ Upload New Document</a>
+              <a href="/documents/upload" class="soft-button text-sm font-bold text-white px-5 py-3 rounded-xl" style="background: ${primaryColor};">+ Upload New Document</a>
             </div>
           </div>
 
           <div class="premium-card overflow-hidden rounded-2xl">
-            <table class="data-table w-full text-left text-sm text-slate-100">
-              <thead class="border-b border-slate-700">
+            <table class="data-table w-full text-left text-sm text-white">
+              <thead class="border-b border-[#294157]">
                 <tr>
                   <th class="px-6 py-4">Filename</th>
                   <th class="px-6 py-4">Type</th>
@@ -450,7 +451,7 @@ def _send_spa_html(path):
                 </tr>
               </thead>
               <tbody>
-                ${rowsHtml || '<tr><td colspan="6" class="p-8 text-center text-slate-300">No documents found. Upload one to get started.</td></tr>'}
+                ${rowsHtml || '<tr><td colspan="6" class="p-8 text-center text-[#C9D4DF]">No documents found. Upload one to get started.</td></tr>'}
               </tbody>
             </table>
           </div>

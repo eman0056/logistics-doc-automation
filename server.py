@@ -544,7 +544,7 @@ class LogisticsAutomationHandler(http.server.BaseHTTPRequestHandler):
     }
   </style>
 </head>
-<body class="bg-slate-50 text-slate-900 min-h-screen font-sans antialiased">
+<body class="bg-[#E8EEF5] text-slate-900 min-h-screen font-sans antialiased">
   <div id="app"></div>
   <script>
     const PATH = """ + json.dumps(path) + """;
@@ -567,7 +567,7 @@ class LogisticsAutomationHandler(http.server.BaseHTTPRequestHandler):
       const primaryColor = customer.primaryColor || '#0284c7';
 
       const navHtml = `
-        <header class="sticky top-0 z-50 border-b border-slate-200/80 bg-white/80 backdrop-blur-xl shadow-[0_6px_24px_rgba(15,23,42,0.04)]">
+        <header class="sticky top-0 z-50 border-b border-[#294157] bg-[#172B3F] shadow-[0_8px_24px_rgba(15,32,51,0.12)]">
           <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
             <div class="flex items-center justify-between h-18 py-2.5">
               <div class="flex items-center space-x-3">
