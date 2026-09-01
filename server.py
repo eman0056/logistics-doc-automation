@@ -860,14 +860,95 @@ class LogisticsAutomationHandler(http.server.BaseHTTPRequestHandler):
 
       const extractionPending = Object.keys(canonical).length === 0;
 
+      const pollForExtractionStatus = async (attempt = 0) => {
+        if (!extractionPending) return;
+
+        const pollKey = `doc-status-${docId}`;
+        window.__docReviewPolling = window.__docReviewPolling || {};
+        if (window.__docReviewPolling[pollKey]) {
+          clearTimeout(window.__docReviewPolling[pollKey]);
+        }
+
+        try {
+          const statusRes = await fetch(`/api/documents/${docId}/status`);
+          const statusData = await statusRes.json().catch(() => ({}));
+
+          const isExtracted = !!statusData.isExtracted || statusData.status === 'EXTRACTED';
+          if (isExtracted) {
+            const docsRes = await fetch('/api/documents');
+            const docsData = await docsRes.json().catch(() => ({ documents: [] }));
+            const latestDoc = (docsData.documents || []).find(item => item.id === docId) || {};
+
+            let latestCanonical = {};
+            if (latestDoc.extraction?.finalSubmittedData) {
+              try { latestCanonical = JSON.parse(latestDoc.extraction.finalSubmittedData); } catch (e) {}
+            } else if (latestDoc.extraction?.canonicalJson) {
+              try { latestCanonical = JSON.parse(latestDoc.extraction.canonicalJson); } catch (e) {}
+            }
+
+            if (Object.keys(latestCanonical).length > 0) {
+              renderReviewPage(app, navHtml, primaryColor, docId);
+              return;
+            }
+          }
+
+          if (attempt < 48) {
+            window.__docReviewPolling[pollKey] = setTimeout(() => pollForExtractionStatus(attempt + 1), 2000);
+          }
+        } catch (err) {
+          if (attempt < 48) {
+            window.__docReviewPolling[pollKey] = setTimeout(() => pollForExtractionStatus(attempt + 1), 2000);
+          }
+        }
+      };
+
       let fieldsHtml = '';
       if (extractionPending) {
+        const processingSteps = [
+          { label: 'Document Uploaded', complete: true },
+          { label: 'Extracting Information', active: true },
+          { label: 'Validating Data', complete: false },
+          { label: 'Preparing Review', complete: false }
+        ];
+
+        const stepsHtml = processingSteps.map((step, index) => {
+          const isComplete = step.complete === true;
+          const isActive = step.active === true;
+          const statusIcon = isComplete
+            ? '<span class="flex h-7 w-7 items-center justify-center rounded-full bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">✓</span>'
+            : isActive
+              ? '<span class="flex h-7 w-7 items-center justify-center rounded-full bg-sky-500/20 text-sky-400 border border-sky-500/30"><span class="h-3.5 w-3.5 animate-spin rounded-full border-2 border-sky-400 border-t-transparent"></span></span>'
+              : '<span class="flex h-7 w-7 items-center justify-center rounded-full bg-slate-800 text-slate-400 border border-slate-700 text-xs font-bold">' + (index + 1) + '</span>';
+
+          return `
+            <div class="flex items-center gap-3 rounded-2xl border ${isComplete ? 'border-emerald-500/20 bg-emerald-500/5' : isActive ? 'border-sky-500/20 bg-sky-500/5' : 'border-slate-800 bg-slate-950/40'} p-3">
+              ${statusIcon}
+              <span class="text-sm font-medium ${isComplete ? 'text-emerald-300' : isActive ? 'text-sky-300' : 'text-slate-400'}">${step.label}</span>
+            </div>
+          `;
+        }).join('');
+
         fieldsHtml = `
-          <div class="text-center py-12 space-y-4">
-            <p class="text-slate-400 text-sm">No extracted data yet. Wait a few seconds for n8n to complete, then refresh.</p>
-            <button onclick="location.reload()" class="text-xs bg-sky-600 hover:bg-sky-500 text-white px-5 py-2 rounded-xl font-bold transition-colors">Refresh Page</button>
+          <div class="space-y-5 py-2">
+            <div class="rounded-2xl border border-slate-800 bg-slate-950/40 p-5">
+              <div class="mb-4 flex items-center justify-between">
+                <div>
+                  <p class="text-xs font-bold uppercase tracking-[0.2em] text-sky-400">Processing Status</p>
+                  <h4 class="mt-1 text-lg font-semibold text-white">Document review in progress</h4>
+                </div>
+                <span class="rounded-full border border-sky-500/25 bg-sky-500/10 px-2.5 py-1 text-[10px] font-bold uppercase tracking-[0.2em] text-sky-300">Live</span>
+              </div>
+              <div class="grid grid-cols-1 gap-3 md:grid-cols-2">
+                ${stepsHtml}
+              </div>
+            </div>
+            <div class="rounded-2xl border border-slate-800 bg-slate-950/40 p-5 text-center">
+              <p class="text-sm text-slate-300">The n8n workflow is extracting and validating document data automatically.</p>
+              <p class="mt-2 text-xs text-slate-400">This page updates itself when processing finishes.</p>
+            </div>
           </div>
         `;
+        pollForExtractionStatus();
       } else {
         const hasKnownNested = ('invoiceHeader' in canonical) || ('shipmentDetails' in canonical) || ('shipmentDetail' in canonical) || ('chargeLineItems' in canonical);
 
