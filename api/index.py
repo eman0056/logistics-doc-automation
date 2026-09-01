@@ -127,24 +127,25 @@ def _send_spa_html(path):
   <script src="https://cdn.tailwindcss.com"></script>
   <style>
     :root {
-      --bg: #f3f7fb;
-      --bg-strong: #edf3f9;
-      --card: #ffffff;
-      --card-soft: #f8fbff;
-      --border: #dfeaf3;
-      --text: #10233d;
-      --text-soft: #42556e;
-      --text-muted: #64748b;
-      --primary: #176B9E;
-      --primary-strong: #0f5884;
-      --primary-soft: #eaf4fb;
-      --success-bg: #edf9f2;
-      --success-text: #1f7a52;
-      --warning-bg: #fff7ec;
-      --warning-text: #9a6700;
-      --danger-bg: #fff1f2;
-      --danger-text: #af3d4b;
-      --shadow: 0 10px 25px rgba(15, 23, 42, 0.06);
+      --bg: #0B1624;
+      --bg-alt: #0F1D2D;
+      --card: #111F2E;
+      --card-strong: #142538;
+      --table-header: #0D1B2A;
+      --border: #263A4D;
+      --text: #F1F5F9;
+      --text-soft: #C9D6E3;
+      --text-muted: #94A3B8;
+      --primary: #1597D4;
+      --primary-strong: #0E7BB5;
+      --primary-soft: rgba(21, 151, 212, 0.12);
+      --success: #20C997;
+      --success-soft: rgba(32, 201, 151, 0.12);
+      --warning: #F0B25F;
+      --warning-soft: rgba(240, 178, 95, 0.12);
+      --danger: #F87171;
+      --danger-soft: rgba(248, 113, 113, 0.12);
+      --shadow: 0 10px 24px rgba(2, 6, 23, 0.28);
     }
 
     body {
@@ -168,8 +169,8 @@ def _send_spa_html(path):
 
     .nav-link:hover {
       background: var(--primary-soft);
-      border-color: rgba(23, 107, 158, 0.12);
-      color: var(--primary-strong);
+      border-color: rgba(21, 151, 212, 0.2);
+      color: var(--text);
       transform: translateY(-1px);
     }
 
@@ -184,12 +185,12 @@ def _send_spa_html(path):
       align-items: center;
       justify-content: center;
       transition: all 0.2s ease;
-      box-shadow: 0 10px 22px rgba(23, 107, 158, 0.14);
+      box-shadow: 0 10px 20px rgba(21, 151, 212, 0.18);
     }
 
     .soft-button:hover {
       transform: translateY(-1px);
-      filter: brightness(1.01);
+      filter: brightness(1.03);
     }
 
     .status-pill {
@@ -204,31 +205,31 @@ def _send_spa_html(path):
     }
 
     .status-pill.success {
-      color: var(--success-text);
-      background: var(--success-bg);
-      border-color: rgba(31, 122, 82, 0.12);
+      color: #a8f0cf;
+      background: var(--success-soft);
+      border-color: rgba(32, 201, 151, 0.2);
     }
 
     .status-pill.warning {
-      color: var(--warning-text);
-      background: var(--warning-bg);
-      border-color: rgba(154, 103, 0, 0.12);
+      color: #f7d6a1;
+      background: var(--warning-soft);
+      border-color: rgba(240, 178, 95, 0.2);
     }
 
     .status-pill.danger {
-      color: var(--danger-text);
-      background: var(--danger-bg);
-      border-color: rgba(175, 61, 75, 0.12);
+      color: #fecaca;
+      background: var(--danger-soft);
+      border-color: rgba(248, 113, 113, 0.2);
     }
 
     .status-pill.neutral {
       color: var(--text-soft);
-      background: #f3f6fb;
-      border-color: rgba(102, 119, 142, 0.12);
+      background: rgba(148, 163, 184, 0.08);
+      border-color: rgba(148, 163, 184, 0.15);
     }
 
     .data-table th {
-      background: #f8fafc;
+      background: var(--table-header);
       color: var(--text-soft);
       font-size: 0.72rem;
       letter-spacing: 0.08em;
@@ -242,7 +243,7 @@ def _send_spa_html(path):
     }
 
     .data-table tbody tr:hover {
-      background: #f8fbff;
+      background: rgba(21, 151, 212, 0.04);
     }
   </style>
 </head>
@@ -269,20 +270,20 @@ def _send_spa_html(path):
       const primaryColor = customer.primaryColor || '#0284c7';
 
       const navHtml = `
-        <header class="sticky top-0 z-50 border-b border-slate-200/80 bg-white/80 backdrop-blur-xl shadow-[0_6px_24px_rgba(15,23,42,0.04)]">
+        <header class="sticky top-0 z-50 border-b border-slate-700/80 bg-[#0D1B2A]/90 backdrop-blur-md shadow-[0_8px_24px_rgba(2,6,23,0.22)]">
           <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
             <div class="flex items-center justify-between h-18 py-2.5">
               <div class="flex items-center space-x-3">
-                <div class="w-11 h-11 rounded-2xl flex items-center justify-center text-white font-bold shadow-md" style="background: linear-gradient(135deg, ${primaryColor}, ${primaryColor}cc);">🚚</div>
+                <div class="w-11 h-11 rounded-xl flex items-center justify-center text-white font-bold shadow-md" style="background: linear-gradient(135deg, ${primaryColor}, ${primaryColor}cc);">🚚</div>
                 <div>
                   <div class="flex items-center space-x-2">
-                    <span class="text-slate-900 font-semibold text-lg tracking-tight">Apex Freight Logistics</span>
+                    <span class="text-slate-50 font-semibold text-lg tracking-tight">Apex Freight Logistics</span>
                     <span class="text-[10px] px-2 py-1 rounded-full font-bold text-white shadow-sm" style="background-color: ${primaryColor}">${customer.code} White-Label</span>
                   </div>
-                  <p class="text-[11px] uppercase tracking-[0.18em] text-slate-500">Document Automation Engine</p>
+                  <p class="text-[11px] uppercase tracking-[0.18em] text-slate-400">Document Automation Engine</p>
                 </div>
               </div>
-              <nav class="flex items-center space-x-2 text-sm font-medium text-slate-600">
+              <nav class="flex items-center space-x-2 text-sm font-medium text-slate-300">
                 <a href="/" class="nav-link">Dashboard</a>
                 <a href="/documents" class="nav-link">Documents</a>
                 <a href="/documents/upload" class="nav-link">Upload</a>
@@ -320,30 +321,30 @@ def _send_spa_html(path):
       app.innerHTML = `
         ${navHtml}
         <main class="max-w-5xl mx-auto px-4 py-10">
-          <div class="premium-card rounded-[28px] p-6 mb-6">
+          <div class="premium-card rounded-2xl p-6 mb-6">
             <div class="flex justify-between items-center gap-4 flex-wrap">
               <div>
-                <p class="text-[11px] uppercase tracking-[0.2em] text-slate-500 mb-2">Workflow</p>
-                <h1 class="text-2xl md:text-3xl font-bold tracking-tight text-slate-900">Document Ingestion & AI Pipeline</h1>
-                <p class="text-sm text-slate-600 mt-2">Upload PDF, DOC, DOCX, or image logistics paperwork to trigger automated extraction.</p>
+                <p class="text-[11px] uppercase tracking-[0.2em] text-slate-400 mb-2">Workflow</p>
+                <h1 class="text-2xl md:text-3xl font-bold tracking-tight text-slate-50">Document Ingestion & AI Pipeline</h1>
+                <p class="text-sm text-slate-300 mt-2">Upload PDF, DOC, DOCX, or image logistics paperwork to trigger automated extraction.</p>
               </div>
-              <a href="/documents" class="soft-button text-xs font-semibold bg-slate-100 hover:bg-slate-200 text-slate-700 px-4 py-2.5 rounded-xl border border-slate-200">View All Documents</a>
+              <a href="/documents" class="soft-button text-xs font-semibold bg-slate-800 hover:bg-slate-700 text-slate-100 px-4 py-2.5 rounded-xl border border-slate-600">View All Documents</a>
             </div>
           </div>
 
-          <div class="premium-card rounded-[30px] p-7 md:p-8">
-            <div id="dropzone" class="group border-2 border-dashed border-sky-200 bg-gradient-to-br from-sky-50 via-slate-50 to-white hover:border-sky-400 hover:shadow-[0_18px_36px_rgba(14,116,144,0.08)] rounded-[28px] p-10 text-center cursor-pointer transition-all duration-200">
+          <div class="premium-card rounded-2xl p-7 md:p-8">
+            <div id="dropzone" class="group border-2 border-dashed border-slate-600 bg-[#0D1B2A] hover:border-[#1597D4] rounded-2xl p-10 text-center cursor-pointer transition-all duration-200">
               <input type="file" id="fileInput" class="hidden" accept=".pdf,.doc,.docx,.jpg,.jpeg,.png" multiple />
-              <div class="w-16 h-16 rounded-2xl mx-auto flex items-center justify-center text-2xl shadow-lg mb-4 ring-8 ring-white" style="background: linear-gradient(135deg, ${primaryColor}1a, ${primaryColor}33); color: ${primaryColor}">📤</div>
-              <p class="text-xl font-semibold text-slate-900">Click to upload or drag & drop document</p>
-              <p class="text-sm text-slate-500 mt-2">Supports PDF, DOC, DOCX, JPG, PNG up to 25 MB</p>
-              <div id="fileSelectedInfo" class="hidden mt-5 text-sm text-sky-700 font-semibold bg-sky-50 border border-sky-100 rounded-full inline-flex px-3 py-1.5"></div>
+              <div class="w-16 h-16 rounded-xl mx-auto flex items-center justify-center text-2xl shadow-md mb-4 ring-8 ring-[#111F2E]" style="background: rgba(21, 151, 212, 0.12); color: ${primaryColor}">📤</div>
+              <p class="text-xl font-semibold text-slate-50">Click to upload or drag & drop document</p>
+              <p class="text-sm text-slate-300 mt-2">Supports PDF, DOC, DOCX, JPG, PNG up to 25 MB</p>
+              <div id="fileSelectedInfo" class="hidden mt-5 text-sm text-sky-300 font-semibold bg-[#0F1F31] border border-slate-600 rounded-full inline-flex px-3 py-1.5"></div>
             </div>
 
-            <button id="uploadBtn" class="soft-button w-full mt-6 py-3.5 rounded-2xl text-white font-bold text-sm" style="background: linear-gradient(135deg, ${primaryColor}, ${primaryColor}dd);">
+            <button id="uploadBtn" class="soft-button w-full mt-6 py-3.5 rounded-xl text-white font-bold text-sm" style="background: linear-gradient(135deg, ${primaryColor}, ${primaryColor}dd);">
               Start Upload & AI Processing
             </button>
-            <div id="uploadStatus" class="hidden mt-4 text-center text-sm font-semibold text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-xl py-2.5"></div>
+            <div id="uploadStatus" class="hidden mt-4 text-center text-sm font-semibold text-emerald-300 bg-emerald-500/10 border border-emerald-500/20 rounded-xl py-2.5"></div>
           </div>
         </main>
       `;
@@ -425,20 +426,20 @@ def _send_spa_html(path):
       app.innerHTML = `
         ${navHtml}
         <main class="max-w-7xl mx-auto px-4 py-10 space-y-6">
-          <div class="premium-card rounded-[28px] p-6">
+          <div class="premium-card rounded-2xl p-6">
             <div class="flex justify-between items-center gap-4 flex-wrap">
               <div>
-                <p class="text-[11px] uppercase tracking-[0.2em] text-slate-500 mb-2">Overview</p>
-                <h1 class="text-2xl md:text-3xl font-bold tracking-tight text-slate-900">Documents Repository</h1>
-                <p class="text-sm text-slate-600 mt-2">View and manage ingested logistics paperwork.</p>
+                <p class="text-[11px] uppercase tracking-[0.2em] text-slate-400 mb-2">Overview</p>
+                <h1 class="text-2xl md:text-3xl font-bold tracking-tight text-slate-50">Documents Repository</h1>
+                <p class="text-sm text-slate-300 mt-2">View and manage ingested logistics paperwork.</p>
               </div>
-              <a href="/documents/upload" class="soft-button text-sm font-bold text-white px-5 py-3 rounded-2xl" style="background: linear-gradient(135deg, ${primaryColor}, ${primaryColor}dd);">+ Upload New Document</a>
+              <a href="/documents/upload" class="soft-button text-sm font-bold text-white px-5 py-3 rounded-xl" style="background: linear-gradient(135deg, ${primaryColor}, ${primaryColor}dd);">+ Upload New Document</a>
             </div>
           </div>
 
-          <div class="premium-card overflow-hidden rounded-[28px]">
-            <table class="data-table w-full text-left text-sm text-slate-700">
-              <thead class="border-b border-slate-200">
+          <div class="premium-card overflow-hidden rounded-2xl">
+            <table class="data-table w-full text-left text-sm text-slate-100">
+              <thead class="border-b border-slate-700">
                 <tr>
                   <th class="px-6 py-4">Filename</th>
                   <th class="px-6 py-4">Type</th>
@@ -449,7 +450,7 @@ def _send_spa_html(path):
                 </tr>
               </thead>
               <tbody>
-                ${rowsHtml || '<tr><td colspan="6" class="p-8 text-center text-slate-500">No documents found. Upload one to get started.</td></tr>'}
+                ${rowsHtml || '<tr><td colspan="6" class="p-8 text-center text-slate-300">No documents found. Upload one to get started.</td></tr>'}
               </tbody>
             </table>
           </div>
