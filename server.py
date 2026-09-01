@@ -425,19 +425,29 @@ class LogisticsAutomationHandler(http.server.BaseHTTPRequestHandler):
   <script src="https://cdn.tailwindcss.com"></script>
   <style>
     :root {
-      --page-bg: #f3f7fb;
-      --panel-bg: rgba(255, 255, 255, 0.82);
-      --panel-border: rgba(148, 163, 184, 0.25);
-      --text-strong: #0f172a;
-      --text-soft: #475569;
-      --primary: #0f766e;
-      --primary-strong: #0b5f5a;
-      --shadow-soft: 0 12px 35px rgba(15, 23, 42, 0.08);
+      --bg: #f3f7fb;
+      --bg-strong: #edf3f9;
+      --card: #ffffff;
+      --card-soft: #f8fbff;
+      --border: #dfeaf3;
+      --text: #10233d;
+      --text-soft: #42556e;
+      --text-muted: #64748b;
+      --primary: #176B9E;
+      --primary-strong: #0f5884;
+      --primary-soft: #eaf4fb;
+      --success-bg: #edf9f2;
+      --success-text: #1f7a52;
+      --warning-bg: #fff7ec;
+      --warning-text: #9a6700;
+      --danger-bg: #fff1f2;
+      --danger-text: #af3d4b;
+      --shadow: 0 10px 25px rgba(15, 23, 42, 0.06);
     }
 
     body {
-      background: linear-gradient(180deg, #edf5ff 0%, #f8fafc 55%, #eef2f7 100%);
-      color: var(--text-strong);
+      background: var(--bg);
+      color: var(--text);
       font-family: Inter, "Segoe UI", sans-serif;
     }
 
@@ -445,27 +455,26 @@ class LogisticsAutomationHandler(http.server.BaseHTTPRequestHandler):
       display: inline-flex;
       align-items: center;
       justify-content: center;
-      border-radius: 0.85rem;
-      padding: 0.55rem 0.9rem;
+      border-radius: 0.8rem;
+      padding: 0.6rem 0.9rem;
       font-size: 0.8rem;
       font-weight: 600;
-      color: #475569;
+      color: var(--text-soft);
       border: 1px solid transparent;
       transition: all 0.2s ease;
     }
 
     .nav-link:hover {
-      background: rgba(15, 118, 110, 0.06);
-      border-color: rgba(15, 118, 110, 0.12);
+      background: var(--primary-soft);
+      border-color: rgba(23, 107, 158, 0.12);
       color: var(--primary-strong);
       transform: translateY(-1px);
     }
 
     .premium-card {
-      background: var(--panel-bg);
-      border: 1px solid var(--panel-border);
-      box-shadow: var(--shadow-soft);
-      backdrop-filter: blur(10px);
+      background: var(--card);
+      border: 1px solid var(--border);
+      box-shadow: var(--shadow);
     }
 
     .soft-button {
@@ -473,17 +482,52 @@ class LogisticsAutomationHandler(http.server.BaseHTTPRequestHandler):
       align-items: center;
       justify-content: center;
       transition: all 0.2s ease;
-      box-shadow: 0 10px 25px rgba(15, 118, 110, 0.18);
+      box-shadow: 0 10px 22px rgba(23, 107, 158, 0.14);
     }
 
     .soft-button:hover {
       transform: translateY(-1px);
-      filter: brightness(1.02);
+      filter: brightness(1.01);
+    }
+
+    .status-pill {
+      display: inline-flex;
+      align-items: center;
+      border-radius: 9999px;
+      padding: 0.38rem 0.72rem;
+      font-size: 0.7rem;
+      font-weight: 700;
+      letter-spacing: 0.01em;
+      border: 1px solid transparent;
+    }
+
+    .status-pill.success {
+      color: var(--success-text);
+      background: var(--success-bg);
+      border-color: rgba(31, 122, 82, 0.12);
+    }
+
+    .status-pill.warning {
+      color: var(--warning-text);
+      background: var(--warning-bg);
+      border-color: rgba(154, 103, 0, 0.12);
+    }
+
+    .status-pill.danger {
+      color: var(--danger-text);
+      background: var(--danger-bg);
+      border-color: rgba(175, 61, 75, 0.12);
+    }
+
+    .status-pill.neutral {
+      color: var(--text-soft);
+      background: #f3f6fb;
+      border-color: rgba(102, 119, 142, 0.12);
     }
 
     .data-table th {
-      background: rgba(248, 250, 252, 0.9);
-      color: #475569;
+      background: #f8fafc;
+      color: var(--text-soft);
       font-size: 0.72rem;
       letter-spacing: 0.08em;
       text-transform: uppercase;
@@ -491,11 +535,12 @@ class LogisticsAutomationHandler(http.server.BaseHTTPRequestHandler):
     }
 
     .data-table td {
-      border-color: rgba(148, 163, 184, 0.18);
+      color: var(--text);
+      border-color: var(--border);
     }
 
     .data-table tbody tr:hover {
-      background: rgba(15, 118, 110, 0.03);
+      background: #f8fbff;
     }
   </style>
 </head>
@@ -650,19 +695,29 @@ class LogisticsAutomationHandler(http.server.BaseHTTPRequestHandler):
       const d = await res.json();
       const docs = d.documents || [];
 
-      const rowsHtml = docs.map(doc => `
-        <tr class="border-b border-slate-800/60 hover:bg-slate-800/40 transition">
-          <td class="px-6 py-4 font-semibold text-white">${doc.fileName}</td>
-          <td class="px-6 py-4 text-xs font-bold text-sky-400">${doc.documentType}</td>
-          <td class="px-6 py-4 text-xs font-bold text-emerald-400">${doc.status}</td>
-          <td class="px-6 py-4 text-xs font-mono text-slate-400">${(doc.fileSize / 1024).toFixed(1)} KB</td>
-          <td class="px-6 py-4 text-xs text-slate-400">${new Date(doc.createdAt).toLocaleDateString()}</td>
-          <td class="px-6 py-4 text-right space-x-2">
-            <a href="/documents/${doc.id}/review" class="text-xs font-semibold text-sky-400 hover:underline">Review & Edit</a>
-            ${doc.status === 'INVOICE_GENERATED' ? `<a href="/invoices/${doc.id}" class="text-xs font-semibold text-emerald-400 hover:underline">View Invoice</a>` : ''}
-          </td>
-        </tr>
-      `).join('');
+      const rowsHtml = docs.map(doc => {
+        const status = doc.status || 'PENDING';
+        let statusClass = 'neutral';
+        if (status === 'EXTRACTED' || status === 'APPROVED' || status === 'INVOICE_GENERATED') statusClass = 'success';
+        else if (status === 'IN_REVIEW' || status === 'PENDING') statusClass = 'warning';
+        else if (status === 'FAILED') statusClass = 'danger';
+
+        return `
+          <tr class="border-b border-slate-200 hover:bg-slate-50 transition">
+            <td class="px-6 py-4 font-semibold text-slate-900">${doc.fileName}</td>
+            <td class="px-6 py-4 text-xs font-bold uppercase tracking-wide text-slate-600">${doc.documentType}</td>
+            <td class="px-6 py-4">
+              <span class="status-pill ${statusClass}">${status}</span>
+            </td>
+            <td class="px-6 py-4 text-xs font-mono text-slate-600">${(doc.fileSize / 1024).toFixed(1)} KB</td>
+            <td class="px-6 py-4 text-xs text-slate-600">${new Date(doc.createdAt).toLocaleDateString()}</td>
+            <td class="px-6 py-4 text-right space-x-2">
+              <a href="/documents/${doc.id}/review" class="text-xs font-semibold text-[#176B9E] hover:underline">Review & Edit</a>
+              ${doc.status === 'INVOICE_GENERATED' ? `<a href="/invoices/${doc.id}" class="text-xs font-semibold text-[#176B9E] hover:underline">View Invoice</a>` : ''}
+            </td>
+          </tr>
+        `;
+      }).join('');
 
       app.innerHTML = `
         ${navHtml}
