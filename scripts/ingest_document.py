@@ -13,6 +13,7 @@ ALLOWED_MIME_TYPES = {
     ".jpg": "image/jpeg",
     ".jpeg": "image/jpeg",
     ".png": "image/png",
+    ".webp": "image/webp",
     ".doc": "application/msword",
     ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
     ".xls": "application/vnd.ms-excel",
@@ -106,7 +107,7 @@ def ingest_file(file_path: str, customer_id: str = None) -> dict:
 
     ext = os.path.splitext(file_path)[1].lower()
     if ext not in ALLOWED_MIME_TYPES:
-        raise ValueError(f"Unsupported file extension '{ext}'. Allowed: PDF, JPG, JPEG, PNG, DOC, DOCX, XLS, XLSX, CSV, TXT, TIFF")
+        raise ValueError(f"Unsupported file extension '{ext}'. Allowed: PDF, JPG, JPEG, PNG, WEBP, DOC, DOCX, XLS, XLSX, CSV, TXT, TIFF")
 
     mime_type = ALLOWED_MIME_TYPES[ext]
     file_name = os.path.basename(file_path)
