@@ -258,11 +258,15 @@ class LogisticsAutomationHandler(http.server.BaseHTTPRequestHandler):
                     except OSError:
                         pass
 
+            cursor.execute("DELETE FROM Extraction WHERE documentId = ?;", (doc_id,))
+            cursor.execute("DELETE FROM ReviewTask WHERE documentId = ?;", (doc_id,))
+            cursor.execute("DELETE FROM AuditLog WHERE documentId = ?;", (doc_id,))
             cursor.execute("DELETE FROM Document WHERE id = ?;", (doc_id,))
             conn.commit()
             conn.close()
             return self._send_json({"success": True, "deletedDocumentId": doc_id})
         except Exception as exc:
+            conn.rollback()
             conn.close()
             return self._send_json({"error": f"Failed to delete document: {exc}"}, 500)
 

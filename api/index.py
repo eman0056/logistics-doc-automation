@@ -1390,6 +1390,38 @@ def get_documents():
         import traceback
         return JSONResponse({"error": str(e), "trace": traceback.format_exc()}, status_code=500)
 
+@app.delete("/api/documents/{doc_id}")
+def delete_document(doc_id: str):
+    conn = get_db()
+    try:
+        # Remove only the selected document and its related records; other documents remain untouched.
+        cursor = execute_query(conn, "SELECT storagePath, fileData FROM Document WHERE id = ?", (doc_id,))
+        row = cursor.fetchone()
+        if not row:
+            return JSONResponse({"error": "Document not found"}, status_code=404)
+
+        storage_path, file_data = row
+        if storage_path:
+            try:
+                absolute_path = os.path.normpath(os.path.join(BASE_DIR, storage_path))
+                if os.path.exists(absolute_path):
+                    os.remove(absolute_path)
+            except Exception:
+                pass
+
+        execute_query(conn, "DELETE FROM Extraction WHERE documentId = ?", (doc_id,))
+        execute_query(conn, "DELETE FROM ReviewTask WHERE documentId = ?", (doc_id,))
+        execute_query(conn, "DELETE FROM AuditLog WHERE documentId = ?", (doc_id,))
+        execute_query(conn, "DELETE FROM Document WHERE id = ?", (doc_id,))
+        conn.commit()
+        return {"success": True, "deletedDocumentId": doc_id}
+    except Exception as e:
+        conn.rollback()
+        import traceback
+        return JSONResponse({"error": str(e), "trace": traceback.format_exc()}, status_code=500)
+    finally:
+        conn.close()
+
 @app.post("/api/documents/upload")
 async def upload_documents(request: Request):
     form = await request.form()
