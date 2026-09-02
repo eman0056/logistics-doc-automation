@@ -96,6 +96,26 @@ function App() {
     </header>
   );
 
+  const deleteDocument = async (docId) => {
+    const docToDelete = documents.find((doc) => doc.id === docId);
+    if (!docToDelete) return;
+
+    const confirmed = window.confirm(`Delete "${docToDelete.fileName}"? This action cannot be undone.`);
+    if (!confirmed) return;
+
+    try {
+      const res = await fetch(`${API}/documents/${docId}`, { method: 'DELETE' });
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        throw new Error(data.error || 'Delete failed');
+      }
+
+      setDocuments((current) => current.filter((doc) => doc.id !== docId));
+    } catch (error) {
+      alert(error.message || 'Unable to delete document.');
+    }
+  };
+
   const renderDocumentsView = () => {
     const rows = documents.map((doc) => {
       const status = doc.status || 'PENDING';
@@ -110,6 +130,14 @@ function App() {
             <a href={`/documents/${doc.id}/review`} className="nav-link" style={{ padding: '0.4rem 0.6rem', display: 'inline-flex' }}>
               Review & Edit
             </a>
+            <button
+              type="button"
+              className="nav-link"
+              style={{ padding: '0.4rem 0.6rem', display: 'inline-flex', marginLeft: '0.25rem' }}
+              onClick={() => deleteDocument(doc.id)}
+            >
+              Delete
+            </button>
             {doc.status === 'INVOICE_GENERATED' && (
               <a href={`/invoices/${doc.id}`} className="nav-link" style={{ padding: '0.4rem 0.6rem', display: 'inline-flex', marginLeft: '0.25rem' }}>
                 View Invoice

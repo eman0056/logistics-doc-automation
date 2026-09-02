@@ -30,7 +30,7 @@ class LogisticsAutomationHandler(http.server.BaseHTTPRequestHandler):
         self.send_response(status)
         self.send_header("Content-Type", "application/json")
         self.send_header("Access-Control-Allow-Origin", "*")
-        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
         self.send_header("Access-Control-Allow-Headers", "Content-Type")
         self.end_headers()
         self.wfile.write(json.dumps(data).encode("utf-8"))
@@ -59,9 +59,19 @@ class LogisticsAutomationHandler(http.server.BaseHTTPRequestHandler):
     def do_OPTIONS(self):
         self.send_response(200)
         self.send_header("Access-Control-Allow-Origin", "*")
-        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
         self.send_header("Access-Control-Allow-Headers", "Content-Type")
         self.end_headers()
+
+    def do_DELETE(self):
+        parsed_url = urllib.parse.urlparse(self.path)
+        path = parsed_url.path
+
+        if path.startswith("/api/documents/") and path.count("/") == 3:
+            doc_id = path.split("/")[3]
+            return self._handle_delete_document(doc_id)
+
+        return self._send_json({"error": "Endpoint not found"}, 404)
 
     def do_GET(self):
         parsed_url = urllib.parse.urlparse(self.path)
@@ -223,6 +233,38 @@ class LogisticsAutomationHandler(http.server.BaseHTTPRequestHandler):
             "overallConfidence": row[3],
             "reviewUrl": f"/documents/{row[0]}/review"
         })
+
+    def _handle_delete_document(self, doc_id):
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        cursor.execute("SELECT storagePath FROM Document WHERE id = ?;", (doc_id,))
+        row = cursor.fetchone()
+
+        if not row:
+            conn.close()
+            return self._send_json({"error": "Document not found"}, 404)
+
+        storage_path = row[0]
+        try:
+            if storage_path:
+                absolute_path = os.path.normpath(os.path.join(BASE_DIR, storage_path))
+                if os.path.exists(absolute_path):
+                    os.remove(absolute_path)
+
+                parent_dir = os.path.dirname(absolute_path)
+                if parent_dir.startswith(BASE_DIR) and os.path.isdir(parent_dir):
+                    try:
+                        os.rmdir(parent_dir)
+                    except OSError:
+                        pass
+
+            cursor.execute("DELETE FROM Document WHERE id = ?;", (doc_id,))
+            conn.commit()
+            conn.close()
+            return self._send_json({"success": True, "deletedDocumentId": doc_id})
+        except Exception as exc:
+            conn.close()
+            return self._send_json({"error": f"Failed to delete document: {exc}"}, 500)
 
     def _handle_upload_document(self):
         content_type = self.headers.get('Content-Type')
@@ -731,6 +773,7 @@ class LogisticsAutomationHandler(http.server.BaseHTTPRequestHandler):
             <td class="px-6 py-4 text-xs text-slate-600">${new Date(doc.createdAt).toLocaleDateString()}</td>
             <td class="px-6 py-4 text-right space-x-2">
               <a href="/documents/${doc.id}/review" class="text-xs font-semibold text-[#176B9E] hover:underline">Review & Edit</a>
+              <button type="button" class="text-xs font-semibold text-red-600 hover:underline" onclick="if (confirm('Delete ${doc.fileName}? This action cannot be undone.')) { fetch('/api/documents/${doc.id}', { method: 'DELETE' }).then(async r => { const d = await r.json(); if (!r.ok || !d.success) throw new Error(d.error || 'Delete failed'); window.location.reload(); }).catch(err => alert(err.message || 'Unable to delete document.')); }">Delete</button>
               ${doc.status === 'INVOICE_GENERATED' ? `<a href="/invoices/${doc.id}" class="text-xs font-semibold text-[#176B9E] hover:underline">View Invoice</a>` : ''}
             </td>
           </tr>

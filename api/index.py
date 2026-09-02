@@ -436,6 +436,7 @@ def _send_spa_html(path):
             <td class="px-6 py-4 text-xs text-[#C9D4DF]">${new Date(doc.createdAt).toLocaleDateString()}</td>
             <td class="px-6 py-4 text-right space-x-2">
               <a href="/documents/${doc.id}/review" class="text-xs font-semibold text-[#0B8FD3] hover:underline">Review & Edit</a>
+              <button type="button" class="text-xs font-semibold text-red-400 hover:underline" onclick="if (confirm('Delete ${doc.fileName}? This action cannot be undone.')) { fetch('/api/documents/${doc.id}', { method: 'DELETE' }).then(async r => { const d = await r.json(); if (!r.ok || !d.success) throw new Error(d.error || 'Delete failed'); window.location.reload(); }).catch(err => alert(err.message || 'Unable to delete document.')); }">Delete</button>
               ${doc.status === 'INVOICE_GENERATED' ? `<a href="/invoices/${doc.id}" class="text-xs font-semibold text-[#0B8FD3] hover:underline">View Invoice</a>` : ''}
             </td>
           </tr>
