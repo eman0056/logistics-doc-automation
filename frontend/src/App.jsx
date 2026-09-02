@@ -226,13 +226,13 @@ function App() {
                 id="fileInput"
                 type="file"
                 multiple
-                accept=".pdf,.doc,.docx,.jpg,.jpeg,.png,.webp"
+                accept=".pdf,.doc,.docx,.jpg,.jpeg,.png,.webp,.avif"
                 style={{ display: 'none' }}
                 onChange={(e) => setSelectedFiles(Array.from(e.target.files || []))}
               />
               <div className="dropzone-icon">📤</div>
               <div className="dropzone-title">Click to upload or drag & drop document</div>
-              <div className="dropzone-subtext">Supports PDF, DOC, DOCX, JPG, JPEG, PNG, WEBP up to 25 MB</div>
+              <div className="dropzone-subtext">Supports PDF, DOC, DOCX, JPG, JPEG, PNG, WEBP, AVIF up to 25 MB</div>
               {selectedFiles.length > 0 && <div className="file-chip">Selected: {selectedFiles.length} files</div>}
             </div>
 

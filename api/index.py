@@ -335,10 +335,10 @@ def _send_spa_html(path):
 
           <div class="premium-card rounded-2xl p-7 md:p-8">
             <div id="dropzone" class="group border-2 border-dashed border-[#294157] bg-[#EAF2F9] hover:border-[#0B8FD3] rounded-2xl p-10 text-center cursor-pointer transition-all duration-200">
-              <input type="file" id="fileInput" class="hidden" accept=".pdf,.doc,.docx,.jpg,.jpeg,.png,.webp" multiple />
+              <input type="file" id="fileInput" class="hidden" accept=".pdf,.doc,.docx,.jpg,.jpeg,.png,.webp,.avif" multiple />
               <div class="w-16 h-16 rounded-xl mx-auto flex items-center justify-center text-2xl shadow-md mb-4 ring-8 ring-[#EAF2F9]" style="background: ${primaryColor}; color: white;">📤</div>
               <p class="text-xl font-semibold text-[#0F2033]">Click to upload or drag & drop document</p>
-              <p class="text-sm text-[#294157] mt-2">Supports PDF, DOC, DOCX, JPG, JPEG, PNG, WEBP up to 25 MB</p>
+              <p class="text-sm text-[#294157] mt-2">Supports PDF, DOC, DOCX, JPG, JPEG, PNG, WEBP, AVIF up to 25 MB</p>
               <div id="fileSelectedInfo" class="hidden mt-5 text-sm text-[#0F2033] font-semibold bg-white border border-[#294157] rounded-full inline-flex px-3 py-1.5"></div>
             </div>
 

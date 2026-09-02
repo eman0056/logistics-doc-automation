@@ -631,10 +631,10 @@ class LogisticsAutomationHandler(http.server.BaseHTTPRequestHandler):
 
           <div class="premium-card rounded-[30px] p-7 md:p-8">
             <div id="dropzone" class="group border-2 border-dashed border-sky-200 bg-gradient-to-br from-sky-50 via-slate-50 to-white hover:border-sky-400 hover:shadow-[0_18px_36px_rgba(14,116,144,0.08)] rounded-[28px] p-10 text-center cursor-pointer transition-all duration-200">
-              <input type="file" id="fileInput" class="hidden" accept=".pdf,.doc,.docx,.jpg,.jpeg,.png,.webp" multiple />
+              <input type="file" id="fileInput" class="hidden" accept=".pdf,.doc,.docx,.jpg,.jpeg,.png,.webp,.avif" multiple />
               <div class="w-16 h-16 rounded-2xl mx-auto flex items-center justify-center text-2xl shadow-lg mb-4 ring-8 ring-white" style="background: linear-gradient(135deg, ${primaryColor}1a, ${primaryColor}33); color: ${primaryColor}">📤</div>
               <p class="text-xl font-semibold text-slate-900">Click to upload or drag & drop document</p>
-              <p class="text-sm text-slate-500 mt-2">Supports PDF, DOC, DOCX, JPG, JPEG, PNG, WEBP up to 25 MB</p>
+              <p class="text-sm text-slate-500 mt-2">Supports PDF, DOC, DOCX, JPG, JPEG, PNG, WEBP, AVIF up to 25 MB</p>
               <div id="fileSelectedInfo" class="hidden mt-5 text-sm text-sky-700 font-semibold bg-sky-50 border border-sky-100 rounded-full inline-flex px-3 py-1.5"></div>
             </div>
 
