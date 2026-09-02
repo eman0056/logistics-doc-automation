@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 
 const API = '/api';
 
@@ -27,6 +27,10 @@ function App() {
   const [documents, setDocuments] = useState([]);
   const [loading, setLoading] = useState(true);
   const [path, setPath] = useState(window.location.pathname + window.location.search);
+  const [deleteTarget, setDeleteTarget] = useState(null);
+  const [deletingId, setDeletingId] = useState(null);
+  const [toast, setToast] = useState(null);
+  const cancelDeleteRef = useRef(null);
 
   useEffect(() => {
     const onPop = () => setPath(window.location.pathname + window.location.search);
@@ -116,6 +120,54 @@ function App() {
     }
   };
 
+  useEffect(() => {
+    if (!toast) return;
+    const timer = window.setTimeout(() => setToast(null), 3000);
+    return () => window.clearTimeout(timer);
+  }, [toast]);
+
+  useEffect(() => {
+    if (!deleteTarget) return;
+
+    const handleEscape = (event) => {
+      if (event.key === 'Escape' && !deletingId) {
+        setDeleteTarget(null);
+      }
+    };
+
+    const focusTimer = window.setTimeout(() => cancelDeleteRef.current?.focus(), 0);
+    window.addEventListener('keydown', handleEscape);
+
+    return () => {
+      window.clearTimeout(focusTimer);
+      window.removeEventListener('keydown', handleEscape);
+    };
+  }, [deleteTarget, deletingId]);
+
+  const openDeleteModal = (doc) => setDeleteTarget(doc);
+
+  const handleDeleteDocument = async () => {
+    if (!deleteTarget || deletingId) return;
+
+    setDeletingId(deleteTarget.id);
+    try {
+      const res = await fetch(`${API}/documents/${deleteTarget.id}`, { method: 'DELETE' });
+      const data = await res.json();
+
+      if (!res.ok || !data.success) {
+        throw new Error(data.error || 'Unable to delete document.');
+      }
+
+      setDocuments((current) => current.filter((doc) => doc.id !== deleteTarget.id));
+      setDeleteTarget(null);
+      setToast({ type: 'success', message: 'Document deleted successfully.' });
+    } catch (error) {
+      setToast({ type: 'error', message: error.message || 'Unable to delete document.' });
+    } finally {
+      setDeletingId(null);
+    }
+  };
+
   const renderDocumentsView = () => {
     const rows = documents.map((doc) => {
       const status = doc.status || 'PENDING';
@@ -134,7 +186,7 @@ function App() {
               type="button"
               className="nav-link"
               style={{ padding: '0.4rem 0.6rem', display: 'inline-flex', marginLeft: '0.25rem' }}
-              onClick={() => deleteDocument(doc.id)}
+              onClick={() => openDeleteModal(doc)}
             >
               Delete
             </button>
@@ -151,6 +203,126 @@ function App() {
     return (
       <>
         {nav}
+        {deleteTarget && (
+          <div
+            style={{
+              position: 'fixed',
+              inset: 0,
+              background: 'rgba(15, 23, 42, 0.6)',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              zIndex: 1000,
+              padding: '1rem'
+            }}
+            onClick={() => !deletingId && setDeleteTarget(null)}
+          >
+            <div
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="delete-document-title"
+              onClick={(event) => event.stopPropagation()}
+              style={{
+                width: '100%',
+                maxWidth: '420px',
+                background: '#ffffff',
+                borderRadius: '18px',
+                border: '1px solid #e2e8f0',
+                boxShadow: '0 24px 60px rgba(15, 23, 42, 0.26)',
+                padding: '1.5rem'
+              }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '1rem' }}>
+                <div id="delete-document-title" style={{ fontSize: '1.15rem', fontWeight: 700, color: '#0f172a' }}>Delete document</div>
+                <button
+                  type="button"
+                  aria-label="Close delete dialog"
+                  disabled={deletingId}
+                  onClick={() => setDeleteTarget(null)}
+                  style={{
+                    background: 'transparent',
+                    border: 'none',
+                    color: '#64748b',
+                    fontSize: '1.5rem',
+                    cursor: deletingId ? 'not-allowed' : 'pointer',
+                    lineHeight: 1
+                  }}
+                >
+                  ×
+                </button>
+              </div>
+
+              <p style={{ margin: '0 0 0.5rem', color: '#334155', fontSize: '1rem' }}>Are you sure you want to delete this document?</p>
+              <div style={{ marginBottom: '0.75rem', padding: '0.75rem 0.9rem', background: '#f8fafc', borderRadius: '10px', border: '1px solid #e2e8f0', color: '#0f172a', fontWeight: 600, wordBreak: 'break-word' }}>
+                {deleteTarget.fileName}
+              </div>
+              <p style={{ margin: '0 0 1.2rem', color: '#ef4444', fontWeight: 600, fontSize: '0.9rem' }}>This action cannot be undone.</p>
+
+              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.75rem' }}>
+                <button
+                  ref={cancelDeleteRef}
+                  type="button"
+                  onClick={() => setDeleteTarget(null)}
+                  disabled={deletingId}
+                  style={{
+                    background: '#e2e8f0',
+                    border: '1px solid #cbd5e1',
+                    color: '#0f172a',
+                    borderRadius: '10px',
+                    padding: '0.75rem 1rem',
+                    fontWeight: 600,
+                    cursor: deletingId ? 'not-allowed' : 'pointer',
+                    opacity: deletingId ? 0.7 : 1
+                  }}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={handleDeleteDocument}
+                  disabled={deletingId === deleteTarget.id}
+                  style={{
+                    background: '#dc2626',
+                    border: '1px solid #b91c1c',
+                    color: '#ffffff',
+                    borderRadius: '10px',
+                    padding: '0.75rem 1rem',
+                    fontWeight: 700,
+                    cursor: deletingId === deleteTarget.id ? 'not-allowed' : 'pointer',
+                    opacity: deletingId === deleteTarget.id ? 0.85 : 1,
+                    minWidth: '150px'
+                  }}
+                >
+                  {deletingId === deleteTarget.id ? 'Deleting...' : 'Delete Document'}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {toast && (
+          <div
+            role="status"
+            aria-live="polite"
+            style={{
+              position: 'fixed',
+              right: '1.25rem',
+              bottom: '1.25rem',
+              zIndex: 1100,
+              minWidth: '260px',
+              maxWidth: '360px',
+              padding: '0.9rem 1rem',
+              borderRadius: '12px',
+              background: toast.type === 'success' ? '#166534' : '#991b1b',
+              color: '#ffffff',
+              boxShadow: '0 16px 40px rgba(15, 23, 42, 0.25)',
+              fontWeight: 600
+            }}
+          >
+            {toast.message}
+          </div>
+        )}
+
         <main className="page dashboard-shell">
           <div className="section-header">
             <div>
