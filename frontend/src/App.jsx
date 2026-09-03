@@ -359,6 +359,7 @@ function App() {
     const [selectedFiles, setSelectedFiles] = useState([]);
     const [uploading, setUploading] = useState(false);
     const [statusText, setStatusText] = useState('');
+    const [pageProgress, setPageProgress] = useState(null);
 
     const handleFiles = (files) => {
       if (!files || !files.length) return;
@@ -381,10 +382,26 @@ function App() {
         const res = await fetch(`${API}/documents/upload`, { method: 'POST', body: formData });
         const data = await res.json();
         if (data.success && data.documentIds && data.documentIds.length > 0) {
-          setStatusText('Upload successful! Redirecting to review...');
-          setTimeout(() => {
-            window.location.href = `/documents/${data.documentIds[0]}/review`;
-          }, 800);
+          const totalPages = Object.values(data.pageCounts || {}).reduce((sum, count) => sum + count, 0);
+          setPageProgress({ current: 0, total: totalPages || data.documentIds.length });
+          setStatusText(`${totalPages || data.documentIds.length} pages detected. Processing 0/${totalPages || data.documentIds.length}`);
+
+          const pollProgress = async () => {
+            const statuses = await Promise.all(data.documentIds.map(async (documentId) => {
+              const response = await fetch(`${API}/documents/${documentId}/status`);
+              return response.json();
+            }));
+            const current = statuses.reduce((sum, status) => sum + (status.processedPages || 0), 0);
+            const total = statuses.reduce((sum, status) => sum + (status.pageCount || 1), 0);
+            setPageProgress({ current, total });
+            setStatusText(current >= total ? `Extraction completed — ${total}/${total} pages processed` : `Processing ${current}/${total}`);
+            if (current >= total || statuses.every((status) => status.isExtracted)) {
+              setTimeout(() => { window.location.href = `/documents/${data.documentIds[0]}/review`; }, 800);
+              return;
+            }
+            window.setTimeout(pollProgress, 1500);
+          };
+          window.setTimeout(pollProgress, 1000);
         } else {
           alert(data.error || 'Upload failed');
         }
@@ -433,13 +450,14 @@ function App() {
               <div className="dropzone-icon">📤</div>
               <div className="dropzone-title">Click to upload or drag & drop document</div>
               <div className="dropzone-subtext">Supports PDF, DOC, DOCX, JPG, JPEG, PNG, WEBP, AVIF up to 25 MB</div>
-              {selectedFiles.length > 0 && <div className="file-chip">Selected: {selectedFiles.length} files</div>}
+              {selectedFiles.length > 0 && <div className="file-chip">Selected: {selectedFiles.length} file(s)</div>}
             </div>
 
             <button className="primary-btn w-full mt-4" onClick={handleUpload} disabled={uploading}>
               {uploading ? 'Uploading...' : 'Start Upload & AI Processing'}
             </button>
             {statusText && <div className="progress-box">{statusText}</div>}
+            {pageProgress && <div className="subtle-copy mt-2">{pageProgress.current}/{pageProgress.total} pages processed</div>}
           </div>
         </main>
       </>

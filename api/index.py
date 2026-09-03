@@ -10,6 +10,7 @@ import os
 import urllib.request
 import threading
 from datetime import datetime
+import re
 try:
     import psycopg2
 except:
@@ -65,6 +66,8 @@ def init_db(conn):
     # Safely add columns that might already exist
     alter_statements = [
         "ALTER TABLE Document ADD COLUMN fileData TEXT;",
+        "ALTER TABLE Document ADD COLUMN pageCount INTEGER DEFAULT 1;",
+        "ALTER TABLE Document ADD COLUMN processedPages INTEGER DEFAULT 0;",
     ]
     for stmt in alter_statements:
         try:
@@ -73,6 +76,13 @@ def init_db(conn):
         except Exception:
             conn.rollback()  # Reset transaction so subsequent queries work
     DB_INITIALIZED = True
+
+def count_pdf_pages(file_bytes):
+    """Count PDF page objects without trusting file size or client metadata."""
+    try:
+        return max(1, len(re.findall(rb"/Type\s*/Page\b", file_bytes)))
+    except Exception:
+        return 1
     
 
 def get_db():
@@ -1454,12 +1464,14 @@ async def upload_documents(request: Request):
             print("Webhook error:", e)
 
     results = []
+    page_counts = {}
     try:
         for file_item in files:
             file_bytes = await file_item.read()
             file_b64 = base64.b64encode(file_bytes).decode('utf-8')
             
             doc_id = str(uuid.uuid4())
+            page_count = count_pdf_pages(file_bytes) if (file_item.filename or '').lower().endswith('.pdf') else 1
             storage_path = f"api/documents/{doc_id}/file"
             
             payload = {
@@ -1467,13 +1479,15 @@ async def upload_documents(request: Request):
                 "storagePath": storage_path,
                 "fileName": file_item.filename,
                 "fileBase64": file_b64,
+                "pageCount": page_count,
+                "pages": [{"pageNumber": page_number, "totalPages": page_count} for page_number in range(1, page_count + 1)],
                 "callbackUrl": f"{app_base_url}/api/documents/{doc_id}/extraction/callback"
             }
             
             threading.Thread(target=trigger_webhook, args=(webhook_url, payload), daemon=True).start()
             
             conn = get_db()
-            execute_query(conn, "INSERT INTO Document (id, fileName, storagePath, status) VALUES (?, ?, ?, 'PREPROCESSED')", (doc_id, file_item.filename, storage_path))
+            execute_query(conn, "INSERT INTO Document (id, fileName, storagePath, status, pageCount, processedPages) VALUES (?, ?, ?, 'PREPROCESSED', ?, 0)", (doc_id, file_item.filename, storage_path, page_count))
             
             # Now update the fileData column
             execute_query(conn, "UPDATE Document SET fileData = ? WHERE id = ?", (file_b64, doc_id))
@@ -1481,8 +1495,9 @@ async def upload_documents(request: Request):
             conn.commit()
             conn.close()
             results.append(doc_id)
+            page_counts[doc_id] = page_count
             
-        return {"success": True, "documentIds": results}
+        return {"success": True, "documentIds": results, "pageCounts": page_counts}
     except Exception as e:
         return JSONResponse({"error": str(e)}, status_code=500)
 
@@ -1532,7 +1547,7 @@ async def batch_generate(request: Request):
 @app.get("/api/documents/{doc_id}/status")
 def get_document_status(doc_id: str):
     conn = get_db()
-    cursor = execute_query(conn, "SELECT id, fileName, status, overallConfidence FROM Document WHERE id = ?;", (doc_id,))
+    cursor = execute_query(conn, "SELECT id, fileName, status, overallConfidence, COALESCE(pageCount, 1), COALESCE(processedPages, 0) FROM Document WHERE id = ?;", (doc_id,))
     row = cursor.fetchone()
     conn.close()
 
@@ -1547,6 +1562,9 @@ def get_document_status(doc_id: str):
         "status": row[2],
         "isExtracted": is_extracted,
         "overallConfidence": row[3],
+        "pageCount": row[4],
+        "processedPages": row[5],
+        "progress": {"current": row[5], "total": row[4]},
         "reviewUrl": f"/documents/{row[0]}/review"
     }
 
@@ -1637,7 +1655,7 @@ async def extraction_callback(doc_id: str, request: Request):
         else:
             execute_query(conn, "INSERT INTO Extraction (documentId, canonicalJson) VALUES (?, ?);", (doc_id, json_str))
 
-        execute_query(conn, "UPDATE Document SET status = 'EXTRACTED' WHERE id = ?;", (doc_id,))
+        execute_query(conn, "UPDATE Document SET status = 'EXTRACTED', processedPages = COALESCE(pageCount, 1) WHERE id = ?;", (doc_id,))
         conn.commit()
 
         return {"success": True, "reviewUrl": f"/documents/{doc_id}/review"}
