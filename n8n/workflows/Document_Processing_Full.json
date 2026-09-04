@@ -29,7 +29,7 @@
     },
     {
       "parameters": {
-        "jsCode": "// Node 3: PDF / Text Extraction Code Node\nconst rawText = $input.first().json.rawText || 'DHL EXPRESS FREIGHT INVOICE\\nInvoice Number: DHL-9982412\\nShipment Number: 8492019482\\nShipper: Apex Logistics Hub\\nConsignee: Global Distribution Center\\nCarrier: DHL Express Freight\\nSubtotal: $1,250.00\\nFreight: $150.00\\nTax: $75.00\\nTotal Amount: $1,475.00 USD';\n\nreturn {\n  documentId: $node['Node 1: Webhook Trigger'].json.body.documentId,\n  callbackUrl: $node['Node 1: Webhook Trigger'].json.body.callbackUrl,\n  rawOcrText: rawText\n};"
+        "jsCode": "// Node 3: PDF / Text Extraction Code Node\nconst input = $input.first().json;\nconst webhook = $node['Node 1: Webhook Trigger'].json.body || {};\nconst rawText = input.rawText || 'DHL EXPRESS FREIGHT INVOICE\\nInvoice Number: DHL-9982412\\nShipment Number: 8492019482\\nShipper: Apex Logistics Hub\\nConsignee: Global Distribution Center\\nCarrier: DHL Express Freight\\nSubtotal: $1,250.00\\nFreight: $150.00\\nTax: $75.00\\nTotal Amount: $1,475.00 USD';\nconst segments = rawText.split(/(?=^\\s*(?:INVOICE|TAX INVOICE|FREIGHT INVOICE)\\b)/gim).map((text) => text.trim()).filter(Boolean);\nconst invoiceTexts = segments.length ? segments : [rawText];\n\nreturn invoiceTexts.map((invoiceText, invoiceIndex) => ({\n  documentId: webhook.documentId,\n  callbackUrl: webhook.callbackUrl,\n  invoiceIndex,\n  invoiceCount: invoiceTexts.length,\n  rawOcrText: invoiceText\n}));"
       },
       "name": "Node 3: Extract PDF Text",
       "type": "n8n-nodes-base.code",
@@ -73,7 +73,7 @@
     },
     {
       "parameters": {
-        "jsCode": "// Node 5: Response Parser Code Node\nconst openAiContent = $input.first().json.choices[0].message.content;\nlet extractedData = {};\ntry {\n  extractedData = JSON.parse(openAiContent);\n} catch(e) {\n  extractedData = {\n    documentNumber: 'DHL-9982412',\n    shipmentNumber: '8492019482',\n    documentType: 'INVOICE',\n    shipperName: 'Apex Logistics Hub',\n    consigneeName: 'Global Distribution Center',\n    carrierName: 'DHL Express Freight',\n    subtotalCost: 1250.00,\n    freightCost: 150.00,\n    taxCost: 75.00,\n    totalAmount: 1475.00,\n    currency: 'USD'\n  };\n}\n\nreturn {\n  documentId: $node['Node 3: Extract PDF Text'].json.documentId,\n  callbackUrl: $node['Node 3: Extract PDF Text'].json.callbackUrl,\n  extractedData: extractedData,\n  \"confidenceScores\": {\n    documentNumber: 0.98,\n    shipmentNumber: 0.96,\n    shipperName: 0.94,\n    totalAmount: 0.98\n  },\n  overallConfidence: 0.96\n};"
+        "jsCode": "// Node 5: Response Parser Code Node\nconst response = $input.first().json;\nconst source = $items('Node 3: Extract PDF Text')[$itemIndex].json;\nconst openAiContent = response.choices[0].message.content;\nlet extractedData = {};\ntry {\n  extractedData = JSON.parse(openAiContent.replace(/^```json\\s*|\\s*```$/g, ''));\n} catch(e) {}\n\nreturn {\n  documentId: source.documentId,\n  callbackUrl: source.callbackUrl,\n  invoiceId: `${source.documentId}-invoice-${Number(source.invoiceIndex || 0) + 1}`,\n  invoiceIndex: Number(source.invoiceIndex || 0),\n  invoiceCount: Number(source.invoiceCount || 1),\n  extractedData,\n  \"confidenceScores\": { documentNumber: 0.98, shipmentNumber: 0.96, shipperName: 0.94, totalAmount: 0.98 },\n  overallConfidence: 0.96\n};"
       },
       "name": "Node 5: Parse OpenAI Response",
       "type": "n8n-nodes-base.code",
@@ -91,6 +91,16 @@
               "name": "Content-Type",
               "value": "application/json"
             }
+          ]
+        },
+        "bodyParametersUi": {
+          "parameter": [
+            { "name": "invoiceId", "value": "={{ $json.invoiceId }}" },
+            { "name": "invoiceIndex", "value": "={{ $json.invoiceIndex }}" },
+            { "name": "invoiceCount", "value": "={{ $json.invoiceCount }}" },
+            { "name": "extractedData", "value": "={{ JSON.stringify($json.extractedData) }}" },
+            { "name": "confidenceScores", "value": "={{ JSON.stringify($json.confidenceScores) }}" },
+            { "name": "overallConfidence", "value": "={{ $json.overallConfidence }}" }
           ]
         }
       },

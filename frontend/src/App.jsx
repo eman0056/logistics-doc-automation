@@ -525,6 +525,7 @@ function App() {
     const [doc, setDoc] = useState(null);
     const [loadingDoc, setLoadingDoc] = useState(true);
     const [processing, setProcessing] = useState(false);
+    const [selectedInvoiceIndex, setSelectedInvoiceIndex] = useState(0);
 
     useEffect(() => {
       let isMounted = true;
@@ -545,7 +546,7 @@ function App() {
     }, [docId]);
 
     useEffect(() => {
-      if (!doc || !doc.extraction) {
+      if (!doc || !doc.extraction || (doc.invoices?.length && !['EXTRACTED', 'IN_REVIEW', 'APPROVED', 'INVOICE_GENERATED'].includes(doc.status))) {
         const interval = setInterval(async () => {
           try {
             const statusRes = await fetch(`${API}/documents/${docId}/status`);
@@ -568,9 +569,14 @@ function App() {
 
     if (!doc) return <><>{nav}</><main className="page"><div className="card upload-panel">Document not found.</div></main></>;
 
+    const invoiceRecords = doc.invoices?.length
+      ? doc.invoices
+      : [{ id: `${doc.id}-invoice-1`, invoiceIndex: 0, canonicalJson: doc.extraction?.canonicalJson, finalSubmittedData: doc.extraction?.finalSubmittedData }];
+    const activeInvoiceIndex = Math.min(selectedInvoiceIndex, Math.max(invoiceRecords.length - 1, 0));
+    const selectedInvoice = invoiceRecords[activeInvoiceIndex] || invoiceRecords[0];
     let canonical = {};
     try {
-      canonical = JSON.parse(doc.extraction?.finalSubmittedData || doc.extraction?.canonicalJson || '{}');
+      canonical = JSON.parse(selectedInvoice?.finalSubmittedData || selectedInvoice?.canonicalJson || '{}');
     } catch (error) {
       canonical = {};
     }
@@ -632,7 +638,25 @@ function App() {
             </div>
 
             <div className="card editor-panel">
-              <h3 className="section-title" style={{ color: '#fff', letterSpacing: '0.1em' }}>Dynamically Extracted Fields</h3>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap' }}>
+                <h3 className="section-title" style={{ color: '#fff', letterSpacing: '0.1em', margin: 0 }}>Dynamically Extracted Fields</h3>
+                {invoiceRecords.length > 1 && (
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                    <button className="secondary-btn" type="button" disabled={activeInvoiceIndex === 0} onClick={() => setSelectedInvoiceIndex(activeInvoiceIndex - 1)}>Previous</button>
+                    <span className="subtle-copy">Invoice {activeInvoiceIndex + 1} of {invoiceRecords.length}</span>
+                    <button className="secondary-btn" type="button" disabled={activeInvoiceIndex === invoiceRecords.length - 1} onClick={() => setSelectedInvoiceIndex(activeInvoiceIndex + 1)}>Next</button>
+                  </div>
+                )}
+              </div>
+              {invoiceRecords.length > 1 && (
+                <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', margin: '1rem 0' }}>
+                  {invoiceRecords.map((invoice, index) => (
+                    <button key={invoice.id} type="button" className={index === activeInvoiceIndex ? 'primary-btn' : 'secondary-btn'} onClick={() => setSelectedInvoiceIndex(index)}>
+                      Invoice {index + 1}
+                    </button>
+                  ))}
+                </div>
+              )}
               {renderFieldInputs()}
               {processing && <div className="progress-box mt-4">The n8n workflow is extracting and validating document data automatically.</div>}
             </div>

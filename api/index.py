@@ -55,6 +55,7 @@ def init_db(conn):
         "CREATE TABLE IF NOT EXISTS Customer (id VARCHAR(50) PRIMARY KEY, name VARCHAR(255), code VARCHAR(50), logoUrl VARCHAR(255), primaryColor VARCHAR(50), secondaryColor VARCHAR(50));",
         "CREATE TABLE IF NOT EXISTS Document (id VARCHAR(50) PRIMARY KEY, fileName VARCHAR(255), fileSize INTEGER, mimeType VARCHAR(100), storagePath VARCHAR(255), documentType VARCHAR(50), status VARCHAR(50), overallConfidence REAL, invoiceGeneratedAt TIMESTAMP, createdAt TIMESTAMP DEFAULT CURRENT_TIMESTAMP);",
         "CREATE TABLE IF NOT EXISTS Extraction (documentId VARCHAR(50) PRIMARY KEY, canonicalJson TEXT, confidenceScores TEXT, finalSubmittedData TEXT);",
+        "CREATE TABLE IF NOT EXISTS DocumentInvoice (id VARCHAR(100) PRIMARY KEY, documentId VARCHAR(50) NOT NULL, invoiceIndex INTEGER NOT NULL, pageStart INTEGER, pageEnd INTEGER, canonicalJson TEXT, confidenceScores TEXT, finalSubmittedData TEXT, status VARCHAR(50) DEFAULT 'EXTRACTED', overallConfidence REAL, createdAt TIMESTAMP DEFAULT CURRENT_TIMESTAMP, updatedAt TIMESTAMP DEFAULT CURRENT_TIMESTAMP);",
         "CREATE TABLE IF NOT EXISTS ReviewTask (id VARCHAR(50) PRIMARY KEY, documentId VARCHAR(50), status VARCHAR(50), reason TEXT, createdAt TIMESTAMP DEFAULT CURRENT_TIMESTAMP, resolvedAt TIMESTAMP);",
         "CREATE TABLE IF NOT EXISTS AuditLog (id VARCHAR(50) PRIMARY KEY, documentId VARCHAR(50), action VARCHAR(50), description TEXT, createdAt TIMESTAMP DEFAULT CURRENT_TIMESTAMP);"
     ]
@@ -68,6 +69,7 @@ def init_db(conn):
         "ALTER TABLE Document ADD COLUMN fileData TEXT;",
         "ALTER TABLE Document ADD COLUMN pageCount INTEGER DEFAULT 1;",
         "ALTER TABLE Document ADD COLUMN processedPages INTEGER DEFAULT 0;",
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_document_invoice_order ON DocumentInvoice(documentId, invoiceIndex);",
     ]
     for stmt in alter_statements:
         try:
@@ -1374,11 +1376,22 @@ def get_documents():
             ORDER BY d.createdAt DESC;
         """)
         rows = cursor.fetchall()
+        invoice_cursor = execute_query(conn, "SELECT id, documentId, invoiceIndex, pageStart, pageEnd, canonicalJson, confidenceScores, finalSubmittedData, status, overallConfidence FROM DocumentInvoice ORDER BY documentId, invoiceIndex;")
+        invoice_rows = invoice_cursor.fetchall()
         conn.close()
+
+        invoices_by_document = {}
+        for invoice in invoice_rows:
+          invoices_by_document.setdefault(invoice[1], []).append({
+            "id": invoice[0], "documentId": invoice[1], "invoiceIndex": invoice[2],
+            "pageStart": invoice[3], "pageEnd": invoice[4], "canonicalJson": invoice[5],
+            "confidenceScores": invoice[6], "finalSubmittedData": invoice[7],
+            "status": invoice[8], "overallConfidence": invoice[9]
+          })
         
         docs = []
         for r in rows:
-            docs.append({
+            doc = {
                 "id": r[0],
                 "fileName": r[1],
                 "fileSize": r[2],
@@ -1394,7 +1407,9 @@ def get_documents():
                     "confidenceScores": r[11],
                     "finalSubmittedData": r[12]
                 } if r[10] else None
-            })
+            }
+            doc["invoices"] = invoices_by_document.get(r[0], [])
+            docs.append(doc)
         return {"success": True, "documents": docs}
     except Exception as e:
         import traceback
@@ -1420,6 +1435,7 @@ def delete_document(doc_id: str):
                 pass
 
         execute_query(conn, "DELETE FROM Extraction WHERE documentId = ?", (doc_id,))
+        execute_query(conn, "DELETE FROM DocumentInvoice WHERE documentId = ?", (doc_id,))
         execute_query(conn, "DELETE FROM ReviewTask WHERE documentId = ?", (doc_id,))
         execute_query(conn, "DELETE FROM AuditLog WHERE documentId = ?", (doc_id,))
         execute_query(conn, "DELETE FROM Document WHERE id = ?", (doc_id,))
@@ -1638,27 +1654,63 @@ async def extraction_callback(doc_id: str, request: Request):
     except Exception as e:
         return JSONResponse({"error": f"Invalid JSON body: {e}"}, status_code=400)
 
-    extracted = body.get('extractedData') or body.get('canonicalJson')
+    invoice_payloads = body.get('invoices')
+    if not invoice_payloads and (body.get('extractedData') or body.get('canonicalJson')):
+      invoice_payloads = [{
+        "invoiceId": body.get('invoiceId'),
+        "invoiceIndex": body.get('invoiceIndex', 0),
+        "pageStart": body.get('pageStart'),
+        "pageEnd": body.get('pageEnd'),
+        "canonicalJson": body.get('extractedData') or body.get('canonicalJson'),
+        "confidenceScores": body.get('confidenceScores'),
+        "overallConfidence": body.get('overallConfidence')
+      }]
 
-    if not extracted:
+    if not invoice_payloads:
         return JSONResponse({"error": "Missing extracted payload", "received_keys": list(body.keys())}, status_code=400)
 
-    json_str = json.dumps(extracted)
     conn = None
     try:
         conn = get_db()
+        for index, invoice in enumerate(invoice_payloads):
+            extracted = invoice.get('canonicalJson') or invoice.get('extractedData') or {}
+            if isinstance(extracted, str):
+                try:
+                    extracted = json.loads(extracted)
+                except json.JSONDecodeError:
+                    pass
+            invoice_index = invoice.get('invoiceIndex', index)
+            invoice_id = invoice.get('invoiceId') or f"{doc_id}-invoice-{invoice_index + 1}"
+            json_str = json.dumps(extracted)
+            confidence_scores = invoice.get('confidenceScores')
+            if isinstance(confidence_scores, str):
+                try:
+                    confidence_scores = json.loads(confidence_scores)
+                except json.JSONDecodeError:
+                    pass
+            confidence_json = json.dumps(confidence_scores) if confidence_scores is not None else None
+            cursor = execute_query(conn, "SELECT 1 FROM DocumentInvoice WHERE id = ?", (invoice_id,))
+            if cursor.fetchone():
+                execute_query(conn, "UPDATE DocumentInvoice SET canonicalJson = ?, confidenceScores = ?, overallConfidence = ?, updatedAt = CURRENT_TIMESTAMP WHERE id = ?", (json_str, confidence_json, invoice.get('overallConfidence'), invoice_id))
+            else:
+                execute_query(conn, "INSERT INTO DocumentInvoice (id, documentId, invoiceIndex, pageStart, pageEnd, canonicalJson, confidenceScores, overallConfidence) VALUES (?, ?, ?, ?, ?, ?, ?, ?)", (invoice_id, doc_id, invoice_index, invoice.get('pageStart'), invoice.get('pageEnd'), json_str, confidence_json, invoice.get('overallConfidence')))
 
-        # Check if Extraction row exists for this document
-        cursor = execute_query(conn, "SELECT 1 FROM Extraction WHERE documentId=?", (doc_id,))
-        if cursor.fetchone():
-            execute_query(conn, "UPDATE Extraction SET canonicalJson = ? WHERE documentId = ?;", (json_str, doc_id))
-        else:
-            execute_query(conn, "INSERT INTO Extraction (documentId, canonicalJson) VALUES (?, ?);", (doc_id, json_str))
+            # Preserve the document-level record for existing consumers.
+            cursor = execute_query(conn, "SELECT 1 FROM Extraction WHERE documentId=?", (doc_id,))
+            if not cursor.fetchone():
+                execute_query(conn, "INSERT INTO Extraction (documentId, canonicalJson) VALUES (?, ?)", (doc_id, json_str))
 
-        execute_query(conn, "UPDATE Document SET status = 'EXTRACTED', processedPages = COALESCE(pageCount, 1) WHERE id = ?;", (doc_id,))
+        try:
+          expected_count = int(body.get('invoiceCount') or len(invoice_payloads))
+        except (TypeError, ValueError):
+          expected_count = len(invoice_payloads)
+        count_cursor = execute_query(conn, "SELECT COUNT(*) FROM DocumentInvoice WHERE documentId = ?", (doc_id,))
+        received_count = count_cursor.fetchone()[0]
+        is_complete = received_count >= expected_count
+        execute_query(conn, "UPDATE Document SET status = ?, processedPages = CASE WHEN ? THEN COALESCE(pageCount, 1) ELSE processedPages END WHERE id = ?", ('EXTRACTED' if is_complete else 'PREPROCESSED', is_complete, doc_id))
         conn.commit()
 
-        return {"success": True, "reviewUrl": f"/documents/{doc_id}/review"}
+        return {"success": True, "invoiceCount": received_count, "expectedInvoiceCount": expected_count, "complete": is_complete, "reviewUrl": f"/documents/{doc_id}/review"}
 
     except Exception as e:
         if conn:
