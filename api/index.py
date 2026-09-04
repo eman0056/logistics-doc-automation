@@ -1500,16 +1500,13 @@ async def upload_documents(request: Request):
                 "callbackUrl": f"{app_base_url}/api/documents/{doc_id}/extraction/callback"
             }
             
-            threading.Thread(target=trigger_webhook, args=(webhook_url, payload), daemon=True).start()
-            
             conn = get_db()
-            execute_query(conn, "INSERT INTO Document (id, fileName, storagePath, status, pageCount, processedPages) VALUES (?, ?, ?, 'PREPROCESSED', ?, 0)", (doc_id, file_item.filename, storage_path, page_count))
-            
-            # Now update the fileData column
-            execute_query(conn, "UPDATE Document SET fileData = ? WHERE id = ?", (file_b64, doc_id))
+            execute_query(conn, "INSERT INTO Document (id, fileName, fileSize, mimeType, storagePath, status, pageCount, processedPages, fileData) VALUES (?, ?, ?, ?, ?, 'PREPROCESSED', ?, 0, ?)", (doc_id, file_item.filename, len(file_bytes), file_item.content_type or 'application/octet-stream', storage_path, page_count, file_b64))
             
             conn.commit()
             conn.close()
+            # Persist the file before n8n can call back or request it.
+            threading.Thread(target=trigger_webhook, args=(webhook_url, payload), daemon=True).start()
             results.append(doc_id)
             page_counts[doc_id] = page_count
             
