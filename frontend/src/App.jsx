@@ -633,7 +633,14 @@ function App() {
             <div className="card preview-panel">
               <h3 className="section-title" style={{ color: '#fff', letterSpacing: '0.1em' }}>Original Document</h3>
               <div className="preview-box">
-                <img src={`/api/documents/${docId}/file`} alt="Document Preview" onError={(e) => { e.currentTarget.src = 'https://placehold.co/600x800/1e293b/475569?text=No+Preview+Available'; }} />
+                {doc.fileName?.toLowerCase().endsWith('.pdf') ? (
+                  <>
+                    <iframe className="document-scroll-viewer" src={`/api/documents/${docId}/file`} title="Original PDF document" />
+                    <a className="document-open-fallback" href={`/api/documents/${docId}/file`} target="_blank" rel="noreferrer">Open original document</a>
+                  </>
+                ) : (
+                  <img src={`/api/documents/${docId}/file`} alt="Document Preview" onError={(e) => { e.currentTarget.src = 'https://placehold.co/600x800/1e293b/475569?text=No+Preview+Available'; }} />
+                )}
               </div>
             </div>
 

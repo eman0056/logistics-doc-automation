@@ -1522,7 +1522,7 @@ def get_document_file(doc_id: str):
     import base64
     from fastapi.responses import Response
     conn = get_db()
-    cursor = execute_query(conn, "SELECT fileData, fileName FROM Document WHERE id = ?", (doc_id,))
+    cursor = execute_query(conn, "SELECT fileData, fileName, mimeType FROM Document WHERE id = ?", (doc_id,))
     row = cursor.fetchone()
     conn.close()
     
@@ -1531,12 +1531,13 @@ def get_document_file(doc_id: str):
         
     file_data_b64 = row[0]
     file_name = row[1]
+    mime_type = row[2] or "application/octet-stream"
     
     try:
         file_bytes = base64.b64decode(file_data_b64)
-        media_type = "application/pdf" if file_name.lower().endswith(".pdf") else "image/jpeg"
-        if file_name.lower().endswith(".png"): media_type = "image/png"
-        return Response(content=file_bytes, media_type=media_type)
+        if file_name and file_name.lower().endswith(".pdf"):
+            mime_type = "application/pdf"
+        return Response(content=file_bytes, media_type=mime_type, headers={"Content-Disposition": f'inline; filename="{file_name or doc_id}"'})
     except Exception:
         return JSONResponse({"error": "Failed to decode file"}, status_code=500)
 
