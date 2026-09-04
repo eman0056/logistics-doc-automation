@@ -526,6 +526,8 @@ function App() {
     const [loadingDoc, setLoadingDoc] = useState(true);
     const [processing, setProcessing] = useState(false);
     const [selectedInvoiceIndex, setSelectedInvoiceIndex] = useState(0);
+    const [invoiceDrafts, setInvoiceDrafts] = useState({});
+    const [savingInvoice, setSavingInvoice] = useState(false);
 
     useEffect(() => {
       let isMounted = true;
@@ -565,6 +567,26 @@ function App() {
       return undefined;
     }, [doc, docId]);
 
+    useEffect(() => {
+      if (!doc) return;
+      const records = doc.invoices?.length
+        ? doc.invoices
+        : [{ id: `${doc.id}-invoice-1`, canonicalJson: doc.extraction?.canonicalJson, finalSubmittedData: doc.extraction?.finalSubmittedData }];
+      setInvoiceDrafts((current) => {
+        const next = { ...current };
+        records.forEach((invoice) => {
+          if (!Object.prototype.hasOwnProperty.call(next, invoice.id)) {
+            try {
+              next[invoice.id] = JSON.parse(invoice.finalSubmittedData || invoice.canonicalJson || '{}');
+            } catch (error) {
+              next[invoice.id] = {};
+            }
+          }
+        });
+        return next;
+      });
+    }, [doc]);
+
     if (loadingDoc) return <><>{nav}</><main className="page"><div className="card upload-panel">Loading review...</div></main></>;
 
     if (!doc) return <><>{nav}</><main className="page"><div className="card upload-panel">Document not found.</div></main></>;
@@ -574,15 +596,41 @@ function App() {
       : [{ id: `${doc.id}-invoice-1`, invoiceIndex: 0, canonicalJson: doc.extraction?.canonicalJson, finalSubmittedData: doc.extraction?.finalSubmittedData }];
     const activeInvoiceIndex = Math.min(selectedInvoiceIndex, Math.max(invoiceRecords.length - 1, 0));
     const selectedInvoice = invoiceRecords[activeInvoiceIndex] || invoiceRecords[0];
-    let canonical = {};
-    try {
-      canonical = JSON.parse(selectedInvoice?.finalSubmittedData || selectedInvoice?.canonicalJson || '{}');
-    } catch (error) {
-      canonical = {};
-    }
+    const parseInvoiceData = (invoice) => {
+      try {
+        return JSON.parse(invoice?.finalSubmittedData || invoice?.canonicalJson || '{}');
+      } catch (error) {
+        return {};
+      }
+    };
+    const canonical = invoiceDrafts[selectedInvoice?.id] || parseInvoiceData(selectedInvoice);
 
     const fieldEntries = Object.entries(canonical);
     const isEmpty = fieldEntries.length === 0;
+
+    const updateInvoiceField = (key, value) => {
+      setInvoiceDrafts((current) => ({
+        ...current,
+        [selectedInvoice.id]: { ...(current[selectedInvoice.id] || {}), [key]: value }
+      }));
+    };
+
+    const saveInvoice = async () => {
+      setSavingInvoice(true);
+      try {
+        const response = await fetch(`${API}/documents/${docId}/review`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ invoiceId: selectedInvoice.id, editedData: canonical })
+        });
+        const result = await response.json();
+        if (!response.ok || !result.success) throw new Error(result.error || 'Unable to save invoice.');
+      } catch (error) {
+        alert(error.message || 'Unable to save invoice.');
+      } finally {
+        setSavingInvoice(false);
+      }
+    };
 
     const renderFieldInputs = () => {
       if (isEmpty) {
@@ -604,7 +652,10 @@ function App() {
               <input
                 className="field-input"
                 value={typeof value === 'object' ? JSON.stringify(value) : String(value ?? '')}
-                onChange={() => {}}
+                onChange={(event) => {
+                  const nextValue = typeof value === 'object' ? (() => { try { return JSON.parse(event.target.value); } catch (error) { return event.target.value; } })() : event.target.value;
+                  updateInvoiceField(key, nextValue);
+                }}
               />
             </div>
           ))}
@@ -624,7 +675,7 @@ function App() {
             </div>
             <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap' }}>
               <a href="/documents" className="secondary-btn">Discard</a>
-              {!isEmpty && <button className="primary-btn">Save & Approve</button>}
+              {!isEmpty && <button className="primary-btn" onClick={saveInvoice} disabled={savingInvoice}>{savingInvoice ? 'Saving...' : 'Save & Approve'}</button>}
               {!isEmpty && <button className="secondary-btn">Generate Invoice</button>}
             </div>
           </div>
@@ -632,15 +683,23 @@ function App() {
           <div className="review-page">
             <div className="card preview-panel">
               <h3 className="section-title" style={{ color: '#fff', letterSpacing: '0.1em' }}>Original Document</h3>
-              <div className="preview-box">
-                {doc.fileName?.toLowerCase().endsWith('.pdf') ? (
-                  <>
-                    <iframe className="document-scroll-viewer" src={`/api/documents/${docId}/file`} title="Original PDF document" />
-                    <a className="document-open-fallback" href={`/api/documents/${docId}/file`} target="_blank" rel="noreferrer">Open original document</a>
-                  </>
-                ) : (
-                  <img src={`/api/documents/${docId}/file`} alt="Document Preview" onError={(e) => { e.currentTarget.src = 'https://placehold.co/600x800/1e293b/475569?text=No+Preview+Available'; }} />
-                )}
+              <div className="invoice-preview-list">
+                {invoiceRecords.map((invoice, index) => (
+                  <button key={invoice.id} type="button" className={`invoice-preview-item${index === activeInvoiceIndex ? ' active' : ''}`} onClick={() => setSelectedInvoiceIndex(index)}>
+                    <span>Invoice {index + 1}</span>
+                    <small>{invoice.pageStart ? `Pages ${invoice.pageStart}-${invoice.pageEnd || invoice.pageStart}` : `Page ${index + 1}`}</small>
+                  </button>
+                ))}
+                <div className="preview-box">
+                  {doc.fileName?.toLowerCase().endsWith('.pdf') ? (
+                    <>
+                      <iframe className="document-scroll-viewer" src={`/api/documents/${docId}/file#page=${selectedInvoice?.pageStart || activeInvoiceIndex + 1}`} title={`Invoice ${activeInvoiceIndex + 1} preview`} />
+                      <a className="document-open-fallback" href={`/api/documents/${docId}/file#page=${selectedInvoice?.pageStart || activeInvoiceIndex + 1}`} target="_blank" rel="noreferrer">Open original document</a>
+                    </>
+                  ) : (
+                    <img src={`/api/documents/${docId}/file`} alt="Document Preview" onError={(e) => { e.currentTarget.src = 'https://placehold.co/600x800/1e293b/475569?text=No+Preview+Available'; }} />
+                  )}
+                </div>
               </div>
             </div>
 

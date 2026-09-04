@@ -378,6 +378,38 @@ img {
   padding: 1.5rem;
 }
 
+.invoice-preview-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.65rem;
+  max-height: 820px;
+  overflow-y: auto;
+  padding-right: 0.35rem;
+}
+
+.invoice-preview-item {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  width: 100%;
+  padding: 0.8rem 1rem;
+  border: 1px solid var(--border);
+  border-radius: 0.85rem;
+  background: var(--panel-alt);
+  color: var(--text-primary);
+  cursor: pointer;
+  text-align: left;
+}
+
+.invoice-preview-item.active {
+  border-color: var(--primary);
+  background: rgba(11, 143, 211, 0.16);
+}
+
+.invoice-preview-item small {
+  color: var(--text-secondary);
+}
+
 .preview-box {
   border: 1px solid var(--border);
   background: #0b1620;

@@ -1591,7 +1591,11 @@ async def save_review(doc_id: str, request: Request):
 
     json_str = json.dumps(edited_data)
     conn = get_db()
-    execute_query(conn, "UPDATE Extraction SET finalSubmittedData = ? WHERE documentId = ?;", (json_str, doc_id))
+    invoice_id = body.get('invoiceId')
+    if invoice_id:
+      execute_query(conn, "UPDATE DocumentInvoice SET finalSubmittedData = ?, status = 'APPROVED', updatedAt = CURRENT_TIMESTAMP WHERE id = ? AND documentId = ?;", (json_str, invoice_id, doc_id))
+    else:
+      execute_query(conn, "UPDATE Extraction SET finalSubmittedData = ? WHERE documentId = ?;", (json_str, doc_id))
     execute_query(conn, "UPDATE Document SET status = 'APPROVED' WHERE id = ?;", (doc_id,))
     conn.commit()
     conn.close()
