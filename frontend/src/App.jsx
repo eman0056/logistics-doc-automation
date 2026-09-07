@@ -619,6 +619,7 @@ function App() {
       return header.invoiceNumber || header.invoiceId || header.documentNumber || header.invoiceNo || '';
     };
     const parseInvoiceData = (invoice) => {
+      if (invoice?.extractedData && typeof invoice.extractedData === 'object') return invoice.extractedData;
       try {
         return JSON.parse(invoice?.finalSubmittedData || invoice?.canonicalJson || '{}');
       } catch (error) {
@@ -730,7 +731,7 @@ function App() {
 
             <div className="card editor-panel">
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap' }}>
-                <h3 className="section-title" style={{ color: '#fff', letterSpacing: '0.1em', margin: 0 }}>Dynamically Extracted Fields</h3>
+                <h3 className="section-title" style={{ color: '#fff', letterSpacing: '0.1em', margin: 0 }}>Invoice {activeInvoiceIndex + 1} — Extracted Fields</h3>
                 {invoiceRecords.length > 1 && (
                   <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
                     <button className="secondary-btn" type="button" disabled={activeInvoiceIndex === 0} onClick={() => setSelectedInvoiceIndex(activeInvoiceIndex - 1)}>Previous</button>

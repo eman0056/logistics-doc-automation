@@ -731,7 +731,9 @@ def _send_spa_html(path):
       const selectedInvoice = invoiceRecords[requestedInvoiceIndex];
       let canonical = {};
 
-      if (selectedInvoice?.finalSubmittedData || selectedInvoice?.canonicalJson) {
+      if (selectedInvoice?.extractedData && typeof selectedInvoice.extractedData === 'object') {
+        canonical = selectedInvoice.extractedData;
+      } else if (selectedInvoice?.finalSubmittedData || selectedInvoice?.canonicalJson) {
         try { canonical = JSON.parse(selectedInvoice.finalSubmittedData || selectedInvoice.canonicalJson || '{}'); } catch(e) {}
       } else if (doc.extraction?.finalSubmittedData) {
         try { canonical = JSON.parse(doc.extraction.finalSubmittedData); } catch(e) {}
@@ -1419,6 +1421,7 @@ def get_documents():
             "id": invoice[0], "documentId": invoice[1], "invoiceIndex": invoice[2],
             "pageStart": invoice[3], "pageEnd": invoice[4], "rawOcrText": invoice[5], "canonicalJson": invoice[6],
             "confidenceScores": invoice[7], "finalSubmittedData": invoice[8],
+            "extractedData": invoice_data,
             "status": invoice[9], "overallConfidence": invoice[10],
             "invoiceNumber": invoice_header.get('invoiceNumber') or invoice_header.get('invoiceId') or invoice_header.get('documentNumber') or invoice_header.get('invoiceNo')
           })
