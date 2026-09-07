@@ -1757,6 +1757,18 @@ async def extraction_callback(doc_id: str, request: Request):
                     extracted = json.loads(extracted)
                 except json.JSONDecodeError:
                     pass
+            if isinstance(extracted, dict) and isinstance(extracted.get('invoices'), list):
+              extracted = extracted['invoices'][0] if extracted['invoices'] else {}
+            if isinstance(extracted, dict):
+              extracted = {
+                **extracted,
+                "invoiceHeader": extracted.get('invoiceHeader') or extracted.get('invoice_header') or {},
+                "shipmentDetails": extracted.get('shipmentDetails') or extracted.get('shipment_details') or extracted.get('shipmentDetail') or [],
+                "chargeLineItems": extracted.get('chargeLineItems') or extracted.get('charge_line_items') or []
+              }
+              invoice_header = extracted['invoiceHeader']
+              if isinstance(invoice_header, dict):
+                invoice_header.setdefault('invoiceNumber', extracted.get('invoice_number') or extracted.get('invoiceNumber') or f"Invoice_{int(invoice.get('invoiceIndex', index)) + 1}")
             invoice_index = invoice.get('invoiceIndex', index)
             invoice_id = invoice.get('invoiceId') or f"{doc_id}-invoice-{invoice_index + 1}"
             json_str = json.dumps(extracted)
