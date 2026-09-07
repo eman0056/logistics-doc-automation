@@ -19,7 +19,7 @@
     {
       "parameters": {
         "requestMethod": "GET",
-        "url": "={{ (($json.body.callbackUrl || 'http://localhost:3000/api/documents/' + $json.body.documentId + '/extraction/callback').replace(/\\/api\\/documents\\/[^/]+\\/extraction\\/callback$/, '') + '/' + (($json.body.storagePath || '').replace(/^\\/+/, ''))).replace(/\\/\\/+/, '/') }}",
+        "url": "={{ ($json.body.callbackUrl || 'http://localhost:3000/api/documents/' + $json.body.documentId + '/extraction/callback').replace(/\\/api\\/documents\\/[^/]+\\/extraction\\/callback$/, '') + '/' + (($json.body.storagePath || '').replace(/^\\/+/, '')) }}",
         "options": {}
       },
       "name": "Node 2: Read Document File",
