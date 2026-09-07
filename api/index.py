@@ -1516,10 +1516,12 @@ async def upload_documents(request: Request):
             conn.commit()
             conn.close()
 
-            # Write a real file alongside the DB record so direct HTTP requests and n8n file readers can access it reliably.
-            disk_path = os.path.normpath(os.path.join(BASE_DIR, storage_path))
-            os.makedirs(os.path.dirname(disk_path), exist_ok=True)
-            with open(disk_path, 'wb') as fh:
+            # Vercel's deployment filesystem is read-only. The database copy is
+            # sufficient for the API route and n8n can read that route directly.
+            if not os.getenv("VERCEL"):
+              disk_path = os.path.normpath(os.path.join(BASE_DIR, storage_path))
+              os.makedirs(os.path.dirname(disk_path), exist_ok=True)
+              with open(disk_path, 'wb') as fh:
                 fh.write(file_bytes)
 
             threading.Thread(target=trigger_webhook, args=(webhook_url, payload), daemon=True).start()
