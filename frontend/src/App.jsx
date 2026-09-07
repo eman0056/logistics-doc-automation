@@ -596,6 +596,20 @@ function App() {
       : [{ id: `${doc.id}-invoice-1`, invoiceIndex: 0, canonicalJson: doc.extraction?.canonicalJson, finalSubmittedData: doc.extraction?.finalSubmittedData }];
     const activeInvoiceIndex = Math.min(selectedInvoiceIndex, Math.max(invoiceRecords.length - 1, 0));
     const selectedInvoice = invoiceRecords[activeInvoiceIndex] || invoiceRecords[0];
+    const previewUrl = `/api/documents/${docId}/file`;
+    const isPdfDocument = () => {
+      const mimeType = (doc?.mimeType || '').toLowerCase();
+      const fileName = (doc?.fileName || '').toLowerCase();
+      const storagePath = (doc?.storagePath || '').toLowerCase();
+      return (
+        mimeType.includes('pdf') ||
+        fileName.endsWith('.pdf') ||
+        storagePath.endsWith('.pdf') ||
+        fileName.endsWith('.pdf?') ||
+        fileName.endsWith('.pdf#') ||
+        mimeType.includes('application/pdf')
+      );
+    };
     const getInvoiceNumber = (invoice) => {
       if (invoice?.invoiceNumber) return invoice.invoiceNumber;
       const data = parseInvoiceData(invoice);
@@ -702,13 +716,13 @@ function App() {
                   </button>
                 ))}
                 <div className="preview-box" key={`${selectedInvoice?.id || 'invoice'}-${selectedInvoice?.pageStart || activeInvoiceIndex + 1}`}>
-                  {doc.fileName?.toLowerCase().endsWith('.pdf') ? (
+                  {isPdfDocument() ? (
                     <>
-                      <iframe className="document-scroll-viewer" src={`/api/documents/${docId}/file#page=${selectedInvoice?.pageStart || activeInvoiceIndex + 1}`} title={`Invoice ${activeInvoiceIndex + 1} preview`} />
-                      <a className="document-open-fallback" href={`/api/documents/${docId}/file#page=${selectedInvoice?.pageStart || activeInvoiceIndex + 1}`} target="_blank" rel="noreferrer">Open original document</a>
+                      <iframe className="document-scroll-viewer" src={`${previewUrl}#page=${selectedInvoice?.pageStart || activeInvoiceIndex + 1}`} title={`Invoice ${activeInvoiceIndex + 1} preview`} />
+                      <a className="document-open-fallback" href={`${previewUrl}#page=${selectedInvoice?.pageStart || activeInvoiceIndex + 1}`} target="_blank" rel="noreferrer">Open original document</a>
                     </>
                   ) : (
-                    <img src={`/api/documents/${docId}/file`} alt="Document Preview" onError={(e) => { e.currentTarget.src = 'https://placehold.co/600x800/1e293b/475569?text=No+Preview+Available'; }} />
+                    <img src={previewUrl} alt="Document Preview" onError={(e) => { e.currentTarget.src = 'https://placehold.co/600x800/1e293b/475569?text=No+Preview+Available'; }} />
                   )}
                 </div>
               </div>

@@ -1543,9 +1543,19 @@ def get_document_file(doc_id: str):
     
     try:
         file_bytes = base64.b64decode(file_data_b64)
-        if file_name and file_name.lower().endswith(".pdf"):
+        cleaned_name = (file_name or "").lower()
+        cleaned_mime = (mime_type or "").lower()
+        is_pdf_by_signature = file_bytes.lstrip().startswith(b"%PDF")
+        is_pdf_by_name = cleaned_name.endswith(".pdf")
+        is_pdf_by_mime = "pdf" in cleaned_mime
+        is_pdf = is_pdf_by_signature or is_pdf_by_name or is_pdf_by_mime
+        if is_pdf:
             mime_type = "application/pdf"
-        return Response(content=file_bytes, media_type=mime_type, headers={"Content-Disposition": f'inline; filename="{file_name or doc_id}"'})
+        return Response(
+            content=file_bytes,
+            media_type=mime_type,
+            headers={"Content-Disposition": f'inline; filename="{file_name or doc_id}"'}
+        )
     except Exception:
         return JSONResponse({"error": "Failed to decode file"}, status_code=500)
 
