@@ -1513,10 +1513,15 @@ async def upload_documents(request: Request):
             
             conn = get_db()
             execute_query(conn, "INSERT INTO Document (id, fileName, fileSize, mimeType, storagePath, status, pageCount, processedPages, fileData) VALUES (?, ?, ?, ?, ?, 'PREPROCESSED', ?, 0, ?)", (doc_id, file_item.filename, len(file_bytes), file_item.content_type or 'application/octet-stream', storage_path, page_count, file_b64))
-            
             conn.commit()
             conn.close()
-            # Persist the file before n8n can call back or request it.
+
+            # Write a real file alongside the DB record so direct HTTP requests and n8n file readers can access it reliably.
+            disk_path = os.path.normpath(os.path.join(BASE_DIR, storage_path))
+            os.makedirs(os.path.dirname(disk_path), exist_ok=True)
+            with open(disk_path, 'wb') as fh:
+                fh.write(file_bytes)
+
             threading.Thread(target=trigger_webhook, args=(webhook_url, payload), daemon=True).start()
             results.append(doc_id)
             page_counts[doc_id] = page_count
@@ -1530,17 +1535,30 @@ def get_document_file(doc_id: str):
     import base64
     from fastapi.responses import Response
     conn = get_db()
-    cursor = execute_query(conn, "SELECT fileData, fileName, mimeType FROM Document WHERE id = ?", (doc_id,))
+    cursor = execute_query(conn, "SELECT fileData, fileName, mimeType, storagePath FROM Document WHERE id = ?", (doc_id,))
     row = cursor.fetchone()
     conn.close()
-    
-    if not row or not row[0]:
+
+    file_data_b64 = row[0] if row else None
+    file_name = row[1] if row else None
+    mime_type = row[2] or "application/octet-stream" if row else "application/octet-stream"
+    storage_path = row[3] if row else None
+
+    if not row and not storage_path:
         return JSONResponse({"error": "File not found"}, status_code=404)
-        
-    file_data_b64 = row[0]
-    file_name = row[1]
-    mime_type = row[2] or "application/octet-stream"
-    
+
+    if not file_data_b64 and storage_path:
+        disk_path = os.path.normpath(os.path.join(BASE_DIR, storage_path))
+        if os.path.exists(disk_path):
+            try:
+                with open(disk_path, 'rb') as fh:
+                    file_data_b64 = base64.b64encode(fh.read()).decode('utf-8')
+            except Exception:
+                file_data_b64 = None
+
+    if not file_data_b64:
+        return JSONResponse({"error": "File not found"}, status_code=404)
+
     try:
         file_bytes = base64.b64decode(file_data_b64)
         cleaned_name = (file_name or "").lower()

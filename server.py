@@ -91,6 +91,9 @@ class LogisticsAutomationHandler(http.server.BaseHTTPRequestHandler):
         
         elif path.startswith("/uploads/"):
             return self._serve_upload_file(path)
+        elif path.startswith("/api/documents/") and path.endswith("/file"):
+            doc_id = path.split("/")[3]
+            return self._serve_document_file(doc_id)
         return self._send_spa_html(path)
 
     def do_POST(self):
@@ -1340,8 +1343,13 @@ class LogisticsAutomationHandler(http.server.BaseHTTPRequestHandler):
             <div class="xl:col-span-5 bg-slate-900 border border-slate-800 p-6 rounded-2xl shadow-2xl space-y-4">
               <h3 class="text-sm font-bold text-slate-300 border-b border-slate-800 pb-3">Original Document</h3>
               <div class="bg-slate-950 rounded-xl overflow-hidden border border-slate-800 h-[600px]">
-                <img src="/api/documents/${docId}/file" alt="Document Preview" class="w-full h-full object-contain p-2"
-                  onerror="this.src='https://placehold.co/600x800/1e293b/475569?text=No+Preview+Available'" />
+                ${((doc.mimeType || '').toLowerCase().includes('pdf') || (doc.fileName || '').toLowerCase().endsWith('.pdf')) ? `
+                  <iframe src="/api/documents/${docId}/file#page=1" title="Original document preview" class="w-full h-full border-0" style="background:#fff;"></iframe>
+                  <a href="/api/documents/${docId}/file#page=1" target="_blank" class="block text-center text-xs text-sky-400 mt-3 hover:underline">Open original document</a>
+                ` : `
+                  <img src="/api/documents/${docId}/file" alt="Document Preview" class="w-full h-full object-contain p-2"
+                    onerror="this.src='https://placehold.co/600x800/1e293b/475569?text=No+Preview+Available'" />
+                `}
               </div>
             </div>
 
@@ -1763,14 +1771,39 @@ class LogisticsAutomationHandler(http.server.BaseHTTPRequestHandler):
 </html>"""
         self._send_html(html_code)
 
-def run_server():
-    with socketserver.TCPServer(("", PORT), LogisticsAutomationHandler) as httpd:
-        print(f"Logistics Document Automation PoC Web Server running at http://localhost:{PORT}")
-        httpd.serve_forever()
+    def _serve_document_file(self, doc_id):
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        cursor.execute("SELECT fileName, mimeType, storagePath FROM Document WHERE id = ?;", (doc_id,))
+        row = cursor.fetchone()
+        conn.close()
 
-if __name__ == "__main__":
-    run_server()
+        if not row:
+            self.send_response(404)
+            self.end_headers()
+            self.wfile.write(b"File not found")
+            return
 
+        file_name, mime_type, storage_path = row
+        file_path = os.path.normpath(os.path.join(BASE_DIR, storage_path))
+        if not os.path.exists(file_path):
+            self.send_response(404)
+            self.end_headers()
+            self.wfile.write(b"File not found")
+            return
+
+        with open(file_path, "rb") as f:
+            content = f.read()
+
+        self.send_response(200)
+        content_type = mime_type or "application/octet-stream"
+        if (file_name or "").lower().endswith(".pdf") or content.lstrip().startswith(b"%PDF"):
+            content_type = "application/pdf"
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Disposition", f'inline; filename="{file_name or doc_id}"')
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.end_headers()
+        self.wfile.write(content)
 
     def _serve_upload_file(self, path):
         file_path = os.path.join(BASE_DIR, path.lstrip('/'))
@@ -1788,3 +1821,12 @@ if __name__ == "__main__":
             self.send_response(404)
             self.end_headers()
             self.wfile.write(b"File not found")
+
+
+def run_server():
+    with socketserver.TCPServer(("", PORT), LogisticsAutomationHandler) as httpd:
+        print(f"Logistics Document Automation PoC Web Server running at http://localhost:{PORT}")
+        httpd.serve_forever()
+
+if __name__ == "__main__":
+    run_server()
