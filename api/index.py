@@ -721,9 +721,19 @@ def _send_spa_html(path):
       const d = await res.json();
       const doc = (d.documents || []).find(item => item.id === docId) || {};
 
+      const invoiceRecords = Array.isArray(doc.invoices) && doc.invoices.length
+        ? doc.invoices
+        : [{ id: `${docId}-invoice-1`, invoiceIndex: 0, canonicalJson: doc.extraction?.canonicalJson, finalSubmittedData: doc.extraction?.finalSubmittedData }];
+      const requestedInvoiceIndex = Math.max(0, Math.min(
+        parseInt(new URLSearchParams(window.location.search).get('invoice') || '0', 10) || 0,
+        invoiceRecords.length - 1
+      ));
+      const selectedInvoice = invoiceRecords[requestedInvoiceIndex];
       let canonical = {};
 
-      if (doc.extraction?.finalSubmittedData) {
+      if (selectedInvoice?.finalSubmittedData || selectedInvoice?.canonicalJson) {
+        try { canonical = JSON.parse(selectedInvoice.finalSubmittedData || selectedInvoice.canonicalJson || '{}'); } catch(e) {}
+      } else if (doc.extraction?.finalSubmittedData) {
         try { canonical = JSON.parse(doc.extraction.finalSubmittedData); } catch(e) {}
       } else if (doc.extraction?.canonicalJson) {
         try { canonical = JSON.parse(doc.extraction.canonicalJson); } catch(e) {}
@@ -1015,20 +1025,27 @@ def _send_spa_html(path):
           <div class="grid grid-cols-1 xl:grid-cols-12 gap-8">
             <div class="xl:col-span-5 bg-slate-900 border border-slate-800 p-6 rounded-2xl shadow-2xl space-y-4">
               <h3 class="text-sm font-bold text-slate-300 border-b border-slate-800 pb-3">Original Document</h3>
-              <div class="bg-slate-950 rounded-xl overflow-hidden border border-slate-800 h-[600px]">
+              <div class="space-y-3">
+                ${invoiceRecords.length > 1 ? `<div class="space-y-2">${invoiceRecords.map((invoice, index) => `
+                  <a href="/documents/${docId}/review?invoice=${index}" class="block rounded-xl border ${index === requestedInvoiceIndex ? 'border-sky-400 bg-sky-500/15 text-white' : 'border-slate-800 bg-slate-950/60 text-slate-300'} px-4 py-3 transition-colors">
+                    <span class="font-semibold">Invoice ${index + 1}</span>
+                    <span class="ml-2 text-xs text-slate-400">${invoice.pageStart ? `Pages ${invoice.pageStart}-${invoice.pageEnd || invoice.pageStart}` : ''}</span>
+                  </a>`).join('')}</div>` : ''}
+                <div class="bg-slate-950 rounded-xl overflow-hidden border border-slate-800 h-[600px]">
                 ${isPdfDocument ? `
-                  <iframe src="/api/documents/${docId}/file#page=1" title="Original document preview" class="w-full h-full border-0" style="background:#fff;"></iframe>
-                  <a href="/api/documents/${docId}/file#page=1" target="_blank" rel="noopener" class="block text-center text-xs text-sky-400 mt-3 hover:underline">Open original document</a>
+                  <iframe src="/api/documents/${docId}/file#page=${selectedInvoice?.pageStart || requestedInvoiceIndex + 1}" title="Invoice ${requestedInvoiceIndex + 1} preview" class="w-full h-full border-0" style="background:#fff;"></iframe>
+                  <a href="/api/documents/${docId}/file#page=${selectedInvoice?.pageStart || requestedInvoiceIndex + 1}" target="_blank" rel="noopener" class="block text-center text-xs text-sky-400 mt-3 hover:underline">Open original document</a>
                 ` : `
                   <img src="/api/documents/${docId}/file" alt="Document Preview" class="w-full h-full object-contain p-2"
                     onerror="this.src='https://placehold.co/600x800/1e293b/475569?text=No+Preview+Available'" />
                 `}
+                </div>
               </div>
             </div>
 
             <div class="xl:col-span-7 bg-slate-900 border border-slate-800 p-8 rounded-2xl shadow-2xl space-y-6">
               <h3 class="text-base font-bold text-white border-b border-slate-800 pb-3 flex items-center gap-2">
-                <span class="text-sky-400">⚡</span> Dynamically Extracted Fields
+                <span class="text-sky-400">⚡</span> Invoice ${requestedInvoiceIndex + 1} — Extracted Fields
               </h3>
               <div class="bg-slate-950/50 p-6 rounded-xl border border-slate-800/50 space-y-5 max-h-[600px] overflow-y-auto">
                 ${fieldsHtml}
@@ -1107,7 +1124,7 @@ def _send_spa_html(path):
             const r = await fetch('/api/documents/' + docId + '/review', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ editedData: payload })
+              body: JSON.stringify({ invoiceId: selectedInvoice?.id, editedData: payload })
             });
             const rd = await r.json();
             if (rd.success) {
