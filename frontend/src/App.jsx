@@ -548,7 +548,8 @@ function App() {
     }, [docId]);
 
     useEffect(() => {
-      if (!doc || !doc.extraction || (doc.invoices?.length && !['EXTRACTED', 'IN_REVIEW', 'APPROVED', 'INVOICE_GENERATED'].includes(doc.status))) {
+      const invoicesPending = doc?.invoices?.some((invoice) => !invoice.extractionComplete || invoice.extractionStatus === 'PROCESSING');
+      if (!doc || !doc.extraction || invoicesPending || (doc.invoices?.length && !['EXTRACTED', 'IN_REVIEW', 'APPROVED', 'INVOICE_GENERATED'].includes(doc.status))) {
         const interval = setInterval(async () => {
           try {
             const statusRes = await fetch(`${API}/documents/${docId}/status`);
@@ -577,7 +578,7 @@ function App() {
         records.forEach((invoice) => {
           if (!Object.prototype.hasOwnProperty.call(next, invoice.id)) {
             try {
-              next[invoice.id] = JSON.parse(invoice.finalSubmittedData || invoice.canonicalJson || '{}');
+              next[invoice.id] = invoice.extractedData || JSON.parse(invoice.finalSubmittedData || invoice.canonicalJson || '{}');
             } catch (error) {
               next[invoice.id] = {};
             }
@@ -638,6 +639,16 @@ function App() {
       }));
     };
 
+    const updateInvoicePath = (path, value) => {
+      setInvoiceDrafts((current) => {
+        const next = JSON.parse(JSON.stringify(current[selectedInvoice.id] || {}));
+        let target = next;
+        path.slice(0, -1).forEach((part) => { target = target[part]; });
+        target[path[path.length - 1]] = value;
+        return { ...current, [selectedInvoice.id]: next };
+      });
+    };
+
     const saveInvoice = async () => {
       setSavingInvoice(true);
       try {
@@ -655,6 +666,40 @@ function App() {
       }
     };
 
+    const renderEditableNode = (value, path, label) => {
+      if (Array.isArray(value)) {
+        return (
+          <div className="section-block" key={path.join('.') || label}>
+            {label && <div className="section-title">{label}</div>}
+            {value.length === 0 && <div className="subtle-copy">No records found</div>}
+            {value.map((item, index) => (
+              <div className="nested-record" key={`${path.join('.')}-${index}`}>
+                <div className="field-label">{label ? `${label} ${index + 1}` : `Record ${index + 1}`}</div>
+                {renderEditableNode(item, [...path, index], '')}
+              </div>
+            ))}
+          </div>
+        );
+      }
+      if (value && typeof value === 'object') {
+        return (
+          <div className="field-grid" key={path.join('.') || label}>
+            {Object.entries(value).map(([key, child]) => renderEditableNode(child, [...path, key], key))}
+          </div>
+        );
+      }
+      return (
+        <div className="field-group" key={path.join('.')}>
+          <label className="field-label">{label || path[path.length - 1]}</label>
+          <input
+            className="field-input"
+            value={value === null || value === undefined ? '' : String(value)}
+            onChange={(event) => updateInvoicePath(path, event.target.value)}
+          />
+        </div>
+      );
+    };
+
     const renderFieldInputs = () => {
       if (isEmpty) {
         return (
@@ -667,23 +712,9 @@ function App() {
           </div>
         );
       }
-      return (
-        <div className="field-grid">
-          {fieldEntries.map(([key, value]) => (
-            <div key={key} className="field-group">
-              <label className="field-label">{key}</label>
-              <input
-                className="field-input"
-                value={typeof value === 'object' ? JSON.stringify(value) : String(value ?? '')}
-                onChange={(event) => {
-                  const nextValue = typeof value === 'object' ? (() => { try { return JSON.parse(event.target.value); } catch (error) { return event.target.value; } })() : event.target.value;
-                  updateInvoiceField(key, nextValue);
-                }}
-              />
-            </div>
-          ))}
-        </div>
-      );
+      return <div className="invoice-sections">
+        {fieldEntries.map(([key, value]) => renderEditableNode(value, [key], key))}
+      </div>;
     };
 
     return (
@@ -707,15 +738,17 @@ function App() {
             <div className="card preview-panel">
               <h3 className="section-title" style={{ color: '#fff', letterSpacing: '0.1em' }}>Original Document</h3>
               <div className="invoice-preview-list">
-                {invoiceRecords.map((invoice, index) => (
-                  <button key={invoice.id} type="button" className={`invoice-preview-item${index === activeInvoiceIndex ? ' active' : ''}`} onClick={() => setSelectedInvoiceIndex(index)}>
-                    <span>
-                      <strong>Invoice {index + 1}</strong>
-                      {getInvoiceNumber(invoice) && <small>{getInvoiceNumber(invoice)}</small>}
-                    </span>
-                    <small>{invoice.pageStart ? `Pages ${invoice.pageStart}-${invoice.pageEnd || invoice.pageStart}` : 'Pages unavailable'}</small>
-                  </button>
-                ))}
+                <div className="invoice-tab-bar">
+                  {invoiceRecords.map((invoice, index) => (
+                    <button key={invoice.id} type="button" className={`invoice-preview-item${index === activeInvoiceIndex ? ' active' : ''}`} onClick={() => setSelectedInvoiceIndex(index)}>
+                      <span>
+                        <strong>Invoice {index + 1}</strong>
+                        {getInvoiceNumber(invoice) && <small>{getInvoiceNumber(invoice)}</small>}
+                      </span>
+                      <small>{invoice.extractionComplete ? '✓ Extracted' : '⏳ Processing'}{invoice.pageStart ? ` · Pages ${invoice.pageStart}-${invoice.pageEnd || invoice.pageStart}` : ''}</small>
+                    </button>
+                  ))}
+                </div>
                 <div className="preview-box" key={`${selectedInvoice?.id || 'invoice'}-${selectedInvoice?.pageStart || activeInvoiceIndex + 1}`}>
                   {isPdfDocument() ? (
                     <>

@@ -383,16 +383,21 @@ img {
   display: flex;
   flex-direction: column;
   gap: 0.65rem;
-  max-height: 820px;
-  overflow-y: auto;
-  padding-right: 0.35rem;
+}
+
+.invoice-tab-bar {
+  display: flex;
+  gap: 0.65rem;
+  overflow-x: auto;
+  padding-bottom: 0.2rem;
 }
 
 .invoice-preview-item {
   display: flex;
   justify-content: space-between;
   gap: 1rem;
-  width: 100%;
+  min-width: 190px;
+  flex: 0 0 auto;
   padding: 0.8rem 1rem;
   border: 1px solid var(--border);
   border-radius: 0.85rem;

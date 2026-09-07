@@ -18,14 +18,31 @@
     },
     {
       "parameters": {
-        "requestMethod": "GET",
-        "url": "={{ ($json.body.callbackUrl || 'http://localhost:3000/api/documents/' + $json.body.documentId + '/extraction/callback').replace(/\\/api\\/documents\\/[^/]+\\/extraction\\/callback$/, '') + '/' + (($json.body.storagePath || '').replace(/^\\/+/, '')) }}",
-        "options": {}
+        "jsCode": "// Decode the upload payload locally. Vercel storage is not a durable n8n source.\nfor (const item of $input.all()) {\n  const body = item.json.body || item.json;\n  if (!body.fileBase64) throw new Error('Webhook payload is missing fileBase64.');\n  item.json = { ...item.json, ...body, rawText: body.rawOcrText || body.ocrText || '' };\n  item.binary = { data: { data: body.fileBase64, fileName: body.fileName || 'document.pdf', mimeType: body.mimeType || 'application/pdf' } };\n}\nreturn $input.all();"
       },
-      "name": "Node 2: Read Document File",
-      "type": "n8n-nodes-base.httpRequest",
+      "name": "Node 2: Decode Uploaded File",
+      "type": "n8n-nodes-base.code",
       "typeVersion": 1,
       "position": [420, 300]
+    },
+    {
+      "parameters": {
+        "operation": "pdf",
+        "binaryPropertyName": "data"
+      },
+      "name": "Node 2A: Extract PDF Text",
+      "type": "n8n-nodes-base.extractFromFile",
+      "typeVersion": 1,
+      "position": [540, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "for (const item of $input.all()) { item.json.rawText = item.json.rawText || item.json.text || item.json.data || ''; } return $input.all();"
+      },
+      "name": "Node 2B: Normalize OCR Text",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [600, 300]
     },
     {
       "parameters": {
@@ -119,14 +136,36 @@
       "main": [
         [
           {
-            "node": "Node 2: Read Document File",
+            "node": "Node 2: Decode Uploaded File",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "Node 2: Read Document File": {
+    "Node 2: Decode Uploaded File": {
+      "main": [
+        [
+          {
+            "node": "Node 2A: Extract PDF Text",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Node 2A: Extract PDF Text": {
+      "main": [
+        [
+          {
+            "node": "Node 2B: Normalize OCR Text",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Node 2B: Normalize OCR Text": {
       "main": [
         [
           {

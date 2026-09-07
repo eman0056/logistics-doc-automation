@@ -1423,6 +1423,8 @@ def get_documents():
             "confidenceScores": invoice[7], "finalSubmittedData": invoice[8],
             "extractedData": invoice_data,
             "status": invoice[9], "overallConfidence": invoice[10],
+            "extractionStatus": invoice[9] or "PENDING",
+            "extractionComplete": bool(invoice[6] or invoice[8]),
             "invoiceNumber": invoice_header.get('invoiceNumber') or invoice_header.get('invoiceId') or invoice_header.get('documentNumber') or invoice_header.get('invoiceNo')
           })
         
@@ -1743,6 +1745,20 @@ async def extraction_callback(doc_id: str, request: Request):
         "confidenceScores": body.get('confidenceScores'),
         "overallConfidence": body.get('overallConfidence')
       }]
+
+    if len(invoice_payloads or []) == 1:
+      wrapped = invoice_payloads[0].get('extractedData') or invoice_payloads[0].get('canonicalJson') or {}
+      if isinstance(wrapped, str):
+        try:
+          wrapped = json.loads(wrapped)
+        except json.JSONDecodeError:
+          wrapped = {}
+      if isinstance(wrapped, dict) and isinstance(wrapped.get('invoices'), list):
+        base = invoice_payloads[0]
+        invoice_payloads = [
+          {**base, **invoice, "extractedData": invoice, "invoiceIndex": invoice.get('invoiceIndex', index), "invoiceCount": len(wrapped['invoices'])}
+          for index, invoice in enumerate(wrapped['invoices'])
+        ]
 
     if not invoice_payloads:
         return JSONResponse({"error": "Missing extracted payload", "received_keys": list(body.keys())}, status_code=400)
