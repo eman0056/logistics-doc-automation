@@ -55,7 +55,7 @@
     },
     {
       "parameters": {
-        "requestMethod": "POST",
+        "method": "POST",
         "url": "https://api.openai.com/v1/chat/completions",
         "options": {},
         "headerParametersUi": {
@@ -99,9 +99,11 @@
     },
     {
       "parameters": {
-        "requestMethod": "POST",
+        "method": "POST",
         "url": "={{ $json.callbackUrl || ('http://localhost:3000/api/documents/' + $json.documentId + '/extraction/callback') }}",
-        "jsonParameters": true,
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ invoiceId: $json.invoiceId, invoiceIndex: $json.invoiceIndex, invoiceCount: $json.invoiceCount, pageStart: $json.pageStart, pageEnd: $json.pageEnd, rawOcrText: $json.rawOcrText, extractedData: $json.extractedData, confidenceScores: $json.confidenceScores, overallConfidence: $json.overallConfidence }) }}",
         "options": {},
         "headerParametersUi": {
           "parameter": [
@@ -110,24 +112,11 @@
               "value": "application/json"
             }
           ]
-        },
-        "bodyParametersUi": {
-          "parameter": [
-            { "name": "invoiceId", "value": "={{ $json.invoiceId }}" },
-            { "name": "invoiceIndex", "value": "={{ $json.invoiceIndex }}" },
-            { "name": "invoiceCount", "value": "={{ $json.invoiceCount }}" },
-            { "name": "pageStart", "value": "={{ $json.pageStart }}" },
-            { "name": "pageEnd", "value": "={{ $json.pageEnd }}" },
-            { "name": "rawOcrText", "value": "={{ $json.rawOcrText }}" },
-            { "name": "extractedData", "value": "={{ JSON.stringify($json.extractedData) }}" },
-            { "name": "confidenceScores", "value": "={{ JSON.stringify($json.confidenceScores) }}" },
-            { "name": "overallConfidence", "value": "={{ $json.overallConfidence }}" }
-          ]
         }
       },
       "name": "Node 6: Send Node.js Callback",
       "type": "n8n-nodes-base.httpRequest",
-      "typeVersion": 1,
+      "typeVersion": 4.3,
       "position": [1300, 300]
     }
   ],
