@@ -596,6 +596,14 @@ function App() {
       : [{ id: `${doc.id}-invoice-1`, invoiceIndex: 0, canonicalJson: doc.extraction?.canonicalJson, finalSubmittedData: doc.extraction?.finalSubmittedData }];
     const activeInvoiceIndex = Math.min(selectedInvoiceIndex, Math.max(invoiceRecords.length - 1, 0));
     const selectedInvoice = invoiceRecords[activeInvoiceIndex] || invoiceRecords[0];
+    const getInvoiceNumber = (invoice) => {
+      if (invoice?.invoiceNumber) return invoice.invoiceNumber;
+      const data = parseInvoiceData(invoice);
+      const header = data.invoiceHeader && typeof data.invoiceHeader === 'object' && !Array.isArray(data.invoiceHeader)
+        ? data.invoiceHeader
+        : data;
+      return header.invoiceNumber || header.invoiceId || header.documentNumber || header.invoiceNo || '';
+    };
     const parseInvoiceData = (invoice) => {
       try {
         return JSON.parse(invoice?.finalSubmittedData || invoice?.canonicalJson || '{}');
@@ -686,11 +694,14 @@ function App() {
               <div className="invoice-preview-list">
                 {invoiceRecords.map((invoice, index) => (
                   <button key={invoice.id} type="button" className={`invoice-preview-item${index === activeInvoiceIndex ? ' active' : ''}`} onClick={() => setSelectedInvoiceIndex(index)}>
-                    <span>Invoice {index + 1}</span>
-                    <small>{invoice.pageStart ? `Pages ${invoice.pageStart}-${invoice.pageEnd || invoice.pageStart}` : `Page ${index + 1}`}</small>
+                    <span>
+                      <strong>Invoice {index + 1}</strong>
+                      {getInvoiceNumber(invoice) && <small>{getInvoiceNumber(invoice)}</small>}
+                    </span>
+                    <small>{invoice.pageStart ? `Pages ${invoice.pageStart}-${invoice.pageEnd || invoice.pageStart}` : 'Pages unavailable'}</small>
                   </button>
                 ))}
-                <div className="preview-box">
+                <div className="preview-box" key={`${selectedInvoice?.id || 'invoice'}-${selectedInvoice?.pageStart || activeInvoiceIndex + 1}`}>
                   {doc.fileName?.toLowerCase().endsWith('.pdf') ? (
                     <>
                       <iframe className="document-scroll-viewer" src={`/api/documents/${docId}/file#page=${selectedInvoice?.pageStart || activeInvoiceIndex + 1}`} title={`Invoice ${activeInvoiceIndex + 1} preview`} />
@@ -723,8 +734,10 @@ function App() {
                   ))}
                 </div>
               )}
-              {renderFieldInputs()}
-              {processing && <div className="progress-box mt-4">The n8n workflow is extracting and validating document data automatically.</div>}
+              <div className="editor-scroll-content">
+                {renderFieldInputs()}
+                {processing && <div className="progress-box mt-4">The n8n workflow is extracting and validating document data automatically.</div>}
+              </div>
             </div>
           </div>
         </main>

@@ -55,7 +55,7 @@ def init_db(conn):
         "CREATE TABLE IF NOT EXISTS Customer (id VARCHAR(50) PRIMARY KEY, name VARCHAR(255), code VARCHAR(50), logoUrl VARCHAR(255), primaryColor VARCHAR(50), secondaryColor VARCHAR(50));",
         "CREATE TABLE IF NOT EXISTS Document (id VARCHAR(50) PRIMARY KEY, fileName VARCHAR(255), fileSize INTEGER, mimeType VARCHAR(100), storagePath VARCHAR(255), documentType VARCHAR(50), status VARCHAR(50), overallConfidence REAL, invoiceGeneratedAt TIMESTAMP, createdAt TIMESTAMP DEFAULT CURRENT_TIMESTAMP);",
         "CREATE TABLE IF NOT EXISTS Extraction (documentId VARCHAR(50) PRIMARY KEY, canonicalJson TEXT, confidenceScores TEXT, finalSubmittedData TEXT);",
-        "CREATE TABLE IF NOT EXISTS DocumentInvoice (id VARCHAR(100) PRIMARY KEY, documentId VARCHAR(50) NOT NULL, invoiceIndex INTEGER NOT NULL, pageStart INTEGER, pageEnd INTEGER, canonicalJson TEXT, confidenceScores TEXT, finalSubmittedData TEXT, status VARCHAR(50) DEFAULT 'EXTRACTED', overallConfidence REAL, createdAt TIMESTAMP DEFAULT CURRENT_TIMESTAMP, updatedAt TIMESTAMP DEFAULT CURRENT_TIMESTAMP);",
+        "CREATE TABLE IF NOT EXISTS DocumentInvoice (id VARCHAR(100) PRIMARY KEY, documentId VARCHAR(50) NOT NULL, invoiceIndex INTEGER NOT NULL, pageStart INTEGER, pageEnd INTEGER, rawOcrText TEXT, canonicalJson TEXT, confidenceScores TEXT, finalSubmittedData TEXT, status VARCHAR(50) DEFAULT 'EXTRACTED', overallConfidence REAL, createdAt TIMESTAMP DEFAULT CURRENT_TIMESTAMP, updatedAt TIMESTAMP DEFAULT CURRENT_TIMESTAMP);",
         "CREATE TABLE IF NOT EXISTS ReviewTask (id VARCHAR(50) PRIMARY KEY, documentId VARCHAR(50), status VARCHAR(50), reason TEXT, createdAt TIMESTAMP DEFAULT CURRENT_TIMESTAMP, resolvedAt TIMESTAMP);",
         "CREATE TABLE IF NOT EXISTS AuditLog (id VARCHAR(50) PRIMARY KEY, documentId VARCHAR(50), action VARCHAR(50), description TEXT, createdAt TIMESTAMP DEFAULT CURRENT_TIMESTAMP);"
     ]
@@ -69,6 +69,7 @@ def init_db(conn):
         "ALTER TABLE Document ADD COLUMN fileData TEXT;",
         "ALTER TABLE Document ADD COLUMN pageCount INTEGER DEFAULT 1;",
         "ALTER TABLE Document ADD COLUMN processedPages INTEGER DEFAULT 0;",
+        "ALTER TABLE DocumentInvoice ADD COLUMN rawOcrText TEXT;",
         "CREATE UNIQUE INDEX IF NOT EXISTS idx_document_invoice_order ON DocumentInvoice(documentId, invoiceIndex);",
     ]
     for stmt in alter_statements:
@@ -1376,17 +1377,26 @@ def get_documents():
             ORDER BY d.createdAt DESC;
         """)
         rows = cursor.fetchall()
-        invoice_cursor = execute_query(conn, "SELECT id, documentId, invoiceIndex, pageStart, pageEnd, canonicalJson, confidenceScores, finalSubmittedData, status, overallConfidence FROM DocumentInvoice ORDER BY documentId, invoiceIndex;")
+        invoice_cursor = execute_query(conn, "SELECT id, documentId, invoiceIndex, pageStart, pageEnd, rawOcrText, canonicalJson, confidenceScores, finalSubmittedData, status, overallConfidence FROM DocumentInvoice ORDER BY documentId, invoiceIndex;")
         invoice_rows = invoice_cursor.fetchall()
         conn.close()
 
         invoices_by_document = {}
         for invoice in invoice_rows:
+          invoice_data = {}
+          try:
+            invoice_data = json.loads(invoice[6] or invoice[8] or '{}')
+          except (TypeError, json.JSONDecodeError):
+            pass
+          invoice_header = invoice_data.get('invoiceHeader') if isinstance(invoice_data, dict) else None
+          if not isinstance(invoice_header, dict):
+            invoice_header = invoice_data if isinstance(invoice_data, dict) else {}
           invoices_by_document.setdefault(invoice[1], []).append({
             "id": invoice[0], "documentId": invoice[1], "invoiceIndex": invoice[2],
-            "pageStart": invoice[3], "pageEnd": invoice[4], "canonicalJson": invoice[5],
-            "confidenceScores": invoice[6], "finalSubmittedData": invoice[7],
-            "status": invoice[8], "overallConfidence": invoice[9]
+            "pageStart": invoice[3], "pageEnd": invoice[4], "rawOcrText": invoice[5], "canonicalJson": invoice[6],
+            "confidenceScores": invoice[7], "finalSubmittedData": invoice[8],
+            "status": invoice[9], "overallConfidence": invoice[10],
+            "invoiceNumber": invoice_header.get('invoiceNumber') or invoice_header.get('invoiceId') or invoice_header.get('documentNumber') or invoice_header.get('invoiceNo')
           })
         
         docs = []
@@ -1409,6 +1419,7 @@ def get_documents():
                 } if r[10] else None
             }
             doc["invoices"] = invoices_by_document.get(r[0], [])
+            doc["invoiceCount"] = len(doc["invoices"])
             docs.append(doc)
         return {"success": True, "documents": docs}
     except Exception as e:
@@ -1593,7 +1604,14 @@ async def save_review(doc_id: str, request: Request):
     conn = get_db()
     invoice_id = body.get('invoiceId')
     if invoice_id:
-      execute_query(conn, "UPDATE DocumentInvoice SET finalSubmittedData = ?, status = 'APPROVED', updatedAt = CURRENT_TIMESTAMP WHERE id = ? AND documentId = ?;", (json_str, invoice_id, doc_id))
+      cursor = execute_query(conn, "UPDATE DocumentInvoice SET finalSubmittedData = ?, status = 'APPROVED', updatedAt = CURRENT_TIMESTAMP WHERE id = ? AND documentId = ?;", (json_str, invoice_id, doc_id))
+      if cursor.rowcount == 0:
+        legacy_invoice_id = f"{doc_id}-invoice-1"
+        if invoice_id != legacy_invoice_id:
+          conn.rollback()
+          conn.close()
+          return JSONResponse({"error": "Invoice not found"}, status_code=404)
+        execute_query(conn, "UPDATE Extraction SET finalSubmittedData = ? WHERE documentId = ?;", (json_str, doc_id))
     else:
       execute_query(conn, "UPDATE Extraction SET finalSubmittedData = ? WHERE documentId = ?;", (json_str, doc_id))
     execute_query(conn, "UPDATE Document SET status = 'APPROVED' WHERE id = ?;", (doc_id,))
@@ -1663,6 +1681,7 @@ async def extraction_callback(doc_id: str, request: Request):
         "invoiceIndex": body.get('invoiceIndex', 0),
         "pageStart": body.get('pageStart'),
         "pageEnd": body.get('pageEnd'),
+        "rawOcrText": body.get('rawOcrText'),
         "canonicalJson": body.get('extractedData') or body.get('canonicalJson'),
         "confidenceScores": body.get('confidenceScores'),
         "overallConfidence": body.get('overallConfidence')
@@ -1693,9 +1712,9 @@ async def extraction_callback(doc_id: str, request: Request):
             confidence_json = json.dumps(confidence_scores) if confidence_scores is not None else None
             cursor = execute_query(conn, "SELECT 1 FROM DocumentInvoice WHERE id = ?", (invoice_id,))
             if cursor.fetchone():
-                execute_query(conn, "UPDATE DocumentInvoice SET canonicalJson = ?, confidenceScores = ?, overallConfidence = ?, updatedAt = CURRENT_TIMESTAMP WHERE id = ?", (json_str, confidence_json, invoice.get('overallConfidence'), invoice_id))
+                execute_query(conn, "UPDATE DocumentInvoice SET pageStart = COALESCE(?, pageStart), pageEnd = COALESCE(?, pageEnd), rawOcrText = COALESCE(?, rawOcrText), canonicalJson = ?, confidenceScores = ?, overallConfidence = ?, updatedAt = CURRENT_TIMESTAMP WHERE id = ?", (invoice.get('pageStart'), invoice.get('pageEnd'), invoice.get('rawOcrText'), json_str, confidence_json, invoice.get('overallConfidence'), invoice_id))
             else:
-                execute_query(conn, "INSERT INTO DocumentInvoice (id, documentId, invoiceIndex, pageStart, pageEnd, canonicalJson, confidenceScores, overallConfidence) VALUES (?, ?, ?, ?, ?, ?, ?, ?)", (invoice_id, doc_id, invoice_index, invoice.get('pageStart'), invoice.get('pageEnd'), json_str, confidence_json, invoice.get('overallConfidence')))
+                execute_query(conn, "INSERT INTO DocumentInvoice (id, documentId, invoiceIndex, pageStart, pageEnd, rawOcrText, canonicalJson, confidenceScores, overallConfidence) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)", (invoice_id, doc_id, invoice_index, invoice.get('pageStart'), invoice.get('pageEnd'), invoice.get('rawOcrText'), json_str, confidence_json, invoice.get('overallConfidence')))
 
             # Preserve the document-level record for existing consumers.
             cursor = execute_query(conn, "SELECT 1 FROM Extraction WHERE documentId=?", (doc_id,))
