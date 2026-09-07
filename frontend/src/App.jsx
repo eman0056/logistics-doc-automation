@@ -552,11 +552,10 @@ function App() {
       if (!doc || !doc.extraction || invoicesPending || (doc.invoices?.length && !['EXTRACTED', 'IN_REVIEW', 'APPROVED', 'INVOICE_GENERATED'].includes(doc.status))) {
         const interval = setInterval(async () => {
           try {
-            const statusRes = await fetch(`${API}/documents/${docId}/status`);
-            const statusJson = await statusRes.json();
-            if (statusJson.isExtracted) {
-              window.location.reload();
-            }
+            const documentsRes = await fetch(`${API}/documents?refresh=${Date.now()}`, { cache: 'no-store' });
+            const documentsJson = await documentsRes.json();
+            const latestDoc = (documentsJson.documents || []).find((item) => item.id === docId);
+            if (latestDoc) setDoc(latestDoc);
           } catch (error) {
             console.error(error);
           }
@@ -576,12 +575,13 @@ function App() {
       setInvoiceDrafts((current) => {
         const next = { ...current };
         records.forEach((invoice) => {
-          if (!Object.prototype.hasOwnProperty.call(next, invoice.id)) {
-            try {
-              next[invoice.id] = invoice.extractedData || JSON.parse(invoice.finalSubmittedData || invoice.canonicalJson || '{}');
-            } catch (error) {
-              next[invoice.id] = {};
-            }
+          let latestData = invoice.extractedData;
+          if (!latestData) {
+            try { latestData = JSON.parse(invoice.finalSubmittedData || invoice.canonicalJson || '{}'); } catch (error) { latestData = {}; }
+          }
+          const currentData = next[invoice.id];
+          if (!currentData || Object.keys(currentData).length === 0 || Object.keys(latestData || {}).length > 0) {
+            next[invoice.id] = latestData || {};
           }
         });
         return next;
