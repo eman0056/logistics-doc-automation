@@ -730,6 +730,8 @@ def _send_spa_html(path):
       }
 
       const extractionPending = Object.keys(canonical).length === 0;
+      const isPdfDocument = (doc.mimeType || '').toLowerCase().includes('pdf')
+        || (doc.fileName || '').toLowerCase().endsWith('.pdf');
 
       const pollForExtractionStatus = async (attempt = 0) => {
         if (!extractionPending) return;
@@ -1014,8 +1016,13 @@ def _send_spa_html(path):
             <div class="xl:col-span-5 bg-slate-900 border border-slate-800 p-6 rounded-2xl shadow-2xl space-y-4">
               <h3 class="text-sm font-bold text-slate-300 border-b border-slate-800 pb-3">Original Document</h3>
               <div class="bg-slate-950 rounded-xl overflow-hidden border border-slate-800 h-[600px]">
-                <img src="/api/documents/${docId}/file" alt="Document Preview" class="w-full h-full object-contain p-2"
-                  onerror="this.src='https://placehold.co/600x800/1e293b/475569?text=No+Preview+Available'" />
+                ${isPdfDocument ? `
+                  <iframe src="/api/documents/${docId}/file#page=1" title="Original document preview" class="w-full h-full border-0" style="background:#fff;"></iframe>
+                  <a href="/api/documents/${docId}/file#page=1" target="_blank" rel="noopener" class="block text-center text-xs text-sky-400 mt-3 hover:underline">Open original document</a>
+                ` : `
+                  <img src="/api/documents/${docId}/file" alt="Document Preview" class="w-full h-full object-contain p-2"
+                    onerror="this.src='https://placehold.co/600x800/1e293b/475569?text=No+Preview+Available'" />
+                `}
               </div>
             </div>
 
