@@ -262,9 +262,16 @@ def _send_spa_html(path):
   </style>
 </head>
 <body class="bg-[#E8EEF5] text-slate-900 min-h-screen font-sans antialiased">
-  <div id="app"></div>
+  <div id="app">
+    <header style="height:72px;background:#172B3F;border-bottom:1px solid #294157;"></header>
+    <main style="max-width:1280px;margin:0 auto;padding:40px 16px;">
+      <div style="height:28px;width:230px;border-radius:8px;background:#cbd5e1;margin-bottom:12px;opacity:.65;"></div>
+      <div style="height:16px;width:360px;border-radius:6px;background:#cbd5e1;margin-bottom:28px;opacity:.5;"></div>
+      <div style="height:280px;border-radius:20px;background:#0F2033;border:1px solid #294157;opacity:.86;"></div>
+    </main>
+  </div>
   <script>
-    const PATH = """ + json.dumps(path) + """;
+    const initialPath = """ + json.dumps(path) + """;
 
     function numVal(val, defaultVal = 0) {
       if (val === undefined || val === null) return defaultVal;
@@ -272,13 +279,55 @@ def _send_spa_html(path):
       return isNaN(parsed) ? defaultVal : parsed;
     }
 
+    let customerCache = null;
+    let customerRequest = null;
+    let documentsCache = null;
+    let documentsRequest = null;
+
+    async function getCustomer() {
+      if (customerCache) return customerCache;
+      if (!customerRequest) {
+        customerRequest = fetch('/api/customer', { cache: 'force-cache' })
+          .then((response) => response.json())
+          .then((data) => data.customer || null)
+          .finally(() => { customerRequest = null; });
+      }
+      customerCache = await customerRequest;
+      return customerCache;
+    }
+
+    async function getDocuments(force = false) {
+      if (!force && documentsCache) return documentsCache;
+      if (!force && documentsRequest) return documentsRequest;
+      const url = force ? `/api/documents?refresh=${Date.now()}` : '/api/documents';
+      const request = fetch(url, { cache: 'no-store' })
+        .then((response) => response.json())
+        .then((data) => {
+          if (!data.error) documentsCache = data;
+          return data;
+        });
+      if (!force) {
+        documentsRequest = request.finally(() => { documentsRequest = null; });
+        return documentsRequest;
+      }
+      return request;
+    }
+
+    function invalidateDocuments() {
+      documentsCache = null;
+    }
+
+    function getCurrentPath() {
+      return window.location.pathname + window.location.search;
+    }
+
     async function loadApp() {
       const app = document.getElementById('app');
+      const currentPath = getCurrentPath();
       let customer = { name: 'Apex Freight Logistics', code: 'APEX', primaryColor: '#0284c7' };
       try {
-        const res = await fetch('/api/customer');
-        const d = await res.json();
-        if (d.customer) customer = d.customer;
+        const d = await getCustomer();
+        if (d) customer = d;
       } catch(e) {}
 
       const primaryColor = customer.primaryColor || '#0284c7';
@@ -310,17 +359,17 @@ def _send_spa_html(path):
       `;
 
       try {
-        if (PATH === '/documents/upload') {
+        if (currentPath === '/documents/upload') {
           renderUploadPage(app, navHtml, primaryColor);
-        } else if (PATH.startsWith('/documents/') && PATH.includes('/review')) {
-          const parts = PATH.split('/');
+        } else if (currentPath.startsWith('/documents/') && currentPath.includes('/review')) {
+          const parts = currentPath.split('/');
           renderReviewPage(app, navHtml, primaryColor, parts[2]);
-        } else if (PATH.startsWith('/invoices/') && PATH.split('/').length > 2) {
-          const parts = PATH.split('/');
+        } else if (currentPath.startsWith('/invoices/') && currentPath.split('/').length > 2) {
+          const parts = currentPath.split('/');
           renderInvoicePage(app, navHtml, primaryColor, parts[2]);
-        } else if (PATH === '/invoices') {
+        } else if (currentPath === '/invoices') {
           renderInvoicesDashboard(app, navHtml, primaryColor);
-        } else if (PATH === '/review-queue') {
+        } else if (currentPath === '/review-queue') {
           renderReviewQueue(app, navHtml, primaryColor);
         } else {
           renderDocumentsList(app, navHtml, primaryColor);
@@ -412,6 +461,7 @@ def _send_spa_html(path):
           const res = await fetch('/api/documents/upload', { method: 'POST', body: formData });
           const d = await res.json();
           if (d.success && d.documentIds && d.documentIds.length > 0) {
+            invalidateDocuments();
             uploadStatus.textContent = "Upload successful! Redirecting to review...";
             setTimeout(() => {
               // Go directly to the first document's review page so polling works
@@ -427,8 +477,7 @@ def _send_spa_html(path):
     }
 
     async function renderDocumentsList(app, navHtml, primaryColor) {
-      const res = await fetch('/api/documents');
-      const d = await res.json();
+      const d = await getDocuments();
       const docs = d.documents || [];
 
       const rowsHtml = docs.map(doc => {
@@ -495,8 +544,7 @@ def _send_spa_html(path):
       const urlParams = new URLSearchParams(window.location.search);
       const ids = urlParams.get('ids') ? urlParams.get('ids').split(',') : [];
 
-      const res = await fetch('/api/documents');
-      const d = await res.json();
+      const d = await getDocuments();
       const allDocs = d.documents || [];
 
       const docs = ids.map(id => allDocs.find(item => item.id === id)).filter(Boolean);
@@ -633,8 +681,7 @@ def _send_spa_html(path):
       const urlParams = new URLSearchParams(window.location.search);
       const ids = urlParams.get('ids') ? urlParams.get('ids').split(',') : [];
 
-      const res = await fetch('/api/documents');
-      const d = await res.json();
+      const d = await getDocuments();
       const allDocs = d.documents || [];
 
       const docs = ids.map(id => allDocs.find(item => item.id === id)).filter(Boolean);
@@ -717,8 +764,7 @@ def _send_spa_html(path):
     }
 
     async function renderReviewPage(app, navHtml, primaryColor, docId) {
-      const res = await fetch(`/api/documents?refresh=${Date.now()}`, { cache: 'no-store' });
-      const d = await res.json();
+      const d = await getDocuments(true);
       const doc = (d.documents || []).find(item => item.id === docId) || {};
 
       const invoiceRecords = Array.isArray(doc.invoices) && doc.invoices.length
@@ -760,8 +806,7 @@ def _send_spa_html(path):
 
           const isExtracted = !!statusData.isExtracted || statusData.status === 'EXTRACTED';
           if (isExtracted) {
-            const docsRes = await fetch(`/api/documents?refresh=${Date.now()}`, { cache: 'no-store' });
-            const docsData = await docsRes.json().catch(() => ({ documents: [] }));
+            const docsData = await getDocuments(true);
             const latestDoc = (docsData.documents || []).find(item => item.id === docId) || {};
 
             let latestCanonical = {};
@@ -1172,8 +1217,7 @@ def _send_spa_html(path):
     }
 
     async function renderInvoicePage(app, navHtml, primaryColor, docId) {
-      const res = await fetch('/api/documents');
-      const d = await res.json();
+      const d = await getDocuments();
       const doc = (d.documents || []).find(item => item.id === docId) || {};
 
       let canonical = {};
@@ -1260,8 +1304,7 @@ def _send_spa_html(path):
 
 
     async function renderInvoicesDashboard(app, navHtml, primaryColor) {
-      const res = await fetch('/api/documents');
-      const d = await res.json();
+      const d = await getDocuments();
       const docs = d.documents || [];
 
       const invoices = docs.filter(doc => doc.status === 'INVOICE_GENERATED' || doc.extraction?.finalSubmittedData);
@@ -1361,6 +1404,19 @@ def _send_spa_html(path):
       `;
     }
 
+    document.addEventListener('click', (event) => {
+      const link = event.target.closest('a[href]');
+      if (!link || link.target || link.hasAttribute('download')) return;
+      const url = new URL(link.href, window.location.href);
+      if (url.origin !== window.location.origin || url.pathname.startsWith('/api/')) return;
+      event.preventDefault();
+      const nextPath = url.pathname + url.search;
+      if (nextPath === getCurrentPath()) return;
+      history.pushState({}, '', nextPath);
+      loadApp();
+    });
+    window.addEventListener('popstate', loadApp);
+    if (getCurrentPath() !== initialPath) history.replaceState({}, '', initialPath);
     loadApp();
   </script>
 </body>
