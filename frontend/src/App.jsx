@@ -28,7 +28,9 @@ const fetchJson = async (url, options = {}) => {
 };
 
 const parseStoredInvoiceData = (invoice) => {
-  if (invoice?.extractedData && typeof invoice.extractedData === 'object') return invoice.extractedData;
+  if (invoice?.extractedData && typeof invoice.extractedData === 'object' && !Array.isArray(invoice.extractedData) && Object.keys(invoice.extractedData).length > 0) {
+    return invoice.extractedData;
+  }
   try {
     const stored = invoice?.canonicalJson || invoice?.finalSubmittedData;
     const parsed = typeof stored === 'string' ? JSON.parse(stored) : stored;
@@ -39,6 +41,19 @@ const parseStoredInvoiceData = (invoice) => {
 };
 
 const hasStoredInvoiceData = (invoice) => Object.keys(parseStoredInvoiceData(invoice)).length > 0;
+
+const getSingleInvoiceData = (document) => {
+  const invoice = document?.invoices?.[0];
+  const candidates = [
+    invoice,
+    document?.extraction,
+  ];
+  for (const candidate of candidates) {
+    const data = parseStoredInvoiceData(candidate);
+    if (Object.keys(data).length > 0) return data;
+  }
+  return {};
+};
 
 function App() {
   const [customer, setCustomer] = useState(defaultCustomer);
@@ -622,7 +637,12 @@ function App() {
 
     useEffect(() => {
       if (!doc) return;
-      const records = doc.invoices?.length ? doc.invoices : [{ id: `${doc.id}-extracted`, extractedData: parseStoredInvoiceData(doc.extraction) }];
+      const invoiceRecord = doc.invoices?.[0];
+      const records = [{
+        ...(invoiceRecord || {}),
+        id: invoiceRecord?.id || `${doc.id}-extracted`,
+        extractedData: getSingleInvoiceData(doc),
+      }];
       setInvoiceDrafts((current) => {
         const next = { ...current };
         records.forEach((invoice) => {
@@ -640,7 +660,12 @@ function App() {
 
     if (!doc) return <><>{nav}</><main className="page"><div className="card upload-panel">Document not found.</div></main></>;
 
-    const selectedInvoice = doc.invoices?.[0] || { id: `${doc.id}-extracted`, extractedData: parseStoredInvoiceData(doc.extraction) };
+    const invoiceRecord = doc.invoices?.[0];
+    const selectedInvoice = {
+      ...(invoiceRecord || {}),
+      id: invoiceRecord?.id || `${doc.id}-extracted`,
+      extractedData: getSingleInvoiceData(doc),
+    };
     const previewUrl = `${API}/documents/${docId}/file?ts=${Date.now()}`;
     const isPdfDocument = () => {
       const mimeType = (doc?.mimeType || '').toLowerCase();
