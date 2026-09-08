@@ -821,13 +821,9 @@ def _send_spa_html(path):
             }
           }
 
-          if (attempt < 48) {
-            window.__docReviewPolling[pollKey] = setTimeout(() => pollForExtractionStatus(attempt + 1), 2000);
-          }
+          window.__docReviewPolling[pollKey] = setTimeout(() => pollForExtractionStatus(attempt + 1), 1500);
         } catch (err) {
-          if (attempt < 48) {
-            window.__docReviewPolling[pollKey] = setTimeout(() => pollForExtractionStatus(attempt + 1), 2000);
-          }
+          window.__docReviewPolling[pollKey] = setTimeout(() => pollForExtractionStatus(attempt + 1), 1500);
         }
       };
 
@@ -1850,6 +1846,9 @@ async def extraction_callback(doc_id: str, request: Request):
             cursor = execute_query(conn, "SELECT 1 FROM Extraction WHERE documentId=?", (doc_id,))
             if not cursor.fetchone():
                 execute_query(conn, "INSERT INTO Extraction (documentId, canonicalJson) VALUES (?, ?)", (doc_id, json_str))
+            elif len(invoice_payloads) == 1:
+              # Preprocessing may have created an empty extraction row before n8n replied.
+              execute_query(conn, "UPDATE Extraction SET canonicalJson = ?, confidenceScores = ? WHERE documentId = ?", (json_str, confidence_json, doc_id))
 
         try:
           expected_count = int(body.get('invoiceCount') or len(invoice_payloads))

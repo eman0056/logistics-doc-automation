@@ -373,7 +373,7 @@ function App() {
     );
   };
 
-  const renderUploadView = () => {
+  const UploadView = () => {
     const [selectedFiles, setSelectedFiles] = useState([]);
     const [uploading, setUploading] = useState(false);
     const [statusText, setStatusText] = useState('');
@@ -483,7 +483,7 @@ function App() {
     );
   };
 
-  const renderQueueView = () => {
+  const QueueView = () => {
     const [tasks, setTasks] = useState([]);
     const [loadingTasks, setLoadingTasks] = useState(true);
 
@@ -539,7 +539,7 @@ function App() {
     );
   };
 
-  const renderReviewView = () => {
+  const ReviewView = () => {
     const docId = path.split('/')[2];
     const [doc, setDoc] = useState(null);
     const [loadingDoc, setLoadingDoc] = useState(true);
@@ -578,18 +578,24 @@ function App() {
       const isDocReady = doc && hasRealExtraction;
 
       if (!doc || (!isDocReady && !invoicesPending)) {
-        const interval = setInterval(async () => {
+        let cancelled = false;
+        const poll = async () => {
           try {
-            const documentsRes = await fetch(`${API}/documents?refresh=${Date.now()}`, { cache: 'no-store' });
+            const statusRes = await fetchJson(`${API}/documents/${docId}/status?refresh=${Date.now()}`);
+            const status = await statusRes.json();
+            const documentsRes = await fetchJson(`${API}/documents?refresh=${Date.now()}`);
             const documentsJson = await documentsRes.json();
             const latestDoc = (documentsJson.documents || []).find((item) => item.id === docId);
-            if (latestDoc) setDoc(latestDoc);
+            if (!cancelled && latestDoc) setDoc(latestDoc);
+            if (!cancelled && status.status === 'FAILED') setProcessing(false);
           } catch (error) {
             console.error(error);
           }
-        }, 2000);
+          if (!cancelled) window.setTimeout(poll, 1500);
+        };
+        poll();
         setProcessing(true);
-        return () => clearInterval(interval);
+        return () => { cancelled = true; };
       }
       setProcessing(false);
       return undefined;
@@ -807,7 +813,7 @@ function App() {
     );
   };
 
-  const renderInvoiceView = () => {
+  const InvoiceView = () => {
     const docId = path.split('/')[2];
     const [doc, setDoc] = useState(null);
     const [loading, setLoading] = useState(true);
@@ -928,11 +934,11 @@ function App() {
   }
 
   switch (route) {
-    case 'upload': return renderUploadView();
-    case 'review': return renderReviewView();
-    case 'invoice': return renderInvoiceView();
+    case 'upload': return <UploadView />;
+    case 'review': return <ReviewView />;
+    case 'invoice': return <InvoiceView />;
     case 'invoices': return renderInvoicesView();
-    case 'queue': return renderQueueView();
+    case 'queue': return <QueueView />;
     default: return renderDocumentsView();
   }
 }
