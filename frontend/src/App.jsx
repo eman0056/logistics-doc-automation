@@ -584,13 +584,7 @@ function App() {
     }, [docId]);
 
     useEffect(() => {
-      const hasRealExtraction = !!(
-        hasStoredInvoiceData({
-          extractedData: doc?.extraction?.extractedData,
-          canonicalJson: doc?.extraction?.canonicalJson,
-          finalSubmittedData: doc?.extraction?.finalSubmittedData,
-        }) || doc?.invoices?.some(hasStoredInvoiceData)
-      );
+      const hasRealExtraction = Object.keys(getSingleInvoiceData(doc)).length > 0;
       const invoicesPending = doc?.invoices?.some((invoice) => !hasStoredInvoiceData(invoice) && invoice.extractionStatus !== 'EXTRACTED');
       const isDocReady = doc && hasRealExtraction;
 
@@ -683,7 +677,9 @@ function App() {
     const parseInvoiceData = (invoice) => {
       return parseStoredInvoiceData(invoice);
     };
-    const canonical = invoiceDrafts[selectedInvoice?.id] || parseInvoiceData(selectedInvoice);
+    const selectedInvoiceData = selectedInvoice.extractedData || {};
+    const draft = invoiceDrafts[selectedInvoice?.id];
+    const canonical = draft && Object.keys(draft).length > 0 ? draft : selectedInvoiceData;
     const shipmentKey = Array.isArray(canonical.shipmentDetails) ? 'shipmentDetails' : 'shipmentDetail';
     const shipmentRecords = Array.isArray(canonical[shipmentKey]) ? canonical[shipmentKey] : [];
     const chargeRecords = [
