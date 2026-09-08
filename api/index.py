@@ -801,36 +801,43 @@ def _send_spa_html(path):
       const extractionPending = Object.keys(canonical).length === 0;
       const isPdfDocument = (doc.mimeType || '').toLowerCase().includes('pdf')
         || (doc.fileName || '').toLowerCase().endsWith('.pdf');
+      const pollKey = `doc-status-${docId}`;
+      const previousPoll = window.__docReviewPolling?.[pollKey];
+      if (previousPoll) {
+        previousPoll.cancelled = true;
+        if (previousPoll.timeout) clearTimeout(previousPoll.timeout);
+      }
+      const pollState = { cancelled: false, timeout: null };
+      window.__docReviewPolling = window.__docReviewPolling || {};
+      window.__docReviewPolling[pollKey] = pollState;
 
       const pollForExtractionStatus = async (attempt = 0) => {
-        if (!extractionPending) return;
-
-        const pollKey = `doc-status-${docId}`;
-        window.__docReviewPolling = window.__docReviewPolling || {};
-        if (window.__docReviewPolling[pollKey]) {
-          clearTimeout(window.__docReviewPolling[pollKey]);
-        }
+        if (!extractionPending || pollState.cancelled) return;
 
         try {
           const statusRes = await fetch(`/api/documents/${docId}/status`);
           const statusData = await statusRes.json().catch(() => ({}));
+          if (pollState.cancelled) return;
 
           const isExtracted = !!statusData.isExtracted || statusData.status === 'EXTRACTED';
           if (isExtracted) {
             const docsData = await getDocuments(true);
+            if (pollState.cancelled) return;
             const latestDoc = (docsData.documents || []).find(item => item.id === docId) || {};
 
             const latestCanonical = getSingleInvoiceExtractedData(latestDoc);
 
             if (Object.keys(latestCanonical).length > 0) {
+              pollState.cancelled = true;
+              if (window.__docReviewPolling[pollKey] === pollState) delete window.__docReviewPolling[pollKey];
               renderReviewPage(app, navHtml, primaryColor, docId);
               return;
             }
           }
 
-          window.__docReviewPolling[pollKey] = setTimeout(() => pollForExtractionStatus(attempt + 1), 1500);
+          if (!pollState.cancelled) pollState.timeout = setTimeout(() => pollForExtractionStatus(attempt + 1), 1500);
         } catch (err) {
-          window.__docReviewPolling[pollKey] = setTimeout(() => pollForExtractionStatus(attempt + 1), 1500);
+          if (!pollState.cancelled) pollState.timeout = setTimeout(() => pollForExtractionStatus(attempt + 1), 1500);
         }
       };
 
@@ -1005,7 +1012,7 @@ def _send_spa_html(path):
               <p class="text-slate-400 mt-2">Edit the exact extracted key-value pairs before final generation.</p>
             </div>
             <div class="space-x-3">
-              <a href="/documents" class="text-xs bg-slate-800 hover:bg-slate-700 text-white px-4 py-2 rounded-xl transition-colors">Discard</a>
+              <button id="discardReviewBtn" type="button" class="text-xs bg-slate-800 hover:bg-slate-700 text-white px-4 py-2 rounded-xl transition-colors">Discard</button>
               ${!extractionPending ? `
               <button id="saveReviewBtn" class="text-xs text-white px-6 py-2 rounded-xl font-bold shadow-lg hover:scale-105 transition-transform" style="background-color: ${primaryColor}">Save &amp; Approve</button>
               <button id="genInvoiceBtn" class="text-xs bg-white text-slate-900 hover:bg-slate-200 px-6 py-2 rounded-xl font-bold transition-colors">Generate Invoice</button>` : ''}
@@ -1045,6 +1052,29 @@ def _send_spa_html(path):
           </div>
         </main>
       `;
+
+      document.getElementById('discardReviewBtn').onclick = async () => {
+        const button = document.getElementById('discardReviewBtn');
+        if (!button || button.disabled) return;
+        button.disabled = true;
+        button.textContent = 'Discarding...';
+        pollState.cancelled = true;
+        if (pollState.timeout) clearTimeout(pollState.timeout);
+        if (window.__docReviewPolling[pollKey] === pollState) delete window.__docReviewPolling[pollKey];
+
+        try {
+          const response = await fetch(`/api/documents/${docId}`, { method: 'DELETE', cache: 'no-store' });
+          const result = await response.json().catch(() => ({}));
+          if (!response.ok || !result.success) throw new Error(result.error || 'Unable to discard document.');
+          invalidateDocuments();
+          history.pushState({}, '', '/documents');
+          loadApp();
+        } catch (error) {
+          button.disabled = false;
+          button.textContent = 'Discard';
+          alert(error.message || 'Unable to discard document.');
+        }
+      };
 
       document.querySelectorAll('.invoice-section-tab').forEach((tab) => {
         tab.onclick = () => {
