@@ -554,8 +554,11 @@ function App() {
     }, [docId]);
 
     useEffect(() => {
-      const invoicesPending = doc?.invoices?.some((invoice) => !invoice.extractionComplete || invoice.extractionStatus === 'PROCESSING');
-      if (!doc || !doc.extraction || invoicesPending || (doc.invoices?.length && !['EXTRACTED', 'IN_REVIEW', 'APPROVED', 'INVOICE_GENERATED'].includes(doc.status))) {
+      const hasRealExtraction = !!(doc?.extraction?.canonicalJson || doc?.invoices?.some((invoice) => invoice.extractionComplete || invoice.canonicalJson || invoice.finalSubmittedData));
+      const invoicesPending = doc?.invoices?.some((invoice) => !invoice.extractionComplete && invoice.extractionStatus === 'PROCESSING');
+      const isDocReady = doc && (hasRealExtraction || ['EXTRACTED', 'IN_REVIEW', 'APPROVED', 'INVOICE_GENERATED'].includes(doc.status));
+
+      if (!doc || (!isDocReady && !invoicesPending)) {
         const interval = setInterval(async () => {
           try {
             const documentsRes = await fetch(`${API}/documents?refresh=${Date.now()}`, { cache: 'no-store' });
@@ -603,7 +606,7 @@ function App() {
       : [{ id: `${doc.id}-invoice-1`, invoiceIndex: 0, canonicalJson: doc.extraction?.canonicalJson, finalSubmittedData: doc.extraction?.finalSubmittedData }];
     const activeInvoiceIndex = Math.min(selectedInvoiceIndex, Math.max(invoiceRecords.length - 1, 0));
     const selectedInvoice = invoiceRecords[activeInvoiceIndex] || invoiceRecords[0];
-    const previewUrl = `/api/documents/${docId}/file`;
+    const previewUrl = `${API}/documents/${docId}/file?ts=${Date.now()}`;
     const isPdfDocument = () => {
       const mimeType = (doc?.mimeType || '').toLowerCase();
       const fileName = (doc?.fileName || '').toLowerCase();

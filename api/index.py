@@ -1430,6 +1430,22 @@ def get_documents():
         
         docs = []
         for r in rows:
+            invoice_records = invoices_by_document.get(r[0], [])
+            extraction_payload = None
+            if r[10]:
+                extraction_payload = {
+                    "canonicalJson": r[10],
+                    "confidenceScores": r[11],
+                    "finalSubmittedData": r[12]
+                }
+            elif invoice_records:
+                latest_invoice = invoice_records[0]
+                extraction_payload = {
+                    "canonicalJson": latest_invoice.get("canonicalJson"),
+                    "confidenceScores": latest_invoice.get("confidenceScores"),
+                    "finalSubmittedData": latest_invoice.get("finalSubmittedData")
+                }
+
             doc = {
                 "id": r[0],
                 "fileName": r[1],
@@ -1437,17 +1453,13 @@ def get_documents():
                 "mimeType": r[3],
                 "storagePath": r[4],
                 "documentType": r[5],
-                "status": r[6],
+                "status": r[6] or ("EXTRACTED" if invoice_records else "PREPROCESSED"),
                 "overallConfidence": r[7],
                 "invoiceGeneratedAt": r[8],
                 "createdAt": r[9],
-                "extraction": {
-                    "canonicalJson": r[10],
-                    "confidenceScores": r[11],
-                    "finalSubmittedData": r[12]
-                } if r[10] else None
+                "extraction": extraction_payload
             }
-            doc["invoices"] = invoices_by_document.get(r[0], [])
+            doc["invoices"] = invoice_records
             doc["invoiceCount"] = len(doc["invoices"])
             docs.append(doc)
         response = JSONResponse({"success": True, "documents": docs})
@@ -1578,7 +1590,7 @@ def get_document_file(doc_id: str):
 
     file_data_b64 = row[0] if row else None
     file_name = row[1] if row else None
-    mime_type = row[2] or "application/octet-stream" if row else "application/octet-stream"
+    mime_type = row[2] if row else "application/octet-stream"
     storage_path = row[3] if row else None
 
     if not row and not storage_path:
@@ -1606,11 +1618,15 @@ def get_document_file(doc_id: str):
         is_pdf = is_pdf_by_signature or is_pdf_by_name or is_pdf_by_mime
         if is_pdf:
             mime_type = "application/pdf"
-        return Response(
+        response = Response(
             content=file_bytes,
             media_type=mime_type,
             headers={"Content-Disposition": f'inline; filename="{file_name or doc_id}"'}
         )
+        response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+        response.headers["Pragma"] = "no-cache"
+        response.headers["Expires"] = "0"
+        return response
     except Exception:
         return JSONResponse({"error": "Failed to decode file"}, status_code=500)
 
