@@ -1884,6 +1884,15 @@ async def extraction_callback(doc_id: str, request: Request):
                     extracted = json.loads(extracted)
                 except json.JSONDecodeError:
                     pass
+            if isinstance(extracted, dict) and 'extractedData' in extracted:
+              wrapped_data = extracted.get('extractedData')
+              if isinstance(wrapped_data, str):
+                try:
+                  wrapped_data = json.loads(wrapped_data)
+                except json.JSONDecodeError:
+                  wrapped_data = {}
+              if isinstance(wrapped_data, dict):
+                extracted = wrapped_data
             if isinstance(extracted, dict) and isinstance(extracted.get('invoices'), list):
               extracted = extracted['invoices'][0] if extracted['invoices'] else {}
             if isinstance(extracted, dict):
