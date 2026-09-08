@@ -717,7 +717,7 @@ def _send_spa_html(path):
     }
 
     async function renderReviewPage(app, navHtml, primaryColor, docId) {
-      const res = await fetch('/api/documents');
+      const res = await fetch(`/api/documents?refresh=${Date.now()}`, { cache: 'no-store' });
       const d = await res.json();
       const doc = (d.documents || []).find(item => item.id === docId) || {};
 
@@ -760,7 +760,7 @@ def _send_spa_html(path):
 
           const isExtracted = !!statusData.isExtracted || statusData.status === 'EXTRACTED';
           if (isExtracted) {
-            const docsRes = await fetch('/api/documents');
+            const docsRes = await fetch(`/api/documents?refresh=${Date.now()}`, { cache: 'no-store' });
             const docsData = await docsRes.json().catch(() => ({ documents: [] }));
             const latestDoc = (docsData.documents || []).find(item => item.id === docId) || {};
 
@@ -1455,8 +1455,8 @@ def get_documents():
                 "documentType": r[5],
                 "status": r[6] or ("EXTRACTED" if invoice_records else "PREPROCESSED"),
                 "overallConfidence": r[7],
-                "invoiceGeneratedAt": r[8],
-                "createdAt": r[9],
+                "invoiceGeneratedAt": r[8].isoformat() if hasattr(r[8], "isoformat") else r[8],
+                "createdAt": r[9].isoformat() if hasattr(r[9], "isoformat") else r[9],
                 "extraction": extraction_payload
             }
             doc["invoices"] = invoice_records

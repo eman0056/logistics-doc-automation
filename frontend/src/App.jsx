@@ -539,7 +539,7 @@ function App() {
       let isMounted = true;
       const loadReview = async () => {
         try {
-          const res = await fetch(`${API}/documents`);
+          const res = await fetchJson(`${API}/documents?refresh=${Date.now()}`);
           const json = await res.json();
           const found = (json.documents || []).find((item) => item.id === docId) || null;
           if (isMounted) setDoc(found);
