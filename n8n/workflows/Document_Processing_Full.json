@@ -90,6 +90,7 @@
     },
     {
       "parameters": {
+        "mode": "runOnceForAllItems",
         "jsCode": "// Node 5: Response Parser Code Node\nconst sources = $items('Node 3: Extract PDF Text');\n\nreturn $input.all().map((item, index) => {\n  const response = item.json;\n  const source = sources[index]?.json || {};\n  const openAiContent = response.choices?.[0]?.message?.content || '{}';\n  let extractedData = {};\n  try {\n    extractedData = JSON.parse(openAiContent.replace(/^```json\\s*|\\s*```$/g, ''));\n  } catch (e) {}\n\n  return {\n    documentId: source.documentId,\n    callbackUrl: source.callbackUrl,\n    invoiceId: `${source.documentId}-invoice-${Number(source.invoiceIndex || 0) + 1}`,\n    invoiceIndex: Number(source.invoiceIndex || 0),\n    invoiceCount: Number(source.invoiceCount || 1),\n    pageStart: source.pageStart,\n    pageEnd: source.pageEnd,\n    rawOcrText: source.rawOcrText,\n    extractedData,\n    \"confidenceScores\": { documentNumber: 0.98, shipmentNumber: 0.96, shipperName: 0.94, totalAmount: 0.98 },\n    overallConfidence: 0.96\n  };\n});"
       },
       "name": "Node 5: Parse OpenAI Response",
