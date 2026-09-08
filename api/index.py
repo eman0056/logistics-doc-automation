@@ -1602,6 +1602,7 @@ async def upload_documents(request: Request):
         return JSONResponse({"error": "No files uploaded"}, status_code=400)
         
     import base64
+    import asyncio
     vercel_url = os.getenv("VERCEL_URL")
     forwarded_host = request.headers.get("x-forwarded-host")
     host = request.headers.get("host")
@@ -1659,7 +1660,9 @@ async def upload_documents(request: Request):
               with open(disk_path, 'wb') as fh:
                 fh.write(file_bytes)
 
-            threading.Thread(target=trigger_webhook, args=(webhook_url, payload), daemon=True).start()
+            # Await dispatch so Vercel cannot terminate the serverless invocation
+            # before n8n receives the document payload.
+            await asyncio.to_thread(trigger_webhook, webhook_url, payload)
             results.append(doc_id)
             page_counts[doc_id] = page_count
             
