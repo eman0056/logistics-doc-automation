@@ -29,11 +29,7 @@ const fetchJson = async (url, options = {}) => {
 
 const parseStoredInvoiceData = (invoice) => {
   if (invoice?.extractedData && typeof invoice.extractedData === 'object') return invoice.extractedData;
-  try {
-    return JSON.parse(invoice?.finalSubmittedData || invoice?.canonicalJson || '{}');
-  } catch (error) {
-    return {};
-  }
+  return {};
 };
 
 const hasStoredInvoiceData = (invoice) => Object.keys(parseStoredInvoiceData(invoice)).length > 0;
@@ -598,7 +594,7 @@ function App() {
       if (!doc) return;
       const records = doc.invoices?.length
         ? doc.invoices
-        : [{ id: `${doc.id}-invoice-1`, canonicalJson: doc.extraction?.canonicalJson, finalSubmittedData: doc.extraction?.finalSubmittedData }];
+          : [{ id: `${doc.id}-invoice-1`, extractedData: doc.extraction?.extractedData || (() => { try { return JSON.parse(doc.extraction?.canonicalJson || '{}'); } catch (error) { return {}; } })() }];
       setInvoiceDrafts((current) => {
         const next = { ...current };
         records.forEach((invoice) => {
@@ -618,7 +614,7 @@ function App() {
 
     const invoiceRecords = doc.invoices?.length
       ? doc.invoices
-      : [{ id: `${doc.id}-invoice-1`, invoiceIndex: 0, canonicalJson: doc.extraction?.canonicalJson, finalSubmittedData: doc.extraction?.finalSubmittedData }];
+      : [{ id: `${doc.id}-invoice-1`, invoiceIndex: 0, extractedData: doc.extraction?.extractedData || (() => { try { return JSON.parse(doc.extraction?.canonicalJson || '{}'); } catch (error) { return {}; } })() }];
     const activeInvoiceIndex = Math.min(selectedInvoiceIndex, Math.max(invoiceRecords.length - 1, 0));
     const selectedInvoice = invoiceRecords[activeInvoiceIndex] || invoiceRecords[0];
     const previewUrl = `${API}/documents/${docId}/file?ts=${Date.now()}`;
@@ -648,10 +644,21 @@ function App() {
     };
     const canonical = invoiceDrafts[selectedInvoice?.id] || parseInvoiceData(selectedInvoice);
     const shipmentKey = Array.isArray(canonical.shipmentDetails) ? 'shipmentDetails' : 'shipmentDetail';
+    const shipmentRecords = Array.isArray(canonical[shipmentKey]) ? canonical[shipmentKey] : [];
+    const chargeRecords = [
+      ...shipmentRecords.flatMap((shipment, shipmentIndex) => (
+        Array.isArray(shipment?.chargeLineItems)
+          ? shipment.chargeLineItems.map((charge, chargeIndex) => ({ charge, path: [shipmentKey, shipmentIndex, 'chargeLineItems', chargeIndex], label: `Shipment ${shipmentIndex + 1} Charge ${chargeIndex + 1}` }))
+          : []
+      )),
+      ...(Array.isArray(canonical.chargeLineItems)
+        ? canonical.chargeLineItems.map((charge, chargeIndex) => ({ charge, path: ['chargeLineItems', chargeIndex], label: `Charge ${chargeIndex + 1}` }))
+        : []),
+    ];
     const sectionDefinitions = [
       { id: 'header', label: 'Invoice Header', value: canonical.invoiceHeader && typeof canonical.invoiceHeader === 'object' && !Array.isArray(canonical.invoiceHeader) ? canonical.invoiceHeader : {} },
-      { id: 'shipment', label: 'Shipments', value: Array.isArray(canonical[shipmentKey]) ? canonical[shipmentKey] : [] },
-      { id: 'charges', label: 'Charge Line Items', value: Array.isArray(canonical.chargeLineItems) ? canonical.chargeLineItems : [] },
+      { id: 'shipment', label: 'Shipments', value: shipmentRecords },
+      { id: 'charges', label: 'Charge Line Items', value: chargeRecords },
     ];
     const activeSection = sectionDefinitions.find((section) => section.id === selectedSection) || sectionDefinitions[0];
     const isEmpty = Object.keys(canonical).length === 0;
@@ -690,7 +697,7 @@ function App() {
       }
     };
 
-    const renderEditableNode = (value, path, label) => {
+    const renderEditableNode = (value, path, label, options = {}) => {
       if (Array.isArray(value)) {
         return (
           <div className="section-block" key={path.join('.') || label}>
@@ -708,7 +715,9 @@ function App() {
       if (value && typeof value === 'object') {
         return (
           <div className="field-grid" key={path.join('.') || label}>
-            {Object.entries(value).map(([key, child]) => renderEditableNode(child, [...path, key], key))}
+            {Object.entries(value)
+              .filter(([key]) => !options.excludeKeys?.includes(key))
+              .map(([key, child]) => renderEditableNode(child, [...path, key], key, options))}
           </div>
         );
       }
@@ -738,8 +747,10 @@ function App() {
       }
       return <div className="invoice-sections">
         {activeSection.id === 'header' && renderEditableNode(activeSection.value, ['invoiceHeader'], activeSection.label)}
-        {activeSection.id === 'shipment' && renderEditableNode(activeSection.value, [shipmentKey], activeSection.label)}
-        {activeSection.id === 'charges' && renderEditableNode(activeSection.value, ['chargeLineItems'], activeSection.label)}
+        {activeSection.id === 'shipment' && renderEditableNode(activeSection.value, [shipmentKey], activeSection.label, { excludeKeys: ['chargeLineItems'] })}
+        {activeSection.id === 'charges' && (chargeRecords.length > 0
+          ? chargeRecords.map((record) => <div className="nested-record" key={record.path.join('.')}><div className="field-label">{record.label}</div>{renderEditableNode(record.charge, record.path, '')}</div>)
+          : <div className="subtle-copy">No records found</div>)}
       </div>;
     };
 

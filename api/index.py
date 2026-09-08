@@ -779,11 +779,9 @@ def _send_spa_html(path):
 
       if (selectedInvoice?.extractedData && typeof selectedInvoice.extractedData === 'object') {
         canonical = selectedInvoice.extractedData;
-      } else if (selectedInvoice?.finalSubmittedData || selectedInvoice?.canonicalJson) {
-        try { canonical = JSON.parse(selectedInvoice.finalSubmittedData || selectedInvoice.canonicalJson || '{}'); } catch(e) {}
-      } else if (doc.extraction?.finalSubmittedData) {
-        try { canonical = JSON.parse(doc.extraction.finalSubmittedData); } catch(e) {}
-      } else if (doc.extraction?.canonicalJson) {
+      } else if (doc.extraction?.extractedData && typeof doc.extraction.extractedData === 'object') {
+        canonical = doc.extraction.extractedData;
+      } else if (!selectedInvoice?.extractedData && doc.extraction?.canonicalJson) {
         try { canonical = JSON.parse(doc.extraction.canonicalJson); } catch(e) {}
       }
 
@@ -917,6 +915,15 @@ def _send_spa_html(path):
           // 2. shipmentDetails / shipmentDetail section (Array)
           const shipmentsArr = (Array.isArray(canonical.shipmentDetails) && canonical.shipmentDetails.length > 0) ? canonical.shipmentDetails : ((Array.isArray(canonical.shipmentDetail) && canonical.shipmentDetail.length > 0) ? canonical.shipmentDetail : []);
           const shipmentSecName = (Array.isArray(canonical.shipmentDetails) && canonical.shipmentDetails.length > 0) ? 'shipmentDetails' : 'shipmentDetail';
+          const chargeRecords = [];
+          shipmentsArr.forEach((shipment, shipmentIndex) => {
+            if (shipment && Array.isArray(shipment.chargeLineItems)) {
+              shipment.chargeLineItems.forEach((charge, chargeIndex) => chargeRecords.push({ charge, shipmentIndex, chargeIndex, label: `Shipment ${shipmentIndex + 1} Charge ${chargeIndex + 1}` }));
+            }
+          });
+          if (Array.isArray(canonical.chargeLineItems)) {
+            canonical.chargeLineItems.forEach((charge, chargeIndex) => chargeRecords.push({ charge, shipmentIndex: null, chargeIndex, label: `Charge ${chargeIndex + 1}` }));
+          }
           
           if (shipmentsArr.length > 0) {
             fieldsHtml += `
@@ -950,58 +957,32 @@ def _send_spa_html(path):
               }
               fieldsHtml += `</div>`;
 
-              // Check for nested chargeLineItems inside shipment
-              if (shipment && Array.isArray(shipment.chargeLineItems) && shipment.chargeLineItems.length > 0) {
-                fieldsHtml += `
-                  <div class="mt-4 pt-4 border-t border-slate-800/80 space-y-3">
-                    <div class="text-xs font-bold text-emerald-400 flex items-center gap-2">
-                      <span>💳</span> Charge Line Items (${shipment.chargeLineItems.length})
-                    </div>
-                `;
-                shipment.chargeLineItems.forEach((charge, cIdx) => {
-                  fieldsHtml += `
-                    <div class="bg-slate-950/80 p-3.5 rounded-xl border border-slate-800 grid grid-cols-1 md:grid-cols-2 gap-3">
-                  `;
-                  for (const [ckey, cval] of Object.entries(charge)) {
-                    const cvalStr = cval === null || cval === undefined ? '' : String(cval);
-                    fieldsHtml += `
-                      <div class="space-y-1">
-                        <label class="text-slate-400 block font-semibold text-[10px] uppercase tracking-wider">${ckey}</label>
-                        <input data-section="${shipmentSecName}" data-ship-idx="${sIdx}" data-charge-idx="${cIdx}" data-charge-key="${ckey.replace(/"/g, '&quot;')}" type="text" value="${cvalStr.replace(/"/g, '&quot;')}" class="nested-charge-field w-full bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-1.5 text-white font-mono text-xs" />
-                      </div>
-                    `;
-                  }
-                  fieldsHtml += `</div>`;
-                });
-                fieldsHtml += `</div>`;
-              }
-
               fieldsHtml += `</div>`;
             });
             fieldsHtml += `</div>`;
           }
 
-          // 3. Standalone chargeLineItems section (Array, if top-level)
-          if (Array.isArray(canonical.chargeLineItems) && canonical.chargeLineItems.length > 0) {
+          // 3. All chargeLineItems, including those nested inside shipments
+          if (chargeRecords.length > 0) {
             fieldsHtml += `
               <div class="invoice-section-panel space-y-4 mb-6" data-invoice-section="charges">
                 <div class="flex items-center gap-2 font-bold text-sky-400 text-xs uppercase tracking-wider border-b border-slate-800 pb-2">
-                  <span class="p-1.5 bg-sky-500/10 rounded-lg text-sky-400">💳</span> Standalone Charge Line Items (${canonical.chargeLineItems.length})
+                  <span class="p-1.5 bg-sky-500/10 rounded-lg text-sky-400">💳</span> Charge Line Items (${chargeRecords.length})
                 </div>
             `;
-            canonical.chargeLineItems.forEach((charge, cIdx) => {
+            chargeRecords.forEach((record, cIdx) => {
               fieldsHtml += `
                 <div class="bg-slate-900/90 p-5 rounded-2xl border border-slate-800 space-y-4 shadow-md">
                   <div class="text-xs font-bold text-emerald-400 flex items-center justify-between border-b border-slate-800/80 pb-2.5">
                     <span class="flex items-center gap-2">
                       <span class="w-5 h-5 rounded-full bg-emerald-500/20 text-emerald-400 flex items-center justify-center text-[10px]">${cIdx + 1}</span>
-                      Charge ${cIdx + 1}
+                      ${record.label}
                     </span>
                   </div>
                   <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
               `;
-              if (typeof charge === 'object' && charge !== null) {
-                for (const [key, value] of Object.entries(charge)) {
+              if (typeof record.charge === 'object' && record.charge !== null) {
+                for (const [key, value] of Object.entries(record.charge)) {
                   const valStr = value === null || value === undefined ? '' : String(value);
                   fieldsHtml += `
                     <div class="space-y-1.5">
@@ -1016,50 +997,8 @@ def _send_spa_html(path):
             fieldsHtml += `</div>`;
           }
 
-          // 4. Other root keys
-          const knownKeys = ['invoiceHeader', 'shipmentDetails', 'shipmentDetail', 'chargeLineItems'];
-          const otherKeys = Object.keys(canonical).filter(k => !knownKeys.includes(k));
-          if (otherKeys.length > 0) {
-            fieldsHtml += `
-              <div class="invoice-section-panel bg-slate-900/90 p-5 rounded-2xl border border-slate-800 space-y-4 shadow-md mb-6" data-invoice-section="header">
-                <div class="flex items-center gap-2 font-bold text-slate-300 text-xs uppercase tracking-wider border-b border-slate-800 pb-3">
-                  <span class="p-1.5 bg-slate-800 rounded-lg text-slate-300">⚙️</span> Additional Fields
-                </div>
-                <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-            `;
-            for (const key of otherKeys) {
-              const val = canonical[key];
-              let displayVal = val;
-              if (typeof val === 'object' && val !== null) {
-                try { displayVal = JSON.stringify(val); } catch(e) { displayVal = String(val); }
-              }
-              const valStr = displayVal === null || displayVal === undefined ? '' : String(displayVal);
-              fieldsHtml += `
-                <div class="space-y-1.5">
-                  <label class="text-slate-400 block font-semibold text-[11px] uppercase tracking-wider">${key}</label>
-                  <input data-section="root" data-key="${key.replace(/"/g, '&quot;')}" type="text" value="${valStr.replace(/"/g, '&quot;')}" class="nested-field w-full bg-slate-950 border border-slate-700/80 rounded-xl px-3.5 py-2.5 text-white focus:border-sky-500 focus:outline-none transition-colors font-mono text-sm shadow-inner" />
-                </div>
-              `;
-            }
-            fieldsHtml += `</div></div>`;
-          }
         } else {
-          // Flat structure fallback
-          fieldsHtml += `<div class="invoice-section-panel grid grid-cols-1 gap-4" data-invoice-section="header">`;
-          for (const [key, value] of Object.entries(canonical)) {
-            let displayVal = value;
-            if (typeof value === 'object' && value !== null) {
-              try { displayVal = JSON.stringify(value); } catch(e) { displayVal = String(value); }
-            }
-            const valStr = displayVal === null || displayVal === undefined ? '' : String(displayVal);
-            fieldsHtml += `
-              <div class="space-y-1.5">
-                <label class="text-slate-400 block font-semibold text-[11px] uppercase tracking-wider">${key}</label>
-                <input data-section="root" data-key="${key.replace(/"/g, '&quot;')}" type="text" value="${valStr.replace(/"/g, '&quot;')}" class="nested-field w-full bg-slate-950 border border-slate-700/80 rounded-xl px-3.5 py-2.5 text-white focus:border-sky-500 focus:outline-none transition-colors shadow-inner font-mono text-sm" />
-              </div>
-            `;
-          }
-          fieldsHtml += `</div>`;
+          fieldsHtml = '<div class="text-sm text-slate-400">No extracted invoice sections were returned.</div>';
         }
       }
 
