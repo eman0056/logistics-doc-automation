@@ -1443,17 +1443,23 @@ def get_documents():
             invoice_records = invoices_by_document.get(r[0], [])
             extraction_payload = None
             if r[10]:
+                try:
+                    extracted_data = json.loads(r[10])
+                except (TypeError, json.JSONDecodeError):
+                    extracted_data = {}
                 extraction_payload = {
                     "canonicalJson": r[10],
                     "confidenceScores": r[11],
-                    "finalSubmittedData": r[12]
+                    "finalSubmittedData": r[12],
+                    "extractedData": extracted_data
                 }
             elif invoice_records:
                 latest_invoice = invoice_records[0]
                 extraction_payload = {
                     "canonicalJson": latest_invoice.get("canonicalJson"),
                     "confidenceScores": latest_invoice.get("confidenceScores"),
-                    "finalSubmittedData": latest_invoice.get("finalSubmittedData")
+                    "finalSubmittedData": latest_invoice.get("finalSubmittedData"),
+                    "extractedData": latest_invoice.get("extractedData", {})
                 }
 
             doc = {
@@ -1824,8 +1830,6 @@ async def extraction_callback(doc_id: str, request: Request):
                 "chargeLineItems": extracted.get('chargeLineItems') or extracted.get('charge_line_items') or []
               }
               invoice_header = extracted['invoiceHeader']
-              if isinstance(invoice_header, dict):
-                invoice_header.setdefault('invoiceNumber', extracted.get('invoice_number') or extracted.get('invoiceNumber') or f"Invoice_{int(invoice.get('invoiceIndex', index)) + 1}")
             invoice_index = invoice.get('invoiceIndex', index)
             invoice_id = invoice.get('invoiceId') or f"{doc_id}-invoice-{invoice_index + 1}"
             json_str = json.dumps(extracted)
