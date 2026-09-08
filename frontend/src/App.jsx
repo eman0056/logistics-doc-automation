@@ -532,6 +532,7 @@ function App() {
     const [loadingDoc, setLoadingDoc] = useState(true);
     const [processing, setProcessing] = useState(false);
     const [selectedInvoiceIndex, setSelectedInvoiceIndex] = useState(0);
+    const [selectedSection, setSelectedSection] = useState('header');
     const [invoiceDrafts, setInvoiceDrafts] = useState({});
     const [savingInvoice, setSavingInvoice] = useState(false);
 
@@ -637,9 +638,14 @@ function App() {
       }
     };
     const canonical = invoiceDrafts[selectedInvoice?.id] || parseInvoiceData(selectedInvoice);
-
-    const fieldEntries = Object.entries(canonical);
-    const isEmpty = fieldEntries.length === 0;
+    const shipmentKey = Array.isArray(canonical.shipmentDetails) ? 'shipmentDetails' : 'shipmentDetail';
+    const sectionDefinitions = [
+      { id: 'header', label: 'Invoice Header', value: canonical.invoiceHeader && typeof canonical.invoiceHeader === 'object' && !Array.isArray(canonical.invoiceHeader) ? canonical.invoiceHeader : {} },
+      { id: 'shipment', label: 'Shipment Details', value: Array.isArray(canonical[shipmentKey]) ? canonical[shipmentKey] : [] },
+      { id: 'charges', label: 'Charge Line Items', value: Array.isArray(canonical.chargeLineItems) ? canonical.chargeLineItems : [] },
+    ];
+    const activeSection = sectionDefinitions.find((section) => section.id === selectedSection) || sectionDefinitions[0];
+    const isEmpty = Object.keys(canonical).length === 0;
 
     const updateInvoiceField = (key, value) => {
       setInvoiceDrafts((current) => ({
@@ -722,7 +728,9 @@ function App() {
         );
       }
       return <div className="invoice-sections">
-        {fieldEntries.map(([key, value]) => renderEditableNode(value, [key], key))}
+        {activeSection.id === 'header' && renderEditableNode(activeSection.value, ['invoiceHeader'], activeSection.label)}
+        {activeSection.id === 'shipment' && renderEditableNode(activeSection.value, [shipmentKey], activeSection.label)}
+        {activeSection.id === 'charges' && renderEditableNode(activeSection.value, ['chargeLineItems'], activeSection.label)}
       </div>;
     };
 
@@ -782,15 +790,13 @@ function App() {
                   </div>
                 )}
               </div>
-              {invoiceRecords.length > 1 && (
-                <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', margin: '1rem 0' }}>
-                  {invoiceRecords.map((invoice, index) => (
-                    <button key={invoice.id} type="button" className={index === activeInvoiceIndex ? 'primary-btn' : 'secondary-btn'} onClick={() => setSelectedInvoiceIndex(index)}>
-                      Invoice {index + 1}
-                    </button>
-                  ))}
-                </div>
-              )}
+              <div className="invoice-section-tabs" role="tablist" aria-label={`Invoice ${activeInvoiceIndex + 1} sections`}>
+                {sectionDefinitions.map((section) => (
+                  <button key={section.id} type="button" role="tab" aria-selected={activeSection.id === section.id} className={activeSection.id === section.id ? 'primary-btn' : 'secondary-btn'} onClick={() => setSelectedSection(section.id)}>
+                    {section.label}
+                  </button>
+                ))}
+              </div>
               <div className="editor-scroll-content">
                 {renderFieldInputs()}
                 {processing && <div className="progress-box mt-4">The n8n workflow is extracting and validating document data automatically.</div>}

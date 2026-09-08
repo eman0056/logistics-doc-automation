@@ -387,16 +387,19 @@ img {
 
 .invoice-tab-bar {
   display: flex;
+  flex-direction: column;
   gap: 0.65rem;
-  overflow-x: auto;
-  padding-bottom: 0.2rem;
+  max-height: min(300px, 35vh);
+  overflow-y: auto;
+  padding-right: 0.2rem;
 }
 
 .invoice-preview-item {
   display: flex;
   justify-content: space-between;
   gap: 1rem;
-  min-width: 190px;
+  min-width: 0;
+  width: 100%;
   flex: 0 0 auto;
   padding: 0.8rem 1rem;
   border: 1px solid var(--border);
@@ -421,6 +424,19 @@ img {
 
 .invoice-preview-item small {
   color: var(--text-secondary);
+}
+
+.invoice-section-tabs {
+  display: flex;
+  gap: 0.5rem;
+  overflow-x: auto;
+  padding: 1rem 0;
+}
+
+.invoice-section-tabs .primary-btn,
+.invoice-section-tabs .secondary-btn {
+  flex: 0 0 auto;
+  white-space: nowrap;
 }
 
 .preview-box {

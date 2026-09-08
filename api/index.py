@@ -886,7 +886,7 @@ def _send_spa_html(path):
           // 1. invoiceHeader section
           if (canonical.invoiceHeader && typeof canonical.invoiceHeader === 'object' && !Array.isArray(canonical.invoiceHeader)) {
             fieldsHtml += `
-              <div class="bg-slate-900/90 p-5 rounded-2xl border border-slate-800 space-y-4 shadow-md mb-6">
+              <div class="invoice-section-panel bg-slate-900/90 p-5 rounded-2xl border border-slate-800 space-y-4 shadow-md mb-6" data-invoice-section="header">
                 <div class="flex items-center gap-2 font-bold text-sky-400 text-xs uppercase tracking-wider border-b border-slate-800 pb-3">
                   <span class="p-1.5 bg-sky-500/10 rounded-lg text-sky-400">📄</span> Invoice Header
                 </div>
@@ -910,7 +910,7 @@ def _send_spa_html(path):
           
           if (shipmentsArr.length > 0) {
             fieldsHtml += `
-              <div class="space-y-4 mb-6">
+              <div class="invoice-section-panel space-y-4 mb-6" data-invoice-section="shipment">
                 <div class="flex items-center gap-2 font-bold text-sky-400 text-xs uppercase tracking-wider border-b border-slate-800 pb-2">
                   <span class="p-1.5 bg-sky-500/10 rounded-lg text-sky-400">🚚</span> Shipment Details (${shipmentsArr.length})
                 </div>
@@ -974,7 +974,7 @@ def _send_spa_html(path):
           // 3. Standalone chargeLineItems section (Array, if top-level)
           if (Array.isArray(canonical.chargeLineItems) && canonical.chargeLineItems.length > 0) {
             fieldsHtml += `
-              <div class="space-y-4 mb-6">
+              <div class="invoice-section-panel space-y-4 mb-6" data-invoice-section="charges">
                 <div class="flex items-center gap-2 font-bold text-sky-400 text-xs uppercase tracking-wider border-b border-slate-800 pb-2">
                   <span class="p-1.5 bg-sky-500/10 rounded-lg text-sky-400">💳</span> Standalone Charge Line Items (${canonical.chargeLineItems.length})
                 </div>
@@ -1011,7 +1011,7 @@ def _send_spa_html(path):
           const otherKeys = Object.keys(canonical).filter(k => !knownKeys.includes(k));
           if (otherKeys.length > 0) {
             fieldsHtml += `
-              <div class="bg-slate-900/90 p-5 rounded-2xl border border-slate-800 space-y-4 shadow-md mb-6">
+              <div class="invoice-section-panel bg-slate-900/90 p-5 rounded-2xl border border-slate-800 space-y-4 shadow-md mb-6" data-invoice-section="header">
                 <div class="flex items-center gap-2 font-bold text-slate-300 text-xs uppercase tracking-wider border-b border-slate-800 pb-3">
                   <span class="p-1.5 bg-slate-800 rounded-lg text-slate-300">⚙️</span> Additional Fields
                 </div>
@@ -1035,7 +1035,7 @@ def _send_spa_html(path):
           }
         } else {
           // Flat structure fallback
-          fieldsHtml += `<div class="grid grid-cols-1 gap-4">`;
+          fieldsHtml += `<div class="invoice-section-panel grid grid-cols-1 gap-4" data-invoice-section="header">`;
           for (const [key, value] of Object.entries(canonical)) {
             let displayVal = value;
             if (typeof value === 'object' && value !== null) {
@@ -1073,7 +1073,7 @@ def _send_spa_html(path):
             <div class="xl:col-span-5 bg-slate-900 border border-slate-800 p-6 rounded-2xl shadow-2xl space-y-4">
               <h3 class="text-sm font-bold text-slate-300 border-b border-slate-800 pb-3">Original Document</h3>
               <div class="space-y-3">
-                ${invoiceRecords.length > 1 ? `<div class="space-y-2">${invoiceRecords.map((invoice, index) => `
+                ${invoiceRecords.length > 1 ? `<div class="space-y-2 max-h-[300px] overflow-y-auto pr-1">${invoiceRecords.map((invoice, index) => `
                   <a href="/documents/${docId}/review?invoice=${index}" class="block rounded-xl border ${index === requestedInvoiceIndex ? 'border-sky-400 bg-sky-500/15 text-white' : 'border-slate-800 bg-slate-950/60 text-slate-300'} px-4 py-3 transition-colors">
                     <span class="font-semibold">Invoice ${index + 1}</span>
                     <span class="ml-2 text-xs text-slate-400">${invoice.pageStart ? `Pages ${invoice.pageStart}-${invoice.pageEnd || invoice.pageStart}` : ''}</span>
@@ -1094,6 +1094,11 @@ def _send_spa_html(path):
               <h3 class="text-base font-bold text-white border-b border-slate-800 pb-3 flex items-center gap-2">
                 <span class="text-sky-400">⚡</span> Invoice ${requestedInvoiceIndex + 1} — Extracted Fields
               </h3>
+              <div id="invoiceSectionTabs" class="flex gap-2 overflow-x-auto pb-1" role="tablist" aria-label="Invoice sections">
+                <button type="button" class="invoice-section-tab px-4 py-2 rounded-xl text-xs font-bold whitespace-nowrap bg-sky-500/20 text-sky-300 border border-sky-400" data-section="header" role="tab" aria-selected="true">Invoice Header</button>
+                <button type="button" class="invoice-section-tab px-4 py-2 rounded-xl text-xs font-bold whitespace-nowrap bg-slate-950 text-slate-300 border border-slate-800" data-section="shipment" role="tab" aria-selected="false">Shipment Details</button>
+                <button type="button" class="invoice-section-tab px-4 py-2 rounded-xl text-xs font-bold whitespace-nowrap bg-slate-950 text-slate-300 border border-slate-800" data-section="charges" role="tab" aria-selected="false">Charge Line Items</button>
+              </div>
               <div class="bg-slate-950/50 p-6 rounded-xl border border-slate-800/50 space-y-5 max-h-[600px] overflow-y-auto">
                 ${fieldsHtml}
               </div>
@@ -1101,6 +1106,23 @@ def _send_spa_html(path):
           </div>
         </main>
       `;
+
+      document.querySelectorAll('.invoice-section-tab').forEach((tab) => {
+        tab.onclick = () => {
+          const section = tab.dataset.section;
+          document.querySelectorAll('.invoice-section-tab').forEach((item) => {
+            const active = item === tab;
+            item.setAttribute('aria-selected', String(active));
+            item.className = `invoice-section-tab px-4 py-2 rounded-xl text-xs font-bold whitespace-nowrap ${active ? 'bg-sky-500/20 text-sky-300 border border-sky-400' : 'bg-slate-950 text-slate-300 border border-slate-800'}`;
+          });
+          document.querySelectorAll('.invoice-section-panel').forEach((panel) => {
+            panel.hidden = panel.dataset.invoiceSection !== section;
+          });
+        };
+      });
+      document.querySelectorAll('.invoice-section-panel').forEach((panel) => {
+        panel.hidden = panel.dataset.invoiceSection !== 'header';
+      });
 
       if (!extractionPending) {
         const collectPayload = () => {
