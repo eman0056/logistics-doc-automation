@@ -317,6 +317,34 @@ def _send_spa_html(path):
       documentsCache = null;
     }
 
+    function parseExtractedData(value) {
+      if (value && typeof value === 'object' && !Array.isArray(value)) return value;
+      if (typeof value !== 'string') return {};
+      try {
+        const parsed = JSON.parse(value);
+        return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+      } catch (error) {
+        return {};
+      }
+    }
+
+    function getSingleInvoiceExtractedData(doc) {
+      const invoice = Array.isArray(doc?.invoices) ? doc.invoices[0] : null;
+      const candidates = [
+        invoice?.extractedData,
+        invoice?.canonicalJson,
+        invoice?.finalSubmittedData,
+        doc?.extraction?.extractedData,
+        doc?.extraction?.canonicalJson,
+        doc?.extraction?.finalSubmittedData
+      ];
+      for (const candidate of candidates) {
+        const parsed = parseExtractedData(candidate);
+        if (Object.keys(parsed).length > 0) return parsed;
+      }
+      return {};
+    }
+
     function getCurrentPath() {
       return window.location.pathname + window.location.search;
     }
@@ -767,14 +795,8 @@ def _send_spa_html(path):
       const d = await getDocuments(true);
       const doc = (d.documents || []).find(item => item.id === docId) || {};
 
-      const selectedInvoice = (Array.isArray(doc.invoices) && doc.invoices[0]) || { id: `${docId}-extracted`, extractedData: doc.extraction?.extractedData || {} };
-      let canonical = {};
-
-      if (selectedInvoice?.extractedData && typeof selectedInvoice.extractedData === 'object') {
-        canonical = selectedInvoice.extractedData;
-      } else if (doc.extraction?.extractedData && typeof doc.extraction.extractedData === 'object') {
-        canonical = doc.extraction.extractedData;
-      }
+      const selectedInvoice = (Array.isArray(doc.invoices) && doc.invoices[0]) || { id: `${docId}-extracted` };
+      let canonical = getSingleInvoiceExtractedData(doc);
 
       const extractionPending = Object.keys(canonical).length === 0;
       const isPdfDocument = (doc.mimeType || '').toLowerCase().includes('pdf')
@@ -798,22 +820,7 @@ def _send_spa_html(path):
             const docsData = await getDocuments(true);
             const latestDoc = (docsData.documents || []).find(item => item.id === docId) || {};
 
-            let latestCanonical = {};
-            const latestInvoice = (latestDoc.invoices || [])[0];
-            const latestInvoiceValue = latestInvoice?.extractedData || latestInvoice?.finalSubmittedData || latestInvoice?.canonicalJson;
-            if (latestInvoiceValue && typeof latestInvoiceValue === 'object') {
-              latestCanonical = latestInvoiceValue;
-            } else if (latestInvoiceValue) {
-              try { latestCanonical = JSON.parse(latestInvoiceValue); } catch (e) {}
-            }
-            if (Object.keys(latestCanonical).length === 0 && latestDoc.extraction) {
-              const documentValue = latestDoc.extraction.finalSubmittedData || latestDoc.extraction.canonicalJson;
-              if (documentValue && typeof documentValue === 'object') {
-                latestCanonical = documentValue;
-              } else if (documentValue) {
-                try { latestCanonical = JSON.parse(documentValue); } catch (e) {}
-              }
-            }
+            const latestCanonical = getSingleInvoiceExtractedData(latestDoc);
 
             if (Object.keys(latestCanonical).length > 0) {
               renderReviewPage(app, navHtml, primaryColor, docId);
