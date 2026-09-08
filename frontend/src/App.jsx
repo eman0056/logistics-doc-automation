@@ -632,12 +632,11 @@ function App() {
       );
     };
     const getInvoiceNumber = (invoice) => {
-      if (invoice?.invoiceNumber) return invoice.invoiceNumber;
       const data = parseInvoiceData(invoice);
-      const header = data.invoiceHeader && typeof data.invoiceHeader === 'object' && !Array.isArray(data.invoiceHeader)
-        ? data.invoiceHeader
-        : data;
-      return header.invoiceNumber || header.invoiceId || header.documentNumber || header.invoiceNo || '';
+      const header = data?.invoiceHeader;
+      return header && typeof header === 'object' && !Array.isArray(header)
+        ? header.invoiceNumber ?? ''
+        : '';
     };
     const parseInvoiceData = (invoice) => {
       return parseStoredInvoiceData(invoice);
