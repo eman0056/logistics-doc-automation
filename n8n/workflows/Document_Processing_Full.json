@@ -18,12 +18,28 @@
     },
     {
       "parameters": {
-        "jsCode": "// Decode the upload payload locally. Vercel storage is not a durable n8n source.\nfor (const item of $input.all()) {\n  const body = item.json.body || item.json;\n  if (!body.fileBase64) throw new Error('Webhook payload is missing fileBase64.');\n  item.json = { ...item.json, ...body, rawText: body.rawOcrText || body.ocrText || '' };\n  item.binary = { data: { data: body.fileBase64, fileName: body.fileName || 'document.pdf', mimeType: body.mimeType || 'application/pdf' } };\n}\nreturn $input.all();"
+        "jsCode": "// Decode the upload payload locally. Vercel storage is not a durable n8n source.\nfor (const item of $input.all()) {\n  const body = item.json.body || item.json;\n  if (!body.fileBase64) throw new Error('Webhook payload is missing fileBase64.');\n  const fileName = body.fileName || 'document.pdf';\n  const extension = fileName.toLowerCase().split('.').pop();\n  const extensionMimeTypes = { pdf: 'application/pdf', webp: 'image/webp', png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', avif: 'image/avif' };\n  const inputFileMimeType = body.mimeType && body.mimeType !== 'application/pdf' ? body.mimeType : (extensionMimeTypes[extension] || body.mimeType || 'application/pdf');\n  const isPdf = inputFileMimeType === 'application/pdf' || extension === 'pdf';\n  item.json = { ...item.json, ...body, fileName, inputFileMimeType, isPdf, imageBase64: isPdf ? null : body.fileBase64, rawText: body.rawOcrText || body.ocrText || '' };\n  item.binary = { data: { data: body.fileBase64, fileName, mimeType: inputFileMimeType } };\n}\nreturn $input.all();"
       },
       "name": "Node 2: Decode Uploaded File",
       "type": "n8n-nodes-base.code",
       "typeVersion": 1,
       "position": [420, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ $json.isPdf }}",
+              "operation": "isTrue"
+            }
+          ]
+        }
+      },
+      "name": "Node 2C: Route File Type",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [500, 300]
     },
     {
       "parameters": {
@@ -46,7 +62,7 @@
     },
     {
       "parameters": {
-        "jsCode": "// Node 3: PDF / Text Extraction Code Node\nconst webhook = $node['Node 1: Webhook Trigger'].json.body || {};\nconst boundaryPattern = /(?:^|\\n)\\s*(?:TAX\\s+INVOICE|FREIGHT\\s+INVOICE|INVOICE)\\b[\\s\\S]{0,500}?(?:invoice\\s*(?:number|no\\.?|#)|inv\\s*#|bill\\s*to|shipment\\s*(?:number|no\\.?|#)|tracking\\s*(?:number|no\\.?|#))/i;\nconst fallbackText = 'DHL EXPRESS FREIGHT INVOICE\\nInvoice Number: DHL-9982412\\nShipment Number: 8492019482\\nShipper: Apex Logistics Hub\\nConsignee: Global Distribution Center\\nCarrier: DHL Express Freight\\nSubtotal: $1,250.00\\nFreight: $150.00\\nTax: $75.00\\nTotal Amount: $1,475.00 USD';\n\nreturn $input.all().flatMap((item) => {\n  const input = item.json || {};\n  const rawText = input.rawText || input.text || input.data || fallbackText;\n  const pages = String(rawText).split(/\\f|(?:^|\\n)\\s*---\\s*PAGE\\s+\\d+\\s*---\\s*(?:\\n|$)/gim).map((text) => text.trim()).filter(Boolean);\n  const pageBlocks = pages.length ? pages : [String(rawText).trim()];\n  const groups = [];\n\n  pageBlocks.forEach((pageText, pageIndex) => {\n    const startsInvoice = pageIndex > 0 && boundaryPattern.test(pageText);\n    if (startsInvoice || groups.length === 0) {\n      groups.push({ pageStart: pageIndex + 1, pageEnd: pageIndex + 1, pages: [pageText] });\n    } else {\n      groups[groups.length - 1].pageEnd = pageIndex + 1;\n      groups[groups.length - 1].pages.push(pageText);\n    }\n  });\n\n  return groups.map((group, invoiceIndex) => ({\n    documentId: input.documentId || webhook.documentId,\n    callbackUrl: input.callbackUrl || webhook.callbackUrl,\n    invoiceIndex,\n    invoiceCount: groups.length,\n    pageStart: group.pageStart,\n    pageEnd: group.pageEnd,\n    rawOcrText: group.pages.join('\\n\\f\\n')\n  }));\n});"
+        "jsCode": "// Node 3: PDF / Text Extraction Code Node\nconst webhook = $node['Node 1: Webhook Trigger'].json.body || {};\nconst boundaryPattern = /(?:^|\\n)\\s*(?:TAX\\s+INVOICE|FREIGHT\\s+INVOICE|INVOICE)\\b[\\s\\S]{0,500}?(?:invoice\\s*(?:number|no\\.?|#)|inv\\s*#|bill\\s*to|shipment\\s*(?:number|no\\.?|#)|tracking\\s*(?:number|no\\.?|#))/i;\nconst fallbackText = 'DHL EXPRESS FREIGHT INVOICE\\nInvoice Number: DHL-9982412\\nShipment Number: 8492019482\\nShipper: Apex Logistics Hub\\nConsignee: Global Distribution Center\\nCarrier: DHL Express Freight\\nSubtotal: $1,250.00\\nFreight: $150.00\\nTax: $75.00\\nTotal Amount: $1,475.00 USD';\n\nreturn $input.all().flatMap((item) => {\n  const input = item.json || {};\n  const rawText = input.rawText || input.text || input.data || fallbackText;\n  const pages = String(rawText).split(/\\f|(?:^|\\n)\\s*---\\s*PAGE\\s+\\d+\\s*---\\s*(?:\\n|$)/gim).map((text) => text.trim()).filter(Boolean);\n  const pageBlocks = pages.length ? pages : [String(rawText).trim()];\n  const groups = [];\n\n  pageBlocks.forEach((pageText, pageIndex) => {\n    const startsInvoice = pageIndex > 0 && boundaryPattern.test(pageText);\n    if (startsInvoice || groups.length === 0) {\n      groups.push({ pageStart: pageIndex + 1, pageEnd: pageIndex + 1, pages: [pageText] });\n    } else {\n      groups[groups.length - 1].pageEnd = pageIndex + 1;\n      groups[groups.length - 1].pages.push(pageText);\n    }\n  });\n\n  return groups.map((group, invoiceIndex) => ({\n    documentId: input.documentId || webhook.documentId,\n    callbackUrl: input.callbackUrl || webhook.callbackUrl,\n    invoiceIndex,\n    invoiceCount: groups.length,\n    pageStart: group.pageStart,\n    pageEnd: group.pageEnd,\n    rawOcrText: group.pages.join('\\n\\f\\n'),\n    imageBase64: input.imageBase64 || null,\n    inputFileMimeType: input.inputFileMimeType || null\n  }));\n});"
       },
       "name": "Node 3: Extract PDF Text",
       "type": "n8n-nodes-base.code",
@@ -90,8 +106,28 @@
     },
     {
       "parameters": {
+        "method": "POST",
+        "url": "https://api.openai.com/v1/chat/completions",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ model: 'gpt-4o', messages: [{ role: 'system', content: 'Extract the invoice from the supplied image. Return valid JSON with invoiceHeader, shipmentDetail (array), and chargeLineItems (array). Use null for unavailable scalar values and empty arrays when absent. Do not guess.' }, { role: 'user', content: [{ type: 'text', text: 'Extract all visible invoice fields from this image.' }, { type: 'image_url', image_url: { url: 'data:' + $json.inputFileMimeType + ';base64,' + $json.imageBase64 } }] }] }) }}",
+        "options": {},
+        "headerParametersUi": {
+          "parameter": [
+            { "name": "Authorization", "value": "={{ 'Bearer ' + $env.OPENAI_API_KEY }}" },
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        }
+      },
+      "name": "Node 4B: OpenAI Image Extraction",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [860, 500]
+    },
+    {
+      "parameters": {
         "mode": "runOnceForAllItems",
-        "jsCode": "// Node 5: Response Parser Code Node\nconst sources = $items('Node 3: Extract PDF Text');\n\nreturn $input.all().map((item, index) => {\n  const response = item.json?.body || item.json || {};\n  const source = sources[index]?.json || {};\n  const openAiContent = response.choices?.[0]?.message?.content;\n  if (!openAiContent) throw new Error(`OpenAI response missing message content for item ${index}.`);\n\n  let extractedData;\n  try {\n    extractedData = JSON.parse(String(openAiContent).replace(/^```json\\s*|\\s*```$/g, '').trim());\n  } catch (error) {\n    throw new Error(`OpenAI returned invalid JSON for item ${index}: ${error.message}`);\n  }\n  if (!extractedData || typeof extractedData !== 'object' || Array.isArray(extractedData)) {\n    throw new Error(`OpenAI returned an invalid extraction object for item ${index}.`);\n  }\n\n  return {\n    documentId: source.documentId,\n    callbackUrl: source.callbackUrl,\n    invoiceId: `${source.documentId}-invoice-${Number(source.invoiceIndex || 0) + 1}`,\n    invoiceIndex: Number(source.invoiceIndex || 0),\n    invoiceCount: Number(source.invoiceCount || 1),\n    pageStart: source.pageStart,\n    pageEnd: source.pageEnd,\n    rawOcrText: source.rawOcrText,\n    extractedData,\n    \"confidenceScores\": { documentNumber: 0.98, shipmentNumber: 0.96, shipperName: 0.94, totalAmount: 0.98 },\n    overallConfidence: 0.96\n  };\n});"
+        "jsCode": "// Node 5: Response Parser Code Node\nconst sources = $items('Node 3: Extract PDF Text');\nconst fileSources = $items('Node 2: Decode Uploaded File');\n\nreturn $input.all().map((item, index) => {\n  const response = item.json?.body || item.json || {};\n  const source = sources[index]?.json || fileSources[index]?.json || {};\n  const openAiContent = response.choices?.[0]?.message?.content;\n  if (!openAiContent) throw new Error(`OpenAI response missing message content for item ${index}.`);\n\n  let extractedData;\n  try {\n    extractedData = JSON.parse(String(openAiContent).replace(/^```json\\s*|\\s*```$/g, '').trim());\n  } catch (error) {\n    throw new Error(`OpenAI returned invalid JSON for item ${index}: ${error.message}`);\n  }\n  if (!extractedData || typeof extractedData !== 'object' || Array.isArray(extractedData)) {\n    throw new Error(`OpenAI returned an invalid extraction object for item ${index}.`);\n  }\n\n  return {\n    documentId: source.documentId,\n    callbackUrl: source.callbackUrl,\n    invoiceId: `${source.documentId}-invoice-${Number(source.invoiceIndex || 0) + 1}`,\n    invoiceIndex: Number(source.invoiceIndex || 0),\n    invoiceCount: Number(source.invoiceCount || 1),\n    pageStart: source.pageStart,\n    pageEnd: source.pageEnd,\n    rawOcrText: source.rawOcrText,\n    extractedData,\n    \"confidenceScores\": { documentNumber: 0.98, shipmentNumber: 0.96, shipperName: 0.94, totalAmount: 0.98 },\n    overallConfidence: 0.96\n  };\n});"
       },
       "name": "Node 5: Parse OpenAI Response",
       "type": "n8n-nodes-base.code",
@@ -137,7 +173,25 @@
       "main": [
         [
           {
+            "node": "Node 2C: Route File Type",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Node 2C: Route File Type": {
+      "main": [
+        [
+          {
             "node": "Node 2A: Extract PDF Text",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Node 4B: OpenAI Image Extraction",
             "type": "main",
             "index": 0
           }
@@ -178,6 +232,17 @@
       ]
     },
     "Node 4: OpenAI API Extraction": {
+      "main": [
+        [
+          {
+            "node": "Node 5: Parse OpenAI Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Node 4B: OpenAI Image Extraction": {
       "main": [
         [
           {
