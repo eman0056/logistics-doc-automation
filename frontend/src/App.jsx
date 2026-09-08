@@ -29,7 +29,13 @@ const fetchJson = async (url, options = {}) => {
 
 const parseStoredInvoiceData = (invoice) => {
   if (invoice?.extractedData && typeof invoice.extractedData === 'object') return invoice.extractedData;
-  return {};
+  try {
+    const stored = invoice?.canonicalJson || invoice?.finalSubmittedData;
+    const parsed = typeof stored === 'string' ? JSON.parse(stored) : stored;
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+  } catch (error) {
+    return {};
+  }
 };
 
 const hasStoredInvoiceData = (invoice) => Object.keys(parseStoredInvoiceData(invoice)).length > 0;
@@ -569,7 +575,7 @@ function App() {
         }) || doc?.invoices?.some(hasStoredInvoiceData)
       );
       const invoicesPending = doc?.invoices?.some((invoice) => !hasStoredInvoiceData(invoice) && invoice.extractionStatus !== 'EXTRACTED');
-      const isDocReady = doc && (hasRealExtraction || ['EXTRACTED', 'IN_REVIEW', 'APPROVED', 'INVOICE_GENERATED'].includes(doc.status));
+      const isDocReady = doc && hasRealExtraction;
 
       if (!doc || (!isDocReady && !invoicesPending)) {
         const interval = setInterval(async () => {
@@ -591,7 +597,7 @@ function App() {
 
     useEffect(() => {
       if (!doc) return;
-      const records = doc.invoices?.length ? doc.invoices : [{ id: `${doc.id}-extracted`, extractedData: doc.extraction?.extractedData || {} }];
+      const records = doc.invoices?.length ? doc.invoices : [{ id: `${doc.id}-extracted`, extractedData: parseStoredInvoiceData(doc.extraction) }];
       setInvoiceDrafts((current) => {
         const next = { ...current };
         records.forEach((invoice) => {
@@ -609,7 +615,7 @@ function App() {
 
     if (!doc) return <><>{nav}</><main className="page"><div className="card upload-panel">Document not found.</div></main></>;
 
-    const selectedInvoice = doc.invoices?.[0] || { id: `${doc.id}-extracted`, extractedData: doc.extraction?.extractedData || {} };
+    const selectedInvoice = doc.invoices?.[0] || { id: `${doc.id}-extracted`, extractedData: parseStoredInvoiceData(doc.extraction) };
     const previewUrl = `${API}/documents/${docId}/file?ts=${Date.now()}`;
     const isPdfDocument = () => {
       const mimeType = (doc?.mimeType || '').toLowerCase();
