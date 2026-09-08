@@ -767,22 +767,13 @@ def _send_spa_html(path):
       const d = await getDocuments(true);
       const doc = (d.documents || []).find(item => item.id === docId) || {};
 
-      const invoiceRecords = Array.isArray(doc.invoices) && doc.invoices.length
-        ? doc.invoices
-        : [{ id: `${docId}-invoice-1`, invoiceIndex: 0, canonicalJson: doc.extraction?.canonicalJson, finalSubmittedData: doc.extraction?.finalSubmittedData }];
-      const requestedInvoiceIndex = Math.max(0, Math.min(
-        parseInt(new URLSearchParams(window.location.search).get('invoice') || '0', 10) || 0,
-        invoiceRecords.length - 1
-      ));
-      const selectedInvoice = invoiceRecords[requestedInvoiceIndex];
+      const selectedInvoice = (Array.isArray(doc.invoices) && doc.invoices[0]) || { id: `${docId}-extracted`, extractedData: doc.extraction?.extractedData || {} };
       let canonical = {};
 
       if (selectedInvoice?.extractedData && typeof selectedInvoice.extractedData === 'object') {
         canonical = selectedInvoice.extractedData;
       } else if (doc.extraction?.extractedData && typeof doc.extraction.extractedData === 'object') {
         canonical = doc.extraction.extractedData;
-      } else if (!selectedInvoice?.extractedData && doc.extraction?.canonicalJson) {
-        try { canonical = JSON.parse(doc.extraction.canonicalJson); } catch(e) {}
       }
 
       const extractionPending = Object.keys(canonical).length === 0;
@@ -808,7 +799,7 @@ def _send_spa_html(path):
             const latestDoc = (docsData.documents || []).find(item => item.id === docId) || {};
 
             let latestCanonical = {};
-            const latestInvoice = (latestDoc.invoices || []).find((invoice) => invoice.invoiceIndex === requestedInvoiceIndex) || (latestDoc.invoices || [])[0];
+            const latestInvoice = (latestDoc.invoices || [])[0];
             const latestInvoiceValue = latestInvoice?.extractedData || latestInvoice?.finalSubmittedData || latestInvoice?.canonicalJson;
             if (latestInvoiceValue && typeof latestInvoiceValue === 'object') {
               latestCanonical = latestInvoiceValue;
@@ -1022,15 +1013,11 @@ def _send_spa_html(path):
             <div class="xl:col-span-5 bg-slate-900 border border-slate-800 p-6 rounded-2xl shadow-2xl space-y-4">
               <h3 class="text-sm font-bold text-slate-300 border-b border-slate-800 pb-3">Original Document</h3>
               <div class="space-y-3">
-                ${invoiceRecords.length > 1 ? `<div class="space-y-2 max-h-[300px] overflow-y-auto pr-1">${invoiceRecords.map((invoice, index) => `
-                  <a href="/documents/${docId}/review?invoice=${index}" class="block rounded-xl border ${index === requestedInvoiceIndex ? 'border-sky-400 bg-sky-500/15 text-white' : 'border-slate-800 bg-slate-950/60 text-slate-300'} px-4 py-3 transition-colors">
-                    <span class="font-semibold">Invoice ${index + 1}</span>
-                    <span class="ml-2 text-xs text-slate-400">${invoice.pageStart ? `Pages ${invoice.pageStart}-${invoice.pageEnd || invoice.pageStart}` : ''}</span>
-                  </a>`).join('')}</div>` : ''}
+                <div class="text-xs text-slate-400">Original uploaded document</div>
                 <div class="bg-slate-950 rounded-xl overflow-hidden border border-slate-800 h-[600px]">
                 ${isPdfDocument ? `
-                  <iframe src="/api/documents/${docId}/file#page=${selectedInvoice?.pageStart || requestedInvoiceIndex + 1}" title="Invoice ${requestedInvoiceIndex + 1} preview" class="w-full h-full border-0" style="background:#fff;"></iframe>
-                  <a href="/api/documents/${docId}/file#page=${selectedInvoice?.pageStart || requestedInvoiceIndex + 1}" target="_blank" rel="noopener" class="block text-center text-xs text-sky-400 mt-3 hover:underline">Open original document</a>
+                  <iframe src="/api/documents/${docId}/file#page=${selectedInvoice?.pageStart || 1}" title="Original document preview" class="w-full h-full border-0" style="background:#fff;"></iframe>
+                  <a href="/api/documents/${docId}/file#page=${selectedInvoice?.pageStart || 1}" target="_blank" rel="noopener" class="block text-center text-xs text-sky-400 mt-3 hover:underline">Open original document</a>
                 ` : `
                   <img src="/api/documents/${docId}/file" alt="Document Preview" class="w-full h-full object-contain p-2"
                     onerror="this.src='https://placehold.co/600x800/1e293b/475569?text=No+Preview+Available'" />
@@ -1041,7 +1028,7 @@ def _send_spa_html(path):
 
             <div class="xl:col-span-7 bg-slate-900 border border-slate-800 p-8 rounded-2xl shadow-2xl space-y-6">
               <h3 class="text-base font-bold text-white border-b border-slate-800 pb-3 flex items-center gap-2">
-                <span class="text-sky-400">⚡</span> Invoice ${requestedInvoiceIndex + 1} — Extracted Fields
+                <span class="text-sky-400">⚡</span> Extracted Fields
               </h3>
               <div id="invoiceSectionTabs" class="flex gap-2 overflow-x-auto pb-1" role="tablist" aria-label="Invoice sections">
                 <button type="button" class="invoice-section-tab px-4 py-2 rounded-xl text-xs font-bold whitespace-nowrap bg-sky-500/20 text-sky-300 border border-sky-400" data-section="header" role="tab" aria-selected="true">Invoice Header</button>

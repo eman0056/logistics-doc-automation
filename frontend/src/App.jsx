@@ -538,7 +538,6 @@ function App() {
     const [doc, setDoc] = useState(null);
     const [loadingDoc, setLoadingDoc] = useState(true);
     const [processing, setProcessing] = useState(false);
-    const [selectedInvoiceIndex, setSelectedInvoiceIndex] = useState(0);
     const [selectedSection, setSelectedSection] = useState('header');
     const [invoiceDrafts, setInvoiceDrafts] = useState({});
     const [savingInvoice, setSavingInvoice] = useState(false);
@@ -592,9 +591,7 @@ function App() {
 
     useEffect(() => {
       if (!doc) return;
-      const records = doc.invoices?.length
-        ? doc.invoices
-          : [{ id: `${doc.id}-invoice-1`, extractedData: doc.extraction?.extractedData || (() => { try { return JSON.parse(doc.extraction?.canonicalJson || '{}'); } catch (error) { return {}; } })() }];
+      const records = doc.invoices?.length ? doc.invoices : [{ id: `${doc.id}-extracted`, extractedData: doc.extraction?.extractedData || {} }];
       setInvoiceDrafts((current) => {
         const next = { ...current };
         records.forEach((invoice) => {
@@ -612,11 +609,7 @@ function App() {
 
     if (!doc) return <><>{nav}</><main className="page"><div className="card upload-panel">Document not found.</div></main></>;
 
-    const invoiceRecords = doc.invoices?.length
-      ? doc.invoices
-      : [{ id: `${doc.id}-invoice-1`, invoiceIndex: 0, extractedData: doc.extraction?.extractedData || (() => { try { return JSON.parse(doc.extraction?.canonicalJson || '{}'); } catch (error) { return {}; } })() }];
-    const activeInvoiceIndex = Math.min(selectedInvoiceIndex, Math.max(invoiceRecords.length - 1, 0));
-    const selectedInvoice = invoiceRecords[activeInvoiceIndex] || invoiceRecords[0];
+    const selectedInvoice = doc.invoices?.[0] || { id: `${doc.id}-extracted`, extractedData: doc.extraction?.extractedData || {} };
     const previewUrl = `${API}/documents/${docId}/file?ts=${Date.now()}`;
     const isPdfDocument = () => {
       const mimeType = (doc?.mimeType || '').toLowerCase();
@@ -630,13 +623,6 @@ function App() {
         fileName.endsWith('.pdf#') ||
         mimeType.includes('application/pdf')
       );
-    };
-    const getInvoiceNumber = (invoice) => {
-      const data = parseInvoiceData(invoice);
-      const header = data?.invoiceHeader;
-      return header && typeof header === 'object' && !Array.isArray(header)
-        ? header.invoiceNumber ?? ''
-        : '';
     };
     const parseInvoiceData = (invoice) => {
       return parseStoredInvoiceData(invoice);
@@ -775,21 +761,16 @@ function App() {
               <h3 className="section-title" style={{ color: '#fff', letterSpacing: '0.1em' }}>Original Document</h3>
               <div className="invoice-preview-list">
                 <div className="invoice-tab-bar">
-                  {invoiceRecords.map((invoice, index) => (
-                    <button key={invoice.id} type="button" className={`invoice-preview-item${index === activeInvoiceIndex ? ' active' : ''}`} onClick={() => setSelectedInvoiceIndex(index)}>
-                      <span>
-                        <strong>Invoice {index + 1}</strong>
-                        {getInvoiceNumber(invoice) && <small>{getInvoiceNumber(invoice)}</small>}
-                      </span>
-                      <small>{invoice.extractionComplete ? '✓ Extracted' : '⏳ Processing'}{invoice.pageStart ? ` · Pages ${invoice.pageStart}-${invoice.pageEnd || invoice.pageStart}` : ''}</small>
-                    </button>
-                  ))}
+                  <div className="invoice-preview-item active">
+                    <span><strong>Original uploaded document</strong></span>
+                    <small>{selectedInvoice.extractionComplete ? '✓ Extracted' : 'Document preview'}</small>
+                  </div>
                 </div>
-                <div className="preview-box" key={`${selectedInvoice?.id || 'invoice'}-${selectedInvoice?.pageStart || activeInvoiceIndex + 1}`}>
+                <div className="preview-box" key={selectedInvoice?.id || docId}>
                   {isPdfDocument() ? (
                     <>
-                      <iframe className="document-scroll-viewer" src={`${previewUrl}#page=${selectedInvoice?.pageStart || activeInvoiceIndex + 1}`} title={`Invoice ${activeInvoiceIndex + 1} preview`} />
-                      <a className="document-open-fallback" href={`${previewUrl}#page=${selectedInvoice?.pageStart || activeInvoiceIndex + 1}`} target="_blank" rel="noreferrer">Open original document</a>
+                      <iframe className="document-scroll-viewer" src={`${previewUrl}#page=${selectedInvoice?.pageStart || 1}`} title="Original document preview" />
+                      <a className="document-open-fallback" href={`${previewUrl}#page=${selectedInvoice?.pageStart || 1}`} target="_blank" rel="noreferrer">Open original document</a>
                     </>
                   ) : (
                     <img src={previewUrl} alt="Document Preview" onError={(e) => { e.currentTarget.src = 'https://placehold.co/600x800/1e293b/475569?text=No+Preview+Available'; }} />
@@ -800,16 +781,9 @@ function App() {
 
             <div className="card editor-panel">
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap' }}>
-                <h3 className="section-title" style={{ color: '#fff', letterSpacing: '0.1em', margin: 0 }}>Invoice {activeInvoiceIndex + 1} — Extracted Fields</h3>
-                {invoiceRecords.length > 1 && (
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                    <button className="secondary-btn" type="button" disabled={activeInvoiceIndex === 0} onClick={() => setSelectedInvoiceIndex(activeInvoiceIndex - 1)}>Previous</button>
-                    <span className="subtle-copy">Invoice {activeInvoiceIndex + 1} of {invoiceRecords.length}</span>
-                    <button className="secondary-btn" type="button" disabled={activeInvoiceIndex === invoiceRecords.length - 1} onClick={() => setSelectedInvoiceIndex(activeInvoiceIndex + 1)}>Next</button>
-                  </div>
-                )}
+                <h3 className="section-title" style={{ color: '#fff', letterSpacing: '0.1em', margin: 0 }}>Extracted Fields</h3>
               </div>
-              <div className="invoice-section-tabs" role="tablist" aria-label={`Invoice ${activeInvoiceIndex + 1} sections`}>
+              <div className="invoice-section-tabs" role="tablist" aria-label="Extracted invoice sections">
                 {sectionDefinitions.map((section) => (
                   <button key={section.id} type="button" role="tab" aria-selected={activeSection.id === section.id} className={activeSection.id === section.id ? 'primary-btn' : 'secondary-btn'} onClick={() => setSelectedSection(section.id)}>
                     {section.label}
