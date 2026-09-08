@@ -1450,10 +1450,16 @@ def get_documents():
             doc["invoices"] = invoices_by_document.get(r[0], [])
             doc["invoiceCount"] = len(doc["invoices"])
             docs.append(doc)
-        return {"success": True, "documents": docs}
+        response = JSONResponse({"success": True, "documents": docs})
+        response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+        response.headers["Pragma"] = "no-cache"
+        response.headers["Expires"] = "0"
+        return response
     except Exception as e:
         import traceback
-        return JSONResponse({"error": str(e), "trace": traceback.format_exc()}, status_code=500)
+        response = JSONResponse({"error": str(e), "trace": traceback.format_exc()}, status_code=500)
+        response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+        return response
 
 @app.delete("/api/documents/{doc_id}")
 def delete_document(doc_id: str):
@@ -1636,10 +1642,12 @@ def get_document_status(doc_id: str):
     conn.close()
 
     if not row:
-        return JSONResponse({"error": "Document not found"}, status_code=404)
+        response = JSONResponse({"error": "Document not found"}, status_code=404)
+        response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+        return response
 
     is_extracted = row[2] in ["EXTRACTED", "IN_REVIEW", "APPROVED", "INVOICE_GENERATED"]
-    return {
+    response = JSONResponse({
         "success": True,
         "documentId": row[0],
         "fileName": row[1],
@@ -1650,7 +1658,11 @@ def get_document_status(doc_id: str):
         "processedPages": row[5],
         "progress": {"current": row[5], "total": row[4]},
         "reviewUrl": f"/documents/{row[0]}/review"
-    }
+    })
+    response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+    response.headers["Pragma"] = "no-cache"
+    response.headers["Expires"] = "0"
+    return response
 
 @app.post("/api/documents/{doc_id}/review")
 async def save_review(doc_id: str, request: Request):

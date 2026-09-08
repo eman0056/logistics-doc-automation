@@ -22,6 +22,11 @@ const normalizeStatus = (status) => {
   return lookup[safe] || 'neutral';
 };
 
+const fetchJson = async (url, options = {}) => {
+  const res = await fetch(url, { cache: 'no-store', ...options });
+  return res;
+};
+
 function App() {
   const [customer, setCustomer] = useState(defaultCustomer);
   const [documents, setDocuments] = useState([]);
@@ -42,8 +47,8 @@ function App() {
     const loadData = async () => {
       try {
         const [customerRes, docsRes] = await Promise.all([
-          fetch(`${API}/customer`),
-          fetch(`${API}/documents`),
+          fetchJson(`${API}/customer`),
+          fetchJson(`${API}/documents?refresh=${Date.now()}`),
         ]);
 
         const customerJson = await customerRes.json();
@@ -379,7 +384,7 @@ function App() {
       selectedFiles.forEach((file) => formData.append('file', file));
 
       try {
-        const res = await fetch(`${API}/documents/upload`, { method: 'POST', body: formData });
+        const res = await fetchJson(`${API}/documents/upload`, { method: 'POST', body: formData });
         const data = await res.json();
         if (data.success && data.documentIds && data.documentIds.length > 0) {
           const totalPages = Object.values(data.pageCounts || {}).reduce((sum, count) => sum + count, 0);
@@ -388,7 +393,7 @@ function App() {
 
           const pollProgress = async () => {
             const statuses = await Promise.all(data.documentIds.map(async (documentId) => {
-              const response = await fetch(`${API}/documents/${documentId}/status`);
+              const response = await fetchJson(`${API}/documents/${documentId}/status?refresh=${Date.now()}`);
               return response.json();
             }));
             const current = statuses.reduce((sum, status) => sum + (status.processedPages || 0), 0);
@@ -396,7 +401,8 @@ function App() {
             setPageProgress({ current, total });
             setStatusText(current >= total ? `Extraction completed — ${total}/${total} pages processed` : `Processing ${current}/${total}`);
             if (current >= total || statuses.every((status) => status.isExtracted)) {
-              setTimeout(() => { window.location.href = `/documents/${data.documentIds[0]}/review`; }, 800);
+              const firstCompletedDoc = data.documentIds.find((documentId, index) => statuses[index]?.isExtracted);
+              setTimeout(() => { window.location.href = `/documents/${firstCompletedDoc || data.documentIds[0]}/review`; }, 800);
               return;
             }
             window.setTimeout(pollProgress, 1500);
