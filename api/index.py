@@ -791,9 +791,9 @@ def _send_spa_html(path):
       `;
     }
 
-    async function renderReviewPage(app, navHtml, primaryColor, docId) {
-      const d = await getDocuments(true);
-      const doc = (d.documents || []).find(item => item.id === docId) || {};
+    async function renderReviewPage(app, navHtml, primaryColor, docId, documentOverride = null) {
+      const d = documentOverride ? null : await getDocuments(true);
+      const doc = documentOverride || (d.documents || []).find(item => item.id === docId) || {};
 
       const selectedInvoice = (Array.isArray(doc.invoices) && doc.invoices[0]) || { id: `${docId}-extracted` };
       let canonical = getSingleInvoiceExtractedData(doc);
@@ -824,13 +824,21 @@ def _send_spa_html(path):
             const docsData = await getDocuments(true);
             if (pollState.cancelled) return;
             const latestDoc = (docsData.documents || []).find(item => item.id === docId) || {};
+            const latestData = parseExtractedData(statusData.extractedData);
+            if (Object.keys(latestData).length > 0) {
+              latestDoc.extraction = {
+                ...(latestDoc.extraction || {}),
+                extractedData: latestData,
+                canonicalJson: JSON.stringify(latestData)
+              };
+            }
 
             const latestCanonical = getSingleInvoiceExtractedData(latestDoc);
 
             if (Object.keys(latestCanonical).length > 0) {
               pollState.cancelled = true;
               if (window.__docReviewPolling[pollKey] === pollState) delete window.__docReviewPolling[pollKey];
-              renderReviewPage(app, navHtml, primaryColor, docId);
+              renderReviewPage(app, navHtml, primaryColor, docId, latestDoc);
               return;
             }
           }
@@ -1709,7 +1717,14 @@ async def batch_generate(request: Request):
 @app.get("/api/documents/{doc_id}/status")
 def get_document_status(doc_id: str):
     conn = get_db()
-    cursor = execute_query(conn, "SELECT id, fileName, status, overallConfidence, COALESCE(pageCount, 1), COALESCE(processedPages, 0) FROM Document WHERE id = ?;", (doc_id,))
+    cursor = execute_query(conn, """
+        SELECT d.id, d.fileName, d.status, d.overallConfidence,
+               COALESCE(d.pageCount, 1), COALESCE(d.processedPages, 0),
+               e.canonicalJson, e.finalSubmittedData
+        FROM Document d
+        LEFT JOIN Extraction e ON e.documentId = d.id
+        WHERE d.id = ?;
+    """, (doc_id,))
     row = cursor.fetchone()
     conn.close()
 
@@ -1718,7 +1733,18 @@ def get_document_status(doc_id: str):
         response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
         return response
 
-    is_extracted = row[2] in ["EXTRACTED", "IN_REVIEW", "APPROVED", "INVOICE_GENERATED"]
+    extracted_data = {}
+    for stored in (row[7], row[6]):
+        if not stored:
+            continue
+        try:
+            parsed = json.loads(stored) if isinstance(stored, str) else stored
+        except (TypeError, json.JSONDecodeError):
+            parsed = {}
+        if isinstance(parsed, dict) and parsed:
+            extracted_data = parsed
+            break
+    is_extracted = bool(extracted_data) or row[2] in ["EXTRACTED", "IN_REVIEW", "APPROVED", "INVOICE_GENERATED"]
     response = JSONResponse({
         "success": True,
         "documentId": row[0],
@@ -1728,6 +1754,7 @@ def get_document_status(doc_id: str):
         "overallConfidence": row[3],
         "pageCount": row[4],
         "processedPages": row[5],
+        "extractedData": extracted_data,
         "progress": {"current": row[5], "total": row[4]},
         "reviewUrl": f"/documents/{row[0]}/review"
     })

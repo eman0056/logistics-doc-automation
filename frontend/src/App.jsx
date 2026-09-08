@@ -602,6 +602,13 @@ function App() {
             const documentsJson = await documentsRes.json();
             const latestDoc = (documentsJson.documents || []).find((item) => item.id === docId);
             if (pollingRef.current.cancelled) return;
+            if (latestDoc && status.extractedData && Object.keys(status.extractedData).length > 0) {
+              latestDoc.extraction = {
+                ...(latestDoc.extraction || {}),
+                extractedData: status.extractedData,
+                canonicalJson: JSON.stringify(status.extractedData),
+              };
+            }
             if (latestDoc) setDoc(latestDoc);
             if (status.status === 'FAILED') setProcessing(false);
           } catch (error) {
