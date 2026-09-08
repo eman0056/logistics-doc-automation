@@ -547,6 +547,8 @@ function App() {
     const [selectedSection, setSelectedSection] = useState('header');
     const [invoiceDrafts, setInvoiceDrafts] = useState({});
     const [savingInvoice, setSavingInvoice] = useState(false);
+    const [discarding, setDiscarding] = useState(false);
+    const pollingRef = useRef({ cancelled: false, timeout: null, controller: null });
 
     useEffect(() => {
       let isMounted = true;
@@ -578,28 +580,45 @@ function App() {
       const isDocReady = doc && hasRealExtraction;
 
       if (!doc || (!isDocReady && !invoicesPending)) {
-        let cancelled = false;
+        pollingRef.current.cancelled = false;
         const poll = async () => {
+          if (pollingRef.current.cancelled) return;
+          pollingRef.current.controller?.abort();
+          pollingRef.current.controller = new AbortController();
           try {
-            const statusRes = await fetchJson(`${API}/documents/${docId}/status?refresh=${Date.now()}`);
+            const requestOptions = { signal: pollingRef.current.controller.signal };
+            const statusRes = await fetchJson(`${API}/documents/${docId}/status?refresh=${Date.now()}`, requestOptions);
             const status = await statusRes.json();
-            const documentsRes = await fetchJson(`${API}/documents?refresh=${Date.now()}`);
+            const documentsRes = await fetchJson(`${API}/documents?refresh=${Date.now()}`, requestOptions);
             const documentsJson = await documentsRes.json();
             const latestDoc = (documentsJson.documents || []).find((item) => item.id === docId);
-            if (!cancelled && latestDoc) setDoc(latestDoc);
-            if (!cancelled && status.status === 'FAILED') setProcessing(false);
+            if (pollingRef.current.cancelled) return;
+            if (latestDoc) setDoc(latestDoc);
+            if (status.status === 'FAILED') setProcessing(false);
           } catch (error) {
-            console.error(error);
+            if (error.name !== 'AbortError' && !pollingRef.current.cancelled) console.error(error);
           }
-          if (!cancelled) window.setTimeout(poll, 1500);
+          if (!pollingRef.current.cancelled) {
+            pollingRef.current.timeout = window.setTimeout(poll, 1500);
+          }
         };
         poll();
         setProcessing(true);
-        return () => { cancelled = true; };
+        return () => {
+          pollingRef.current.cancelled = true;
+          if (pollingRef.current.timeout) window.clearTimeout(pollingRef.current.timeout);
+          pollingRef.current.controller?.abort();
+        };
       }
       setProcessing(false);
       return undefined;
     }, [doc, docId]);
+
+    useEffect(() => () => {
+      pollingRef.current.cancelled = true;
+      if (pollingRef.current.timeout) window.clearTimeout(pollingRef.current.timeout);
+      pollingRef.current.controller?.abort();
+    }, []);
 
     useEffect(() => {
       if (!doc) return;
@@ -694,6 +713,37 @@ function App() {
       }
     };
 
+    const discardDocument = async () => {
+      if (discarding) return;
+      setDiscarding(true);
+      pollingRef.current.cancelled = true;
+      if (pollingRef.current.timeout) window.clearTimeout(pollingRef.current.timeout);
+      pollingRef.current.controller?.abort();
+
+      try {
+        const response = await fetch(`${API}/documents/${docId}`, { method: 'DELETE', cache: 'no-store' });
+        const result = await response.json();
+        if (!response.ok || !result.success) throw new Error(result.error || 'Unable to discard document.');
+
+        setDoc(null);
+        setInvoiceDrafts({});
+        setDocuments((current) => current.filter((item) => item.id !== docId));
+        window.history.pushState({}, '', '/documents');
+        setPath('/documents');
+        try {
+          const latestDocuments = await fetchJson(`${API}/documents?refresh=${Date.now()}`);
+          const latestJson = await latestDocuments.json();
+          if (latestDocuments.ok) setDocuments(latestJson.documents || []);
+        } catch (refreshError) {
+          console.error('Document list refresh failed after discard', refreshError);
+        }
+        setDiscarding(false);
+      } catch (error) {
+        if (error.name !== 'AbortError') alert(error.message || 'Unable to discard document.');
+        setDiscarding(false);
+      }
+    };
+
     const renderEditableNode = (value, path, label, options = {}) => {
       if (Array.isArray(value)) {
         return (
@@ -762,7 +812,9 @@ function App() {
               <p className="subtle-copy mt-2">Edit the exact extracted key-value pairs before final generation.</p>
             </div>
             <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap' }}>
-              <a href="/documents" className="secondary-btn">Discard</a>
+              <button type="button" className="secondary-btn" onClick={discardDocument} disabled={discarding}>
+                {discarding ? 'Discarding...' : 'Discard'}
+              </button>
               {!isEmpty && <button className="primary-btn" onClick={saveInvoice} disabled={savingInvoice}>{savingInvoice ? 'Saving...' : 'Save & Approve'}</button>}
               {!isEmpty && <button className="secondary-btn">Generate Invoice</button>}
             </div>
