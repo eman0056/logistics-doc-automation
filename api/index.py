@@ -1106,7 +1106,7 @@ def _send_spa_html(path):
               </h3>
               <div id="invoiceSectionTabs" class="flex gap-2 overflow-x-auto pb-1" role="tablist" aria-label="Invoice sections">
                 <button type="button" class="invoice-section-tab px-4 py-2 rounded-xl text-xs font-bold whitespace-nowrap bg-sky-500/20 text-sky-300 border border-sky-400" data-section="header" role="tab" aria-selected="true">Invoice Header</button>
-                <button type="button" class="invoice-section-tab px-4 py-2 rounded-xl text-xs font-bold whitespace-nowrap bg-slate-950 text-slate-300 border border-slate-800" data-section="shipment" role="tab" aria-selected="false">Shipment Details</button>
+                <button type="button" class="invoice-section-tab px-4 py-2 rounded-xl text-xs font-bold whitespace-nowrap bg-slate-950 text-slate-300 border border-slate-800" data-section="shipment" role="tab" aria-selected="false">Shipments</button>
                 <button type="button" class="invoice-section-tab px-4 py-2 rounded-xl text-xs font-bold whitespace-nowrap bg-slate-950 text-slate-300 border border-slate-800" data-section="charges" role="tab" aria-selected="false">Charge Line Items</button>
               </div>
               <div class="bg-slate-950/50 p-6 rounded-xl border border-slate-800/50 space-y-5 max-h-[600px] overflow-y-auto">

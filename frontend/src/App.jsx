@@ -650,7 +650,7 @@ function App() {
     const shipmentKey = Array.isArray(canonical.shipmentDetails) ? 'shipmentDetails' : 'shipmentDetail';
     const sectionDefinitions = [
       { id: 'header', label: 'Invoice Header', value: canonical.invoiceHeader && typeof canonical.invoiceHeader === 'object' && !Array.isArray(canonical.invoiceHeader) ? canonical.invoiceHeader : {} },
-      { id: 'shipment', label: 'Shipment Details', value: Array.isArray(canonical[shipmentKey]) ? canonical[shipmentKey] : [] },
+      { id: 'shipment', label: 'Shipments', value: Array.isArray(canonical[shipmentKey]) ? canonical[shipmentKey] : [] },
       { id: 'charges', label: 'Charge Line Items', value: Array.isArray(canonical.chargeLineItems) ? canonical.chargeLineItems : [] },
     ];
     const activeSection = sectionDefinitions.find((section) => section.id === selectedSection) || sectionDefinitions[0];
