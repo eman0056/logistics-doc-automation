@@ -810,10 +810,20 @@ def _send_spa_html(path):
             const latestDoc = (docsData.documents || []).find(item => item.id === docId) || {};
 
             let latestCanonical = {};
-            if (latestDoc.extraction?.finalSubmittedData) {
-              try { latestCanonical = JSON.parse(latestDoc.extraction.finalSubmittedData); } catch (e) {}
-            } else if (latestDoc.extraction?.canonicalJson) {
-              try { latestCanonical = JSON.parse(latestDoc.extraction.canonicalJson); } catch (e) {}
+            const latestInvoice = (latestDoc.invoices || []).find((invoice) => invoice.invoiceIndex === requestedInvoiceIndex) || (latestDoc.invoices || [])[0];
+            const latestInvoiceValue = latestInvoice?.extractedData || latestInvoice?.finalSubmittedData || latestInvoice?.canonicalJson;
+            if (latestInvoiceValue && typeof latestInvoiceValue === 'object') {
+              latestCanonical = latestInvoiceValue;
+            } else if (latestInvoiceValue) {
+              try { latestCanonical = JSON.parse(latestInvoiceValue); } catch (e) {}
+            }
+            if (Object.keys(latestCanonical).length === 0 && latestDoc.extraction) {
+              const documentValue = latestDoc.extraction.finalSubmittedData || latestDoc.extraction.canonicalJson;
+              if (documentValue && typeof documentValue === 'object') {
+                latestCanonical = documentValue;
+              } else if (documentValue) {
+                try { latestCanonical = JSON.parse(documentValue); } catch (e) {}
+              }
             }
 
             if (Object.keys(latestCanonical).length > 0) {

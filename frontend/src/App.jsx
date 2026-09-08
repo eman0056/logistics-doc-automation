@@ -27,6 +27,17 @@ const fetchJson = async (url, options = {}) => {
   return res;
 };
 
+const parseStoredInvoiceData = (invoice) => {
+  if (invoice?.extractedData && typeof invoice.extractedData === 'object') return invoice.extractedData;
+  try {
+    return JSON.parse(invoice?.finalSubmittedData || invoice?.canonicalJson || '{}');
+  } catch (error) {
+    return {};
+  }
+};
+
+const hasStoredInvoiceData = (invoice) => Object.keys(parseStoredInvoiceData(invoice)).length > 0;
+
 function App() {
   const [customer, setCustomer] = useState(defaultCustomer);
   const [documents, setDocuments] = useState([]);
@@ -555,8 +566,14 @@ function App() {
     }, [docId]);
 
     useEffect(() => {
-      const hasRealExtraction = !!(doc?.extraction?.canonicalJson || doc?.invoices?.some((invoice) => invoice.extractionComplete || invoice.canonicalJson || invoice.finalSubmittedData));
-      const invoicesPending = doc?.invoices?.some((invoice) => !invoice.extractionComplete && invoice.extractionStatus === 'PROCESSING');
+      const hasRealExtraction = !!(
+        hasStoredInvoiceData({
+          extractedData: doc?.extraction?.extractedData,
+          canonicalJson: doc?.extraction?.canonicalJson,
+          finalSubmittedData: doc?.extraction?.finalSubmittedData,
+        }) || doc?.invoices?.some(hasStoredInvoiceData)
+      );
+      const invoicesPending = doc?.invoices?.some((invoice) => !hasStoredInvoiceData(invoice) && invoice.extractionStatus !== 'EXTRACTED');
       const isDocReady = doc && (hasRealExtraction || ['EXTRACTED', 'IN_REVIEW', 'APPROVED', 'INVOICE_GENERATED'].includes(doc.status));
 
       if (!doc || (!isDocReady && !invoicesPending)) {
@@ -585,10 +602,7 @@ function App() {
       setInvoiceDrafts((current) => {
         const next = { ...current };
         records.forEach((invoice) => {
-          let latestData = invoice.extractedData;
-          if (!latestData) {
-            try { latestData = JSON.parse(invoice.finalSubmittedData || invoice.canonicalJson || '{}'); } catch (error) { latestData = {}; }
-          }
+          const latestData = parseStoredInvoiceData(invoice);
           const currentData = next[invoice.id];
           if (!currentData || Object.keys(currentData).length === 0 || Object.keys(latestData || {}).length > 0) {
             next[invoice.id] = latestData || {};
@@ -630,12 +644,7 @@ function App() {
       return header.invoiceNumber || header.invoiceId || header.documentNumber || header.invoiceNo || '';
     };
     const parseInvoiceData = (invoice) => {
-      if (invoice?.extractedData && typeof invoice.extractedData === 'object') return invoice.extractedData;
-      try {
-        return JSON.parse(invoice?.finalSubmittedData || invoice?.canonicalJson || '{}');
-      } catch (error) {
-        return {};
-      }
+      return parseStoredInvoiceData(invoice);
     };
     const canonical = invoiceDrafts[selectedInvoice?.id] || parseInvoiceData(selectedInvoice);
     const shipmentKey = Array.isArray(canonical.shipmentDetails) ? 'shipmentDetails' : 'shipmentDetail';
