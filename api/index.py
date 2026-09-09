@@ -11,10 +11,15 @@ import urllib.request
 import threading
 from datetime import datetime
 import re
+import sys
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 try:
     import psycopg2
 except:
     psycopg2 = None
+
+sys.path.append(os.path.join(BASE_DIR, "scripts"))
+from invoice_routing import detect_invoice_groups
 
 app = FastAPI()
 
@@ -33,8 +38,9 @@ async def global_exception_handler(request: Request, exc: Exception):
         content={"error": str(exc), "trace": traceback.format_exc()}
     )
 
-BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SAVE_APPROVED_WEBHOOK_URL = "https://n8n.provelopers.net/webhook/e7761187-ad68-4fa4-a8e8-87f6eee47314"
+SINGLE_INVOICE_WEBHOOK_URL = "https://n8n.provelopers.net/webhook/726784a2-239a-4a6d-a837-85828f4b2ca2"
+MULTI_INVOICE_WEBHOOK_URL = "https://n8n.provelopers.net/webhook/cfc18821-b562-4b0f-8d34-457f83e03f2e"
 # On Vercel, filesystem is read-only except /tmp
 if os.getenv("VERCEL"):
     DB_PATH = "/tmp/dev.db"
@@ -1590,7 +1596,8 @@ async def upload_documents(request: Request):
         app_base_url = f"https://{host}"
     else:
         app_base_url = str(request.base_url).rstrip("/")
-    webhook_url = os.getenv("N8N_WEBHOOK_URL", "https://n8n.provelopers.net/webhook/726784a2-239a-4a6d-a837-85828f4b2ca2")
+    single_webhook_url = os.getenv("N8N_WEBHOOK_URL", SINGLE_INVOICE_WEBHOOK_URL)
+    multi_webhook_url = os.getenv("MULTI_INVOICE_N8N_WEBHOOK_URL", MULTI_INVOICE_WEBHOOK_URL)
     
     def trigger_webhook(url, data):
         req = urllib.request.Request(url, data=json.dumps(data).encode('utf-8'), headers={'Content-Type': 'application/json'})
@@ -1605,6 +1612,9 @@ async def upload_documents(request: Request):
         for file_item in files:
             file_bytes = await file_item.read()
             file_b64 = base64.b64encode(file_bytes).decode('utf-8')
+            invoice_groups = detect_invoice_groups(file_bytes, file_item.filename or '')
+            invoice_count = len(invoice_groups)
+            selected_webhook_url = multi_webhook_url if invoice_count >= 2 else single_webhook_url
             
             doc_id = str(uuid.uuid4())
             page_count = count_pdf_pages(file_bytes) if (file_item.filename or '').lower().endswith('.pdf') else 1
@@ -1617,6 +1627,10 @@ async def upload_documents(request: Request):
                 "fileBase64": file_b64,
                 "pageCount": page_count,
                 "pages": [{"pageNumber": page_number, "totalPages": page_count} for page_number in range(1, page_count + 1)],
+                "detectedInvoiceCount": invoice_count,
+                "detectedInvoiceGroups": invoice_groups,
+                "rawOcrText": "\n\f\n".join(group.get("rawOcrText", "") for group in invoice_groups),
+                "workflowType": "multi-invoice" if invoice_count >= 2 else "single-invoice",
                 "callbackUrl": f"{app_base_url}/api/documents/{doc_id}/extraction/callback"
             }
             
@@ -1635,7 +1649,7 @@ async def upload_documents(request: Request):
 
             # Await dispatch so Vercel cannot terminate the serverless invocation
             # before n8n receives the document payload.
-            await asyncio.to_thread(trigger_webhook, webhook_url, payload)
+            await asyncio.to_thread(trigger_webhook, selected_webhook_url, payload)
             results.append(doc_id)
             page_counts[doc_id] = page_count
             
@@ -1877,6 +1891,10 @@ async def extraction_callback(doc_id: str, request: Request):
     conn = None
     try:
         conn = get_db()
+        try:
+          expected_count = int(body.get('invoiceCount') or len(invoice_payloads))
+        except (TypeError, ValueError):
+          expected_count = len(invoice_payloads)
         for index, invoice in enumerate(invoice_payloads):
             extracted = invoice.get('canonicalJson') or invoice.get('extractedData') or {}
             if isinstance(extracted, str):
@@ -1923,14 +1941,10 @@ async def extraction_callback(doc_id: str, request: Request):
             cursor = execute_query(conn, "SELECT 1 FROM Extraction WHERE documentId=?", (doc_id,))
             if not cursor.fetchone():
                 execute_query(conn, "INSERT INTO Extraction (documentId, canonicalJson) VALUES (?, ?)", (doc_id, json_str))
-            elif len(invoice_payloads) == 1:
+            elif len(invoice_payloads) == 1 and expected_count == 1:
               # Preprocessing may have created an empty extraction row before n8n replied.
               execute_query(conn, "UPDATE Extraction SET canonicalJson = ?, confidenceScores = ? WHERE documentId = ?", (json_str, confidence_json, doc_id))
 
-        try:
-          expected_count = int(body.get('invoiceCount') or len(invoice_payloads))
-        except (TypeError, ValueError):
-          expected_count = len(invoice_payloads)
         count_cursor = execute_query(conn, "SELECT COUNT(*) FROM DocumentInvoice WHERE documentId = ?", (doc_id,))
         received_count = count_cursor.fetchone()[0]
         is_complete = received_count >= expected_count

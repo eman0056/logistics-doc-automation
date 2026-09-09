@@ -10,6 +10,7 @@ import cgi
 import sqlite3
 import uuid
 import time
+import base64
 from datetime import datetime
 
 PORT = 3000
@@ -17,9 +18,12 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.path.join(BASE_DIR, "prisma", "dev.db")
 WORKFLOW_PATH = os.path.join(BASE_DIR, "n8n", "workflows", "Document_Processing_Full.json")
 SAVE_APPROVED_WEBHOOK_URL = "https://n8n.provelopers.net/webhook/e7761187-ad68-4fa4-a8e8-87f6eee47314"
+SINGLE_INVOICE_WEBHOOK_URL = "https://n8n.provelopers.net/webhook/726784a2-239a-4a6d-a837-85828f4b2ca2"
+MULTI_INVOICE_WEBHOOK_URL = "https://n8n.provelopers.net/webhook/cfc18821-b562-4b0f-8d34-457f83e03f2e"
 
 sys.path.append(os.path.join(BASE_DIR, "scripts"))
 from ingest_document import ingest_file
+from invoice_routing import detect_invoice_groups
 
 class LogisticsAutomationHandler(http.server.BaseHTTPRequestHandler):
 
@@ -193,7 +197,30 @@ class LogisticsAutomationHandler(http.server.BaseHTTPRequestHandler):
             ORDER BY d.createdAt DESC;
         """)
         rows = cursor.fetchall()
+        try:
+          cursor.execute("SELECT id, documentId, invoiceIndex, pageStart, pageEnd, rawOcrText, canonicalJson, confidenceScores, finalSubmittedData, status, overallConfidence FROM DocumentInvoice ORDER BY documentId, invoiceIndex;")
+          invoice_rows = cursor.fetchall()
+        except sqlite3.OperationalError:
+          invoice_rows = []
         conn.close()
+
+        invoices_by_document = {}
+        for invoice in invoice_rows:
+          try:
+            invoice_data = json.loads(invoice[6] or invoice[8] or '{}')
+          except (TypeError, json.JSONDecodeError):
+            invoice_data = {}
+          header = invoice_data.get('invoiceHeader') if isinstance(invoice_data, dict) else {}
+          header = header if isinstance(header, dict) else {}
+          invoices_by_document.setdefault(invoice[1], []).append({
+            "id": invoice[0], "documentId": invoice[1], "invoiceIndex": invoice[2],
+            "pageStart": invoice[3], "pageEnd": invoice[4], "rawOcrText": invoice[5],
+            "canonicalJson": invoice[6], "confidenceScores": invoice[7],
+            "finalSubmittedData": invoice[8], "status": invoice[9],
+            "extractionStatus": invoice[9] or "PENDING", "overallConfidence": invoice[10],
+            "extractedData": invoice_data,
+            "invoiceNumber": header.get('invoiceNumber') or header.get('invoiceId') or header.get('documentNumber') or header.get('invoiceNo')
+          })
 
         docs = []
         for r in rows:
@@ -212,7 +239,9 @@ class LogisticsAutomationHandler(http.server.BaseHTTPRequestHandler):
                     "canonicalJson": r[10],
                     "confidenceScores": r[11],
                     "finalSubmittedData": r[12]
-                }
+                },
+                "invoices": invoices_by_document.get(r[0], []),
+                "invoiceCount": len(invoices_by_document.get(r[0], []))
             })
         self._send_json({"success": True, "documents": docs})
 
@@ -295,13 +324,16 @@ class LogisticsAutomationHandler(http.server.BaseHTTPRequestHandler):
         os.makedirs(temp_dir, exist_ok=True)
         
         app_base_url = "http://localhost:3000"
-        webhook_url = "https://n8n.provelopers.net/webhook/726784a2-239a-4a6d-a837-85828f4b2ca2"
+        single_webhook_url = SINGLE_INVOICE_WEBHOOK_URL
+        multi_webhook_url = MULTI_INVOICE_WEBHOOK_URL
         env_file = os.path.join(BASE_DIR, ".env.local")
         if os.path.exists(env_file):
             with open(env_file, "r") as ef:
                 for line in ef:
                     if line.startswith("N8N_WEBHOOK_URL="):
-                        webhook_url = line.split("=", 1)[1].strip().strip('"')
+                      single_webhook_url = line.split("=", 1)[1].strip().strip('"')
+                    if line.startswith("MULTI_INVOICE_N8N_WEBHOOK_URL="):
+                      multi_webhook_url = line.split("=", 1)[1].strip().strip('"')
                     if line.startswith("APP_BASE_URL="):
                         app_base_url = line.split("=", 1)[1].strip().strip('"')
                         
@@ -321,7 +353,12 @@ class LogisticsAutomationHandler(http.server.BaseHTTPRequestHandler):
                 if not file_item.filename: continue
                 temp_file_path = os.path.join(temp_dir, file_item.filename)
                 with open(temp_file_path, 'wb') as f:
-                    f.write(file_item.file.read())
+                  file_bytes = file_item.file.read()
+                  f.write(file_bytes)
+
+                invoice_groups = detect_invoice_groups(file_bytes, file_item.filename)
+                invoice_count = len(invoice_groups)
+                selected_webhook_url = multi_webhook_url if invoice_count >= 2 else single_webhook_url
                 
                 res = ingest_file(temp_file_path)
                 os.remove(temp_file_path)
@@ -330,11 +367,16 @@ class LogisticsAutomationHandler(http.server.BaseHTTPRequestHandler):
                     "documentId": res["documentId"],
                     "storagePath": res["storagePath"],
                     "fileName": res["fileName"],
+                    "fileBase64": base64.b64encode(file_bytes).decode('ascii'),
+                    "detectedInvoiceCount": invoice_count,
+                    "detectedInvoiceGroups": invoice_groups,
+                    "rawOcrText": "\n\f\n".join(group.get("rawOcrText", "") for group in invoice_groups),
+                    "workflowType": "multi-invoice" if invoice_count >= 2 else "single-invoice",
                     "callbackUrl": f"{app_base_url}/api/documents/{res['documentId']}/extraction/callback"
                 }
                 
                 import threading
-                threading.Thread(target=trigger_webhook, args=(webhook_url, payload), daemon=True).start()
+                threading.Thread(target=trigger_webhook, args=(selected_webhook_url, payload), daemon=True).start()
                 
                 conn = sqlite3.connect(DB_PATH)
                 cursor = conn.cursor()
@@ -412,12 +454,22 @@ class LogisticsAutomationHandler(http.server.BaseHTTPRequestHandler):
         json_str = json.dumps(extracted)
         conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
+        cursor.execute("CREATE TABLE IF NOT EXISTS DocumentInvoice (id TEXT PRIMARY KEY, documentId TEXT NOT NULL, invoiceIndex INTEGER NOT NULL, pageStart INTEGER, pageEnd INTEGER, rawOcrText TEXT, canonicalJson TEXT, confidenceScores TEXT, finalSubmittedData TEXT, status TEXT DEFAULT 'EXTRACTED', overallConfidence REAL, createdAt DATETIME DEFAULT CURRENT_TIMESTAMP, updatedAt DATETIME DEFAULT CURRENT_TIMESTAMP)")
+        invoice_id = body.get('invoiceId') or f"{doc_id}-invoice-{int(body.get('invoiceIndex', 0)) + 1}"
+        invoice_index = int(body.get('invoiceIndex', 0))
+        try:
+          cursor.execute("INSERT OR REPLACE INTO DocumentInvoice (id, documentId, invoiceIndex, pageStart, pageEnd, rawOcrText, canonicalJson, confidenceScores, overallConfidence, updatedAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)", (invoice_id, doc_id, invoice_index, body.get('pageStart'), body.get('pageEnd'), body.get('rawOcrText'), json_str, json.dumps(body.get('confidenceScores')) if body.get('confidenceScores') is not None else None, body.get('overallConfidence')))
+        except (TypeError, ValueError):
+          return self._send_json({"error": "Invalid invoice callback metadata"}, 400)
         cursor.execute("UPDATE Extraction SET canonicalJson = ? WHERE documentId = ?;", (json_str, doc_id))
-        cursor.execute("UPDATE Document SET status = 'EXTRACTED' WHERE id = ?;", (doc_id,))
+        expected_count = int(body.get('invoiceCount') or 1)
+        cursor.execute("SELECT COUNT(*) FROM DocumentInvoice WHERE documentId = ?;", (doc_id,))
+        received_count = cursor.fetchone()[0]
+        cursor.execute("UPDATE Document SET status = ? WHERE id = ?;", ('EXTRACTED' if received_count >= expected_count else 'PREPROCESSED', doc_id))
         conn.commit()
         conn.close()
 
-        self._send_json({"success": True, "reviewUrl": f"/documents/{doc_id}/review"})
+        self._send_json({"success": True, "invoiceCount": received_count, "complete": received_count >= expected_count, "reviewUrl": f"/documents/{doc_id}/review"})
 
     def _handle_get_review_tasks(self):
         conn = sqlite3.connect(DB_PATH)

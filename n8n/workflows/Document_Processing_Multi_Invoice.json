@@ -55,12 +55,11 @@
     },
     {
       "parameters": {
-        "operation": "text",
-        "binaryPropertyName": "data"
+        "jsCode": "const webhook = $node['Multi Invoice Webhook'].json.body || {};\nreturn $input.all().map((item) => ({ json: { ...item.json, rawText: webhook.rawOcrText || item.json.rawText || '' } }));"
       },
       "name": "Extract DOC Text",
-      "type": "n8n-nodes-base.extractFromFile",
-      "typeVersion": 1,
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
       "position": [870, 420]
     },
     {
