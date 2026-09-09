@@ -26,12 +26,9 @@ def _docx_pages(file_bytes):
 
 
 def _pdf_pages(file_bytes):
-    try:
-        from pypdf import PdfReader
-        reader = PdfReader(__import__("io").BytesIO(file_bytes))
-        return [(page.extract_text() or "").strip() for page in reader.pages]
-    except Exception:
-        return []
+    from pypdf import PdfReader
+    reader = PdfReader(__import__("io").BytesIO(file_bytes))
+    return [(page.extract_text() or "").strip() for page in reader.pages]
 
 
 def _plain_pages(file_bytes):
@@ -47,6 +44,10 @@ def extract_invoice_pages(file_bytes, file_name=""):
         pages = _docx_pages(file_bytes)
     else:
         pages = []
+    if extension == ".pdf" or file_bytes.startswith(b"%PDF"):
+        if not pages:
+            raise ValueError("PDF text extraction returned no pages; refusing to guess the invoice count.")
+        return pages
     return pages or _plain_pages(file_bytes)
 
 

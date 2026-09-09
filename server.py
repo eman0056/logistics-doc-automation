@@ -342,10 +342,11 @@ class LogisticsAutomationHandler(http.server.BaseHTTPRequestHandler):
             import json
             req = urllib.request.Request(url, data=json.dumps(data).encode('utf-8'), headers={'Content-Type': 'application/json'})
             try:
-                urllib.request.urlopen(req, timeout=10)
-                print(f"Webhook fired successfully for doc {data.get('documentId')}")
+                with urllib.request.urlopen(req, timeout=10) as response:
+                  response_body = response.read().decode('utf-8', errors='replace')
+                  print(f"Invoice routing: document={data.get('documentId')} count={data.get('detectedInvoiceCount')} workflow={data.get('workflowType')} webhook={url} response_status={response.status} response={response_body[:500]}")
             except Exception as e:
-                print("Webhook error:", e)
+                print(f"Invoice routing webhook error: document={data.get('documentId')} count={data.get('detectedInvoiceCount')} workflow={data.get('workflowType')} webhook={url} error={e}")
 
         results = []
         try:

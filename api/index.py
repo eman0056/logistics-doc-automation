@@ -1602,12 +1602,18 @@ async def upload_documents(request: Request):
     def trigger_webhook(url, data):
         req = urllib.request.Request(url, data=json.dumps(data).encode('utf-8'), headers={'Content-Type': 'application/json'})
         try:
-            urllib.request.urlopen(req, timeout=10)
+            with urllib.request.urlopen(req, timeout=10) as response:
+                response_body = response.read().decode('utf-8', errors='replace')
+                result = {"status": response.status, "body": response_body[:500]}
+                print(f"Invoice routing: document={data.get('documentId')} count={data.get('detectedInvoiceCount')} workflow={data.get('workflowType')} webhook={url} response={result}")
+                return result
         except Exception as e:
-            print("Webhook error:", e)
+            print(f"Invoice routing webhook error: document={data.get('documentId')} count={data.get('detectedInvoiceCount')} workflow={data.get('workflowType')} webhook={url} error={e}")
+            return {"status": None, "error": str(e)}
 
     results = []
     page_counts = {}
+    dispatches = []
     try:
         for file_item in files:
             file_bytes = await file_item.read()
@@ -1649,11 +1655,18 @@ async def upload_documents(request: Request):
 
             # Await dispatch so Vercel cannot terminate the serverless invocation
             # before n8n receives the document payload.
-            await asyncio.to_thread(trigger_webhook, selected_webhook_url, payload)
+            dispatch_result = await asyncio.to_thread(trigger_webhook, selected_webhook_url, payload)
             results.append(doc_id)
             page_counts[doc_id] = page_count
+            dispatches.append({
+              "documentId": doc_id,
+              "detectedInvoiceCount": invoice_count,
+              "workflowType": payload["workflowType"],
+              "webhookUrl": selected_webhook_url,
+              "webhookResponse": dispatch_result,
+            })
             
-        return {"success": True, "documentIds": results, "pageCounts": page_counts}
+        return {"success": True, "documentIds": results, "pageCounts": page_counts, "dispatches": dispatches}
     except Exception as e:
         return JSONResponse({"error": str(e)}, status_code=500)
 
