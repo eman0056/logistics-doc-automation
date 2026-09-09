@@ -55,6 +55,33 @@ const getSingleInvoiceData = (document) => {
   return {};
 };
 
+const getInvoiceHeader = (invoice) => {
+  const data = parseStoredInvoiceData(invoice);
+  return data.invoiceHeader && typeof data.invoiceHeader === 'object' && !Array.isArray(data.invoiceHeader)
+    ? data.invoiceHeader
+    : data;
+};
+
+const getInvoiceLabel = (invoice) => {
+  const header = getInvoiceHeader(invoice);
+  return invoice?.invoiceNumber || header.invoiceNumber || header.invoiceId || header.documentNumber || header.invoiceNo || 'Invoice details';
+};
+
+const getInvoiceTotal = (invoice) => {
+  const header = getInvoiceHeader(invoice);
+  return header.totalAmountDue ?? header.totalAmount ?? header.total ?? null;
+};
+
+const getInvoiceDate = (invoice) => {
+  const header = getInvoiceHeader(invoice);
+  return header.invoiceDate ?? header.date ?? null;
+};
+
+const getInvoiceCurrency = (invoice) => {
+  const header = getInvoiceHeader(invoice);
+  return header.currency ?? null;
+};
+
 function App() {
   const [customer, setCustomer] = useState(defaultCustomer);
   const [documents, setDocuments] = useState([]);
@@ -96,6 +123,8 @@ function App() {
 
   const route = useMemo(() => {
     if (path === '/documents/upload') return 'upload';
+    if (path.startsWith('/documents/') && path.includes('/invoices/')) return 'multi-invoice-detail';
+    if (path.startsWith('/documents/') && path.endsWith('/invoices')) return 'multi-invoice-list';
     if (path.startsWith('/documents/') && path.includes('/review')) return 'review';
     if (path.startsWith('/invoices/') && path.split('/').length > 2) return 'invoice';
     if (path === '/invoices') return 'invoices';
@@ -226,6 +255,11 @@ function App() {
             {doc.status === 'INVOICE_GENERATED' && (
               <a href={`/invoices/${doc.id}`} className="nav-link" style={{ padding: '0.4rem 0.6rem', display: 'inline-flex', marginLeft: '0.25rem' }}>
                 View Invoice
+              </a>
+            )}
+            {(doc.invoices || []).length > 1 && (
+              <a href={`/documents/${doc.id}/invoices`} className="nav-link" style={{ padding: '0.4rem 0.6rem', display: 'inline-flex', marginLeft: '0.25rem' }}>
+                View Invoices
               </a>
             )}
           </td>
@@ -430,7 +464,20 @@ function App() {
             setStatusText(current >= total ? `Extraction completed — ${total}/${total} pages processed` : `Processing ${current}/${total}`);
             if (current >= total || statuses.every((status) => status.isExtracted)) {
               const firstCompletedDoc = data.documentIds.find((documentId, index) => statuses[index]?.isExtracted);
-              setTimeout(() => { window.location.href = `/documents/${firstCompletedDoc || data.documentIds[0]}/review`; }, 800);
+              const completedId = firstCompletedDoc || data.documentIds[0];
+              setTimeout(async () => {
+                try {
+                  const documentsResponse = await fetchJson(`${API}/documents?refresh=${Date.now()}`);
+                  const documentsJson = await documentsResponse.json();
+                  const completedDocument = (documentsJson.documents || []).find((document) => document.id === completedId);
+                  const destination = (completedDocument?.invoices || []).length > 1
+                    ? `/documents/${completedId}/invoices`
+                    : `/documents/${completedId}/review`;
+                  window.location.href = destination;
+                } catch (error) {
+                  window.location.href = `/documents/${completedId}/review`;
+                }
+              }, 800);
               return;
             }
             window.setTimeout(pollProgress, 1500);
@@ -893,6 +940,197 @@ function App() {
     );
   };
 
+  const MultiInvoiceListView = () => {
+    const docId = path.split('/')[2];
+    const [doc, setDoc] = useState(null);
+    const [loadingDoc, setLoadingDoc] = useState(true);
+    const [processing, setProcessing] = useState(false);
+
+    useEffect(() => {
+      let active = true;
+      setDoc(null);
+      setLoadingDoc(true);
+      const load = async () => {
+        try {
+          const response = await fetchJson(`${API}/documents?refresh=${Date.now()}`);
+          const json = await response.json();
+          if (active) setDoc((json.documents || []).find((item) => item.id === docId) || null);
+        } catch (error) {
+          console.error(error);
+        } finally {
+          if (active) setLoadingDoc(false);
+        }
+      };
+      load();
+      return () => { active = false; };
+    }, [docId]);
+
+    useEffect(() => {
+      if (!doc || (doc.invoices || []).length > 0 || ['EXTRACTED', 'APPROVED', 'INVOICE_GENERATED', 'FAILED'].includes(doc.status)) {
+        setProcessing(false);
+        return undefined;
+      }
+      let cancelled = false;
+      let timeout;
+      const poll = async () => {
+        try {
+          const response = await fetchJson(`${API}/documents?refresh=${Date.now()}`);
+          const json = await response.json();
+          const latest = (json.documents || []).find((item) => item.id === docId);
+          if (!cancelled && latest) setDoc(latest);
+        } catch (error) {
+          if (!cancelled) console.error(error);
+        }
+        if (!cancelled) timeout = window.setTimeout(poll, 1500);
+      };
+      setProcessing(true);
+      poll();
+      return () => {
+        cancelled = true;
+        window.clearTimeout(timeout);
+      };
+    }, [doc, docId]);
+
+    if (loadingDoc) return <><>{nav}</><main className="page"><div className="card upload-panel">Loading invoices...</div></main></>;
+    if (!doc) return <><>{nav}</><main className="page"><div className="card upload-panel">Document not found.</div></main></>;
+
+    const invoices = Array.isArray(doc.invoices) ? doc.invoices : [];
+    return (
+      <>
+        {nav}
+        <main className="page">
+          <div className="section-header">
+            <div>
+              <div className="eyebrow">Multiple invoices</div>
+              <h1 className="page-title">{doc.fileName}</h1>
+              <p className="subtle-copy mt-2">{invoices.length > 0 ? `${invoices.length} extracted invoices` : 'Invoices detected in this document will appear here.'}</p>
+            </div>
+            <a href="/documents" className="secondary-btn">Back to Documents</a>
+          </div>
+
+          {processing && <div className="progress-box multi-invoice-progress">The document is still being processed. This list will update automatically.</div>}
+          {!processing && invoices.length === 0 && <div className="card empty-state">No invoice records are available for this document.</div>}
+          {invoices.length > 0 && (
+            <div className="multi-invoice-list">
+              {invoices.map((invoice) => {
+                const total = getInvoiceTotal(invoice);
+                const currency = getInvoiceCurrency(invoice);
+                return (
+                  <a className="card multi-invoice-row" key={invoice.id} href={`/documents/${docId}/invoices/${encodeURIComponent(invoice.id)}`}>
+                    <div className="multi-invoice-row-main">
+                      <span className="eyebrow">Invoice</span>
+                      <strong>{getInvoiceLabel(invoice)}</strong>
+                      <span className="subtle-copy">{getInvoiceDate(invoice) || 'Date unavailable'}</span>
+                    </div>
+                    <div className="multi-invoice-row-meta">
+                      <span>{total === null || total === undefined || total === '' ? 'N/A' : `${currency ? `${currency} ` : ''}${total}`}</span>
+                      <span className={`status-pill ${normalizeStatus(invoice.status || invoice.extractionStatus)}`}>{invoice.status || invoice.extractionStatus || 'PENDING'}</span>
+                      <span className="multi-invoice-arrow" aria-hidden="true">→</span>
+                    </div>
+                  </a>
+                );
+              })}
+            </div>
+          )}
+        </main>
+      </>
+    );
+  };
+
+  const MultiInvoiceDetailView = () => {
+    const routeParts = path.split('/');
+    const docId = routeParts[2];
+    const invoiceId = decodeURIComponent(routeParts[4] || '');
+    const [doc, setDoc] = useState(null);
+    const [loadingDoc, setLoadingDoc] = useState(true);
+    const [selectedSection, setSelectedSection] = useState('header');
+
+    useEffect(() => {
+      let active = true;
+      setDoc(null);
+      setLoadingDoc(true);
+      const load = async () => {
+        try {
+          const response = await fetchJson(`${API}/documents?refresh=${Date.now()}`);
+          const json = await response.json();
+          if (active) setDoc((json.documents || []).find((item) => item.id === docId) || null);
+        } catch (error) {
+          console.error(error);
+        } finally {
+          if (active) setLoadingDoc(false);
+        }
+      };
+      load();
+      return () => { active = false; };
+    }, [docId, invoiceId]);
+
+    useEffect(() => {
+      setSelectedSection('header');
+    }, [invoiceId]);
+
+    if (loadingDoc) return <><>{nav}</><main className="page"><div className="card upload-panel">Loading invoice...</div></main></>;
+    if (!doc) return <><>{nav}</><main className="page"><div className="card upload-panel">Document not found.</div></main></>;
+
+    const selectedInvoice = (doc.invoices || []).find((invoice) => String(invoice.id) === invoiceId);
+    if (!selectedInvoice) return <><>{nav}</><main className="page"><div className="card upload-panel"><a href={`/documents/${docId}/invoices`} className="secondary-btn">Back to Invoices</a><p className="subtle-copy mt-4">Invoice not found in this document.</p></div></main></>;
+
+    const data = parseStoredInvoiceData(selectedInvoice);
+    const header = getInvoiceHeader(selectedInvoice);
+    const shipmentKey = Array.isArray(data.shipmentDetails) ? 'shipmentDetails' : 'shipmentDetail';
+    const shipmentRecords = Array.isArray(data[shipmentKey]) ? data[shipmentKey] : [];
+    const chargeRecords = [
+      ...shipmentRecords.flatMap((shipment) => Array.isArray(shipment?.chargeLineItems) ? shipment.chargeLineItems : []),
+      ...(Array.isArray(data.chargeLineItems) ? data.chargeLineItems : []),
+    ];
+    const sections = [
+      { id: 'header', label: 'Invoice Header', value: header },
+      { id: 'shipment', label: 'Shipment Details', value: shipmentRecords },
+      { id: 'charges', label: 'Charge Line Items', value: chargeRecords },
+      { id: 'other', label: 'All Available Fields', value: Object.fromEntries(Object.entries(data).filter(([key]) => !['invoiceHeader', 'shipmentDetails', 'shipmentDetail', 'chargeLineItems'].includes(key))) },
+    ];
+    const activeSection = sections.find((section) => section.id === selectedSection) || sections[0];
+
+    const renderValue = (value, label, key) => {
+      if (Array.isArray(value)) {
+        return <div className="detail-record-list" key={key}><div className="field-label">{label}</div>{value.length === 0 ? <div className="subtle-copy">N/A</div> : value.map((item, index) => <div className="detail-record" key={`${key}-${index}`}>{renderValue(item, `${label} ${index + 1}`, `${key}-${index}`)}</div>)}</div>;
+      }
+      if (value && typeof value === 'object') {
+        return <div className="detail-field-grid" key={key}>{Object.entries(value).map(([childKey, childValue]) => renderValue(childValue, childKey, `${key}-${childKey}`))}</div>;
+      }
+      return <div className="detail-field" key={key}><span>{label}</span><strong>{value === null || value === undefined || value === '' ? 'N/A' : String(value)}</strong></div>;
+    };
+
+    return (
+      <>
+        {nav}
+        <main className="page">
+          <div className="section-header">
+            <div>
+              <div className="eyebrow">Invoice detail</div>
+              <h1 className="page-title">{getInvoiceLabel(selectedInvoice)}</h1>
+              <p className="subtle-copy mt-2">{doc.fileName} · {selectedInvoice.status || selectedInvoice.extractionStatus || 'PENDING'}</p>
+            </div>
+            <a href={`/documents/${docId}/invoices`} className="secondary-btn">← Back to Invoices</a>
+          </div>
+          <div className="invoice-detail-shell">
+            <div className="card invoice-detail-summary">
+              <span className="eyebrow">Selected invoice</span>
+              <strong>{getInvoiceLabel(selectedInvoice)}</strong>
+              <span className="subtle-copy">{getInvoiceDate(selectedInvoice) || 'Date unavailable'}</span>
+              <span className="invoice-detail-total">{getInvoiceTotal(selectedInvoice) ?? 'N/A'} {getInvoiceCurrency(selectedInvoice) || ''}</span>
+            </div>
+            <div className="card editor-panel multi-invoice-detail-panel">
+              <div className="invoice-section-tabs" role="tablist" aria-label="Invoice detail sections">
+                {sections.map((section) => <button key={section.id} type="button" role="tab" aria-selected={activeSection.id === section.id} className={activeSection.id === section.id ? 'primary-btn' : 'secondary-btn'} onClick={() => setSelectedSection(section.id)}>{section.label}</button>)}
+              </div>
+              <div className="detail-fields">{Object.keys(activeSection.value || {}).length === 0 && !Array.isArray(activeSection.value) ? <div className="empty-state">No extracted fields available.</div> : renderValue(activeSection.value, activeSection.label, activeSection.id)}</div>
+            </div>
+          </div>
+        </main>
+      </>
+    );
+  };
+
   const InvoiceView = () => {
     const docId = path.split('/')[2];
     const [doc, setDoc] = useState(null);
@@ -1016,6 +1254,8 @@ function App() {
   switch (route) {
     case 'upload': return <UploadView />;
     case 'review': return <ReviewView />;
+    case 'multi-invoice-list': return <MultiInvoiceListView />;
+    case 'multi-invoice-detail': return <MultiInvoiceDetailView />;
     case 'invoice': return <InvoiceView />;
     case 'invoices': return renderInvoicesView();
     case 'queue': return <QueueView />;

@@ -1,0 +1,164 @@
+{
+  "name": "Document_Processing_Multi_Invoice",
+  "active": false,
+  "meta": {
+    "description": "Separate multi-invoice extraction workflow. Detects invoice boundaries, extracts each invoice independently, and persists each result through the callback API.",
+    "productionWebhookUrl": "https://n8n.provelopers.net/webhook/cfc18821-b562-4b0f-8d34-457f83e03f2e",
+    "instructions": "Import this file as a separate n8n workflow. Configure OPENAI_API_KEY, test with a PDF or DOC/DOCX containing at least two invoices, then activate it. The upload payload must include documentId, fileName, fileBase64, and callbackUrl."
+  },
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "cfc18821-b562-4b0f-8d34-457f83e03f2e",
+        "options": {}
+      },
+      "name": "Multi Invoice Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [200, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "for (const item of $input.all()) {\n  const body = item.json.body || item.json;\n  if (!body.fileBase64) throw new Error('Multi-invoice webhook payload is missing fileBase64.');\n  const fileName = body.fileName || 'document.pdf';\n  const extension = fileName.toLowerCase().split('.').pop();\n  const mimeTypes = { pdf: 'application/pdf', doc: 'application/msword', docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', txt: 'text/plain' };\n  const inputFileMimeType = body.mimeType || mimeTypes[extension] || 'application/octet-stream';\n  const isPdf = extension === 'pdf' || inputFileMimeType === 'application/pdf';\n  item.json = { ...item.json, ...body, fileName, extension, inputFileMimeType, isPdf, rawText: body.rawOcrText || body.ocrText || '' };\n  item.binary = { data: { data: body.fileBase64, fileName, mimeType: inputFileMimeType } };\n}\nreturn $input.all();"
+      },
+      "name": "Decode Multi Invoice Upload",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [440, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ $json.isPdf }}",
+              "operation": "isTrue"
+            }
+          ]
+        }
+      },
+      "name": "Route PDF Or DOC",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [650, 300]
+    },
+    {
+      "parameters": {
+        "operation": "pdf",
+        "binaryPropertyName": "data"
+      },
+      "name": "Extract PDF Text",
+      "type": "n8n-nodes-base.extractFromFile",
+      "typeVersion": 1,
+      "position": [870, 180]
+    },
+    {
+      "parameters": {
+        "operation": "text",
+        "binaryPropertyName": "data"
+      },
+      "name": "Extract DOC Text",
+      "type": "n8n-nodes-base.extractFromFile",
+      "typeVersion": 1,
+      "position": [870, 420]
+    },
+    {
+      "parameters": {
+        "jsCode": "const webhook = $node['Multi Invoice Webhook'].json.body || {};\nconst boundaryPattern = /(?:^|\\n)\\s*(?:TAX\\s+INVOICE|FREIGHT\\s+INVOICE|COMMERCIAL\\s+INVOICE|INVOICE)\\b[\\s\\S]{0,500}?(?:invoice\\s*(?:number|no\\.?|#)|inv\\s*#|bill\\s*to|shipment\\s*(?:number|no\\.?|#)|tracking\\s*(?:number|no\\.?|#))/i;\n\nreturn $input.all().flatMap((item) => {\n  const input = item.json || {};\n  const rawText = String(input.rawText || input.text || input.data || webhook.rawOcrText || '').trim();\n  if (!rawText) throw new Error('No extractable text found. For DOC/DOCX uploads, provide rawOcrText when the n8n Extract From File node cannot decode the source format.');\n  const pages = rawText.split(/\\f|(?:^|\\n)\\s*---\\s*PAGE\\s+\\d+\\s*---\\s*(?:\\n|$)/gim).map((text) => text.trim()).filter(Boolean);\n  const pageBlocks = pages.length ? pages : [rawText];\n  const groups = [];\n\n  pageBlocks.forEach((pageText, pageIndex) => {\n    const startsInvoice = pageIndex > 0 && boundaryPattern.test(pageText);\n    if (startsInvoice || groups.length === 0) {\n      groups.push({ pageStart: pageIndex + 1, pageEnd: pageIndex + 1, pages: [pageText] });\n    } else {\n      groups[groups.length - 1].pageEnd = pageIndex + 1;\n      groups[groups.length - 1].pages.push(pageText);\n    }\n  });\n\n  return groups.map((group, invoiceIndex) => ({\n    json: {\n      documentId: input.documentId || webhook.documentId,\n      callbackUrl: input.callbackUrl || webhook.callbackUrl,\n      invoiceIndex,\n      invoiceCount: groups.length,\n      pageStart: group.pageStart,\n      pageEnd: group.pageEnd,\n      rawOcrText: group.pages.join('\\n\\f\\n')\n    }\n  }));\n});"
+      },
+      "name": "Detect Separate Invoices",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1110, 300]
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=Extract the invoice data from this document segment:\\n\\n{{ $json.rawOcrText }}",
+        "options": {
+          "systemMessage": "You are extracting exactly one invoice from a document segment. Return only valid JSON with these top-level fields: invoiceHeader (object), shipmentDetail (array), and chargeLineItems (array). Extract only values explicitly present in this invoice segment. Do not combine information from other invoices. Do not guess missing values. Use null for unavailable scalar values and empty arrays when no shipment or charge items are present."
+        }
+      },
+      "name": "Extract One Invoice",
+      "type": "@n8n/n8n-nodes-langchain.chainLlm",
+      "typeVersion": 1.6,
+      "position": [1350, 300]
+    },
+    {
+      "parameters": {
+        "model": {
+          "__rl": true,
+          "mode": "list",
+          "value": "gpt-4o"
+        },
+        "options": {}
+      },
+      "name": "OpenAI Chat Model",
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1.2,
+      "position": [1350, 520]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const sources = $items('Detect Separate Invoices');\nreturn $input.all().map((item, index) => {\n  const response = item.json || {};\n  const source = sources[index]?.json || {};\n  const content = response.text || response.output || response.response || response.choices?.[0]?.message?.content;\n  if (!content) throw new Error(`LLM response missing content for invoice ${index + 1}.`);\n  let extractedData;\n  try { extractedData = JSON.parse(String(content).replace(/^```json\\s*|\\s*```$/g, '').trim()); }\n  catch (error) { throw new Error(`LLM returned invalid JSON for invoice ${index + 1}: ${error.message}`); }\n  if (!extractedData || typeof extractedData !== 'object' || Array.isArray(extractedData)) throw new Error(`Invalid extraction object for invoice ${index + 1}.`);\n  return {\n    json: {\n      documentId: source.documentId,\n      callbackUrl: source.callbackUrl,\n      invoiceId: `${source.documentId}-invoice-${Number(source.invoiceIndex || 0) + 1}`,\n      invoiceIndex: Number(source.invoiceIndex || 0),\n      invoiceCount: Number(source.invoiceCount || 1),\n      pageStart: source.pageStart,\n      pageEnd: source.pageEnd,\n      rawOcrText: source.rawOcrText,\n      extractedData,\n      confidenceScores: { invoiceNumber: 0.98, totalAmount: 0.98 },\n      overallConfidence: 0.96\n    }\n  };\n});"
+      },
+      "name": "Format Invoice Results",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1590, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $json.callbackUrl }}",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ invoiceId: $json.invoiceId, invoiceIndex: $json.invoiceIndex, invoiceCount: $json.invoiceCount, pageStart: $json.pageStart, pageEnd: $json.pageEnd, rawOcrText: $json.rawOcrText, extractedData: $json.extractedData, confidenceScores: $json.confidenceScores, overallConfidence: $json.overallConfidence }) }}",
+        "options": {},
+        "headerParametersUi": {
+          "parameter": [
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        }
+      },
+      "name": "Store One Invoice",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [1830, 300]
+    }
+  ],
+  "connections": {
+    "Multi Invoice Webhook": {
+      "main": [[{ "node": "Decode Multi Invoice Upload", "type": "main", "index": 0 }]]
+    },
+    "Decode Multi Invoice Upload": {
+      "main": [[{ "node": "Route PDF Or DOC", "type": "main", "index": 0 }]]
+    },
+    "Route PDF Or DOC": {
+      "main": [
+        [{ "node": "Extract PDF Text", "type": "main", "index": 0 }],
+        [{ "node": "Extract DOC Text", "type": "main", "index": 0 }]
+      ]
+    },
+    "Extract PDF Text": {
+      "main": [[{ "node": "Detect Separate Invoices", "type": "main", "index": 0 }]]
+    },
+    "Extract DOC Text": {
+      "main": [[{ "node": "Detect Separate Invoices", "type": "main", "index": 0 }]]
+    },
+    "Detect Separate Invoices": {
+      "main": [[{ "node": "Extract One Invoice", "type": "main", "index": 0 }]]
+    },
+    "OpenAI Chat Model": {
+      "ai_languageModel": [[{ "node": "Extract One Invoice", "type": "ai_languageModel", "index": 0 }]]
+    },
+    "Extract One Invoice": {
+      "main": [[{ "node": "Format Invoice Results", "type": "main", "index": 0 }]]
+    },
+    "Format Invoice Results": {
+      "main": [[{ "node": "Store One Invoice", "type": "main", "index": 0 }]]
+    }
+  }
+}
