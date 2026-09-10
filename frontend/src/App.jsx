@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 const API = '/api';
 
@@ -89,6 +89,138 @@ const getInvoiceDate = (invoice) => {
 const getInvoiceCurrency = (invoice) => {
   const header = getInvoiceHeader(invoice);
   return header.currency ?? null;
+};
+
+const RouteSkeleton = ({ label = 'Loading page...' }) => (
+  <main className="page route-skeleton" aria-busy="true">
+    <div className="skeleton-line skeleton-line-wide" />
+    <div className="skeleton-line" />
+    <div className="skeleton-panel"><span>{label}</span></div>
+  </main>
+);
+
+const invoiceSections = (data) => {
+  const shipmentKey = Array.isArray(data?.shipmentDetails) ? 'shipmentDetails' : 'shipments';
+  const shipments = Array.isArray(data?.[shipmentKey])
+    ? data[shipmentKey]
+    : (Array.isArray(data?.shipmentDetail) ? data.shipmentDetail : []);
+  const nestedCharges = shipments.flatMap((shipment) => Array.isArray(shipment?.chargeLineItems) ? shipment.chargeLineItems : []);
+  const charges = [...nestedCharges, ...(Array.isArray(data?.chargeLineItems) ? data.chargeLineItems : [])];
+  return {
+    header: data?.invoiceHeader && typeof data.invoiceHeader === 'object' ? data.invoiceHeader : {},
+    shipments,
+    charges,
+  };
+};
+
+const InvoiceExtractionCard = ({ invoice, isActive, onSelect }) => {
+  const initialData = parseStoredInvoiceData(invoice);
+  const [draft, setDraft] = useState(initialData);
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState('');
+  const cardRef = useRef(null);
+  const sections = useMemo(() => invoiceSections(draft), [draft]);
+
+  useEffect(() => {
+    setDraft(parseStoredInvoiceData(invoice));
+  }, [invoice]);
+
+  useEffect(() => {
+    if (isActive) cardRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  }, [isActive]);
+
+  const updatePath = (parts, value) => {
+    setDraft((current) => {
+      const next = JSON.parse(JSON.stringify(current || {}));
+      let target = next;
+      parts.slice(0, -1).forEach((part) => { target = target[part]; });
+      target[parts[parts.length - 1]] = value;
+      return next;
+    });
+  };
+
+  const renderEditable = (value, label, parts) => {
+    if (Array.isArray(value)) {
+      return <div className="invoice-card-record-list" key={parts.join('.')}>
+        {value.length === 0 ? <div className="subtle-copy">No records found</div> : value.map((item, index) => (
+          <div className="invoice-card-record" key={`${parts.join('.')}-${index}`}>
+            <div className="field-label">{label} {index + 1}</div>
+            {renderEditable(item, '', [...parts, index])}
+          </div>
+        ))}
+      </div>;
+    }
+    if (value && typeof value === 'object') {
+      return <div className="invoice-card-fields" key={parts.join('.')}>
+        {Object.entries(value).map(([key, child]) => renderEditable(child, key, [...parts, key]))}
+      </div>;
+    }
+    return <label className="invoice-card-field" key={parts.join('.')}>
+      <span>{label || parts[parts.length - 1]}</span>
+      <input value={value === null || value === undefined ? '' : String(value)} onChange={(event) => updatePath(parts, event.target.value)} />
+    </label>;
+  };
+
+  const save = async () => {
+    setSaving(true);
+    setSaveError('');
+    try {
+      const response = await fetch(`${API}/documents/${invoice.documentId}/review`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ invoiceId: invoice.id || invoice.invoiceId, editedData: draft }),
+      });
+      const result = await response.json();
+      if (!response.ok || !result.success) throw new Error(result.error || 'Unable to save invoice.');
+    } catch (error) {
+      setSaveError(error.message || 'Unable to save invoice.');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <article ref={cardRef} className={`invoice-extraction-card ${isActive ? 'is-active' : ''}`} data-invoice-card={invoice.invoiceIndex} onClick={onSelect}>
+      <div className="invoice-card-heading">
+        <div>
+          <span className="eyebrow">Invoice {Number(invoice.invoiceIndex ?? 0) + 1}</span>
+          <h2>{getInvoiceLabel({ ...invoice, extractedData: draft })}</h2>
+          <span className="subtle-copy">Pages {invoice.pageStart ?? 'N/A'}-{invoice.pageEnd ?? 'N/A'}</span>
+        </div>
+        <div className="invoice-card-meta">
+          <span className="status-pill success">{invoice.status || invoice.extractionStatus || 'EXTRACTED'}</span>
+          <span className="confidence-badge">Confidence {invoice.overallConfidence ?? 'N/A'}</span>
+          <button type="button" className="secondary-btn" onClick={(event) => { event.stopPropagation(); save(); }} disabled={saving}>{saving ? 'Saving...' : 'Save'}</button>
+        </div>
+      </div>
+      {saveError && <div className="invoice-card-error">{saveError}</div>}
+      {Object.keys(draft).length === 0 ? <div className="empty-state">Extraction data unavailable.</div> : (
+        <div className="invoice-card-sections">
+          <section><h3>Invoice Header</h3>{renderEditable(sections.header, 'Invoice Header', ['invoiceHeader'])}</section>
+          <section><h3>Shipments / Freight</h3>{renderEditable(sections.shipments, 'Shipment', [Array.isArray(draft.shipmentDetails) ? 'shipmentDetails' : 'shipments'])}</section>
+          <section><h3>Charge Line Items</h3>{renderEditable(sections.charges, 'Charge', ['chargeLineItems'])}</section>
+        </div>
+      )}
+      {invoice.confidenceScores && <div className="invoice-card-confidence"><strong>Confidence scores</strong><span>{Object.entries(invoice.confidenceScores).map(([key, value]) => `${key}: ${value}`).join(' | ')}</span></div>}
+    </article>
+  );
+};
+
+const DocumentPage = ({ docId, pageNumber, invoiceIndex, active, onVisible }) => {
+  const pageRef = useRef(null);
+  useEffect(() => {
+    const node = pageRef.current;
+    if (!node || !window.IntersectionObserver) return undefined;
+    const observer = new IntersectionObserver(([entry]) => { if (entry.isIntersecting) onVisible(invoiceIndex); }, { threshold: 0.45 });
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [invoiceIndex, onVisible]);
+  return (
+    <section ref={pageRef} className={`document-page ${active ? 'is-active' : ''}`} data-page-number={pageNumber}>
+      <div className="document-page-label">Invoice {invoiceIndex + 1} - Page {pageNumber}</div>
+      <iframe src={`${API}/documents/${docId}/file#page=${pageNumber}`} title={`Document page ${pageNumber}`} />
+    </section>
+  );
 };
 
 function App() {
@@ -278,7 +410,6 @@ function App() {
 
     return (
       <>
-        {nav}
         {deleteTarget && (
           <div
             style={{
@@ -504,7 +635,6 @@ function App() {
 
     return (
       <>
-        {nav}
         <main className="page">
           <div className="section-header">
             <div>
@@ -568,7 +698,6 @@ function App() {
 
     return (
       <>
-        {nav}
         <main className="page">
           <div className="section-header">
             <div>
@@ -716,9 +845,9 @@ function App() {
       });
     }, [doc]);
 
-    if (loadingDoc) return <><>{nav}</><main className="page"><div className="card upload-panel">Loading review...</div></main></>;
+    if (loadingDoc) return <RouteSkeleton label="Loading review..." />;
 
-    if (!doc) return <><>{nav}</><main className="page"><div className="card upload-panel">Document not found.</div></main></>;
+    if (!doc) return <main className="page"><div className="card upload-panel">Document not found.</div></main>;
 
     const invoiceRecord = doc.invoices?.[0];
     const selectedInvoice = {
@@ -888,7 +1017,6 @@ function App() {
 
     return (
       <>
-        {nav}
         <main className="page">
           <div className="section-header">
             <div>
@@ -957,6 +1085,7 @@ function App() {
     const [loadingDoc, setLoadingDoc] = useState(true);
     const [processing, setProcessing] = useState(false);
     const [error, setError] = useState('');
+    const [activeInvoiceIndex, setActiveInvoiceIndex] = useState(0);
 
     useEffect(() => {
       let active = true;
@@ -1019,13 +1148,34 @@ function App() {
       };
     }, [doc, docId]);
 
-    if (loadingDoc) return <><>{nav}</><main className="page"><div className="card upload-panel">Loading invoices...</div></main></>;
-    if (!doc) return <><>{nav}</><main className="page"><div className="card upload-panel">Document not found.</div></main></>;
+    if (loadingDoc) return <RouteSkeleton label="Loading invoices..." />;
+    if (!doc) return <main className="page"><div className="card upload-panel">Document not found.</div></main>;
+
+    const pageEntries = useMemo(() => invoices.flatMap((invoice) => {
+      const start = Number(invoice.pageStart);
+      const end = Number(invoice.pageEnd || invoice.pageStart);
+      if (!Number.isFinite(start) || !Number.isFinite(end)) return [];
+      return Array.from({ length: Math.max(1, end - start + 1) }, (_, offset) => ({
+        pageNumber: start + offset,
+        invoiceIndex: Number(invoice.invoiceIndex ?? 0),
+      }));
+    }), [invoices]);
+
+    const handlePageVisible = useCallback((invoiceIndex) => {
+      setActiveInvoiceIndex((current) => current === invoiceIndex ? current : invoiceIndex);
+    }, []);
+
+    const selectInvoice = useCallback((invoiceIndex) => {
+      setActiveInvoiceIndex(invoiceIndex);
+      const target = document.querySelector(`[data-invoice-card="${invoiceIndex}"]`);
+      target?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      const firstPage = pageEntries.find((page) => page.invoiceIndex === invoiceIndex);
+      if (firstPage) document.querySelector(`[data-page-number="${firstPage.pageNumber}"]`)?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }, [pageEntries]);
 
     return (
       <>
-        {nav}
-        <main className="page">
+        <main className="page multi-invoice-review-page">
           <div className="section-header">
             <div>
               <div className="eyebrow">Multiple invoices</div>
@@ -1038,28 +1188,16 @@ function App() {
           {error && <div className="card empty-state">{error}</div>}
           {!error && processing && <div className="progress-box multi-invoice-progress">The document is still being processed. This list will update automatically.</div>}
           {!error && !processing && invoices.length === 0 && <div className="card empty-state">No invoice records are available for this document.</div>}
-          {invoices.length > 0 && (
-            <div className="multi-invoice-list">
-              {invoices.map((invoice) => {
-                const total = getInvoiceTotal(invoice);
-                const currency = getInvoiceCurrency(invoice);
-                return (
-                  <a className="card multi-invoice-row" key={invoice.id} href={`/documents/${docId}/invoices/${encodeURIComponent(invoice.id)}`}>
-                    <div className="multi-invoice-row-main">
-                      <span className="eyebrow">Invoice</span>
-                      <strong>{getInvoiceLabel(invoice)}</strong>
-                      <span className="subtle-copy">{getInvoiceDate(invoice) || 'Date unavailable'}</span>
-                    </div>
-                    <div className="multi-invoice-row-meta">
-                      <span>{total === null || total === undefined || total === '' ? 'N/A' : `${currency ? `${currency} ` : ''}${total}`}</span>
-                      <span className={`status-pill ${normalizeStatus(invoice.status || invoice.extractionStatus)}`}>{invoice.status || invoice.extractionStatus || 'PENDING'}</span>
-                      <span className="multi-invoice-arrow" aria-hidden="true">→</span>
-                    </div>
-                  </a>
-                );
-              })}
+          {invoices.length > 0 && <div className="multi-invoice-layout">
+            <div className="document-pages-panel" aria-label="Document pages">
+              {pageEntries.length > 0 ? pageEntries.map((page) => (
+                <DocumentPage key={`${page.invoiceIndex}-${page.pageNumber}`} docId={docId} pageNumber={page.pageNumber} invoiceIndex={page.invoiceIndex} active={activeInvoiceIndex === page.invoiceIndex} onVisible={handlePageVisible} />
+              )) : <div className="empty-state">Page ranges are unavailable for this document.</div>}
             </div>
-          )}
+            <div className="invoice-cards-panel" aria-label="Extracted invoice fields">
+              {invoices.map((invoice) => <InvoiceExtractionCard key={invoice.invoiceId || invoice.id} invoice={invoice} isActive={activeInvoiceIndex === Number(invoice.invoiceIndex ?? 0)} onSelect={() => selectInvoice(Number(invoice.invoiceIndex ?? 0))} />)}
+            </div>
+          </div>}
         </main>
       </>
     );
@@ -1114,11 +1252,11 @@ function App() {
       setSelectedSection('header');
     }, [invoiceId]);
 
-    if (loadingDoc) return <><>{nav}</><main className="page"><div className="card upload-panel">Loading invoice...</div></main></>;
-    if (!doc) return <><>{nav}</><main className="page"><div className="card upload-panel">Document not found.</div></main></>;
+    if (loadingDoc) return <RouteSkeleton label="Loading invoice..." />;
+    if (!doc) return <main className="page"><div className="card upload-panel">Document not found.</div></main>;
 
-    if (error) return <><>{nav}</><main className="page"><div className="card upload-panel"><a href={`/documents/${docId}/invoices`} className="secondary-btn">Back to Invoices</a><p className="subtle-copy mt-4">{error}</p></div></main></>;
-    if (!selectedInvoice) return <><>{nav}</><main className="page"><div className="card upload-panel"><a href={`/documents/${docId}/invoices`} className="secondary-btn">Back to Invoices</a><p className="subtle-copy mt-4">Invoice not found in this document.</p></div></main></>;
+    if (error) return <main className="page"><div className="card upload-panel"><a href={`/documents/${docId}/invoices`} className="secondary-btn">Back to Invoices</a><p className="subtle-copy mt-4">{error}</p></div></main>;
+    if (!selectedInvoice) return <main className="page"><div className="card upload-panel"><a href={`/documents/${docId}/invoices`} className="secondary-btn">Back to Invoices</a><p className="subtle-copy mt-4">Invoice not found in this document.</p></div></main>;
 
     const data = draft || parseStoredInvoiceData(selectedInvoice);
     console.log('MULTI INVOICE', invoiceId, selectedInvoice);
@@ -1188,7 +1326,6 @@ function App() {
 
     return (
       <>
-        {nav}
         <main className="page">
           <div className="section-header">
             <div>
@@ -1242,8 +1379,8 @@ function App() {
       load();
     }, [docId]);
 
-    if (loading) return <><>{nav}</><main className="page"><div className="card upload-panel">Loading invoice...</div></main></>;
-    if (!doc) return <><>{nav}</><main className="page"><div className="card upload-panel">Invoice not found.</div></main></>;
+    if (loading) return <RouteSkeleton label="Loading invoice..." />;
+    if (!doc) return <main className="page"><div className="card upload-panel">Invoice not found.</div></main>;
 
     let canonical = {};
     try {
@@ -1254,7 +1391,6 @@ function App() {
 
     return (
       <>
-        {nav}
         <main className="page">
           <div className="card upload-panel">
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '1rem' }}>
@@ -1287,7 +1423,6 @@ function App() {
 
     return (
       <>
-        {nav}
         <main className="page">
           <div className="section-header">
             <div>
@@ -1342,16 +1477,18 @@ function App() {
     return <div className="app-shell"><div className="card upload-panel">Loading dashboard...</div></div>;
   }
 
+  let renderedRoute;
   switch (route) {
-    case 'upload': return <UploadView />;
-    case 'review': return <ReviewView />;
-    case 'multi-invoice-list': return <MultiInvoiceListView />;
-    case 'multi-invoice-detail': return <MultiInvoiceDetailView />;
-    case 'invoice': return <InvoiceView />;
-    case 'invoices': return renderInvoicesView();
-    case 'queue': return <QueueView />;
-    default: return renderDocumentsView();
+    case 'upload': renderedRoute = <UploadView />; break;
+    case 'review': renderedRoute = <ReviewView />; break;
+    case 'multi-invoice-list': renderedRoute = <MultiInvoiceListView />; break;
+    case 'multi-invoice-detail': renderedRoute = <MultiInvoiceDetailView />; break;
+    case 'invoice': renderedRoute = <InvoiceView />; break;
+    case 'invoices': renderedRoute = renderInvoicesView(); break;
+    case 'queue': renderedRoute = <QueueView />; break;
+    default: renderedRoute = renderDocumentsView();
   }
+  return <><>{nav}</><Suspense fallback={<RouteSkeleton />}>{renderedRoute}</Suspense></>;
 }
 
 export default App;
