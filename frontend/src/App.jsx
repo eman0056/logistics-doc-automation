@@ -28,13 +28,22 @@ const fetchJson = async (url, options = {}) => {
 };
 
 const parseStoredInvoiceData = (invoice) => {
-  if (invoice?.extractedData && typeof invoice.extractedData === 'object' && !Array.isArray(invoice.extractedData) && Object.keys(invoice.extractedData).length > 0) {
-    return invoice.extractedData;
-  }
+  const unwrap = (value) => {
+    let current = value;
+    if (typeof current === 'string') {
+      try { current = JSON.parse(current); } catch (error) { return {}; }
+    }
+    if (current && typeof current === 'object' && !Array.isArray(current) && current.extractedData && typeof current.extractedData === 'object') {
+      return unwrap(current.extractedData);
+    }
+    return current && typeof current === 'object' && !Array.isArray(current) ? current : {};
+  };
+
+  const extractedData = unwrap(invoice?.extractedData);
+  if (Object.keys(extractedData).length > 0) return extractedData;
   try {
     const stored = invoice?.canonicalJson || invoice?.finalSubmittedData;
-    const parsed = typeof stored === 'string' ? JSON.parse(stored) : stored;
-    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+    return unwrap(stored);
   } catch (error) {
     return {};
   }
@@ -241,7 +250,7 @@ function App() {
           <td>{((doc.fileSize || 0) / 1024).toFixed(1)} KB</td>
           <td>{new Date(doc.createdAt).toLocaleDateString()}</td>
           <td style={{ textAlign: 'right' }}>
-            <a href={`/documents/${doc.id}/review`} className="nav-link" style={{ padding: '0.4rem 0.6rem', display: 'inline-flex' }}>
+            <a href={doc.invoiceCount > 1 ? `/documents/${doc.id}/invoices` : `/documents/${doc.id}/review`} className="nav-link" style={{ padding: '0.4rem 0.6rem', display: 'inline-flex' }}>
               Review & Edit
             </a>
             <button
@@ -618,7 +627,10 @@ function App() {
         try {
           const res = await fetchJson(`${API}/documents?refresh=${Date.now()}`);
           const json = await res.json();
+          console.log('REVIEW API RESPONSE', { status: res.status, response: json, documentId: docId });
           const found = (json.documents || []).find((item) => item.id === docId) || null;
+          console.log('EXTRACTED DATA', found?.invoices?.[0]?.extractedData || found?.extraction?.extractedData);
+          console.log('INVOICE HEADER', (found?.invoices?.[0]?.extractedData || found?.extraction?.extractedData)?.invoiceHeader);
           if (isMounted) setDoc(found);
         } catch (error) {
           console.error(error);
@@ -734,6 +746,7 @@ function App() {
     const selectedInvoiceData = selectedInvoice.extractedData || {};
     const draft = invoiceDrafts[selectedInvoice?.id];
     const canonical = draft && Object.keys(draft).length > 0 ? draft : selectedInvoiceData;
+    console.log('REVIEW RENDER MAPPING', { documentId: docId, invoiceId: selectedInvoice.id, extractedData: selectedInvoiceData, invoiceHeader: selectedInvoiceData?.invoiceHeader });
     const shipmentKey = Array.isArray(canonical.shipmentDetails) ? 'shipmentDetails' : 'shipmentDetail';
     const shipmentRecords = Array.isArray(canonical[shipmentKey]) ? canonical[shipmentKey] : [];
     const chargeRecords = [
@@ -859,11 +872,8 @@ function App() {
       if (isEmpty) {
         return (
           <div className="section-block">
-            <div className="section-title">Processing</div>
-            <div className="status-pill warning">Document Uploaded</div>
-            <div className="status-pill warning mt-2">Extracting Information</div>
-            <div className="status-pill neutral mt-2">Validating Data</div>
-            <div className="status-pill neutral mt-2">Preparing Review</div>
+            <div className="section-title">Extraction data unavailable</div>
+            <div className="subtle-copy">The API response did not contain extracted invoice data.</div>
           </div>
         );
       }
@@ -943,8 +953,10 @@ function App() {
   const MultiInvoiceListView = () => {
     const docId = path.split('/')[2];
     const [doc, setDoc] = useState(null);
+    const [invoices, setInvoices] = useState([]);
     const [loadingDoc, setLoadingDoc] = useState(true);
     const [processing, setProcessing] = useState(false);
+    const [error, setError] = useState('');
 
     useEffect(() => {
       let active = true;
@@ -952,11 +964,20 @@ function App() {
       setLoadingDoc(true);
       const load = async () => {
         try {
-          const response = await fetchJson(`${API}/documents?refresh=${Date.now()}`);
-          const json = await response.json();
-          if (active) setDoc((json.documents || []).find((item) => item.id === docId) || null);
+          const [documentResponse, invoiceResponse] = await Promise.all([
+            fetchJson(`${API}/documents?refresh=${Date.now()}`),
+            fetchJson(`${API}/documents/${docId}/invoices?refresh=${Date.now()}`),
+          ]);
+          const documentJson = await documentResponse.json();
+          const invoiceJson = await invoiceResponse.json();
+          if (!documentResponse.ok || !invoiceResponse.ok) throw new Error(invoiceJson.error || documentJson.error || 'Unable to load invoices.');
+          const found = (documentJson.documents || []).find((item) => item.id === docId) || null;
+          if (active) {
+            setDoc(found);
+            setInvoices(Array.isArray(invoiceJson.invoices) ? invoiceJson.invoices : []);
+          }
         } catch (error) {
-          console.error(error);
+          if (active) setError(error.message || 'Unable to load invoices.');
         } finally {
           if (active) setLoadingDoc(false);
         }
@@ -974,10 +995,17 @@ function App() {
       let timeout;
       const poll = async () => {
         try {
-          const response = await fetchJson(`${API}/documents?refresh=${Date.now()}`);
-          const json = await response.json();
+          const [documentResponse, invoiceResponse] = await Promise.all([
+            fetchJson(`${API}/documents?refresh=${Date.now()}`),
+            fetchJson(`${API}/documents/${docId}/invoices?refresh=${Date.now()}`),
+          ]);
+          const json = await documentResponse.json();
+          const invoiceJson = await invoiceResponse.json();
           const latest = (json.documents || []).find((item) => item.id === docId);
-          if (!cancelled && latest) setDoc(latest);
+          if (!cancelled && latest) {
+            setDoc(latest);
+            if (invoiceResponse.ok) setInvoices(Array.isArray(invoiceJson.invoices) ? invoiceJson.invoices : []);
+          }
         } catch (error) {
           if (!cancelled) console.error(error);
         }
@@ -994,7 +1022,6 @@ function App() {
     if (loadingDoc) return <><>{nav}</><main className="page"><div className="card upload-panel">Loading invoices...</div></main></>;
     if (!doc) return <><>{nav}</><main className="page"><div className="card upload-panel">Document not found.</div></main></>;
 
-    const invoices = Array.isArray(doc.invoices) ? doc.invoices : [];
     return (
       <>
         {nav}
@@ -1008,8 +1035,9 @@ function App() {
             <a href="/documents" className="secondary-btn">Back to Documents</a>
           </div>
 
-          {processing && <div className="progress-box multi-invoice-progress">The document is still being processed. This list will update automatically.</div>}
-          {!processing && invoices.length === 0 && <div className="card empty-state">No invoice records are available for this document.</div>}
+          {error && <div className="card empty-state">{error}</div>}
+          {!error && processing && <div className="progress-box multi-invoice-progress">The document is still being processed. This list will update automatically.</div>}
+          {!error && !processing && invoices.length === 0 && <div className="card empty-state">No invoice records are available for this document.</div>}
           {invoices.length > 0 && (
             <div className="multi-invoice-list">
               {invoices.map((invoice) => {
@@ -1042,7 +1070,11 @@ function App() {
     const docId = routeParts[2];
     const invoiceId = decodeURIComponent(routeParts[4] || '');
     const [doc, setDoc] = useState(null);
+    const [selectedInvoice, setSelectedInvoice] = useState(null);
     const [loadingDoc, setLoadingDoc] = useState(true);
+    const [error, setError] = useState('');
+    const [draft, setDraft] = useState(null);
+    const [saving, setSaving] = useState(false);
     const [selectedSection, setSelectedSection] = useState('header');
 
     useEffect(() => {
@@ -1051,11 +1083,25 @@ function App() {
       setLoadingDoc(true);
       const load = async () => {
         try {
-          const response = await fetchJson(`${API}/documents?refresh=${Date.now()}`);
-          const json = await response.json();
-          if (active) setDoc((json.documents || []).find((item) => item.id === docId) || null);
+          const [documentResponse, invoiceResponse] = await Promise.all([
+            fetchJson(`${API}/documents?refresh=${Date.now()}`),
+            fetchJson(`${API}/documents/${docId}/invoices/${encodeURIComponent(invoiceId)}?refresh=${Date.now()}`),
+          ]);
+          const documentJson = await documentResponse.json();
+          const invoiceJson = await invoiceResponse.json();
+          console.log('MULTI INVOICE API RESPONSE', { status: invoiceResponse.status, response: invoiceJson, documentId: docId, invoiceId });
+          if (!documentResponse.ok || !invoiceResponse.ok) throw new Error(invoiceJson.error || documentJson.error || 'Unable to load invoice.');
+          const found = (documentJson.documents || []).find((item) => item.id === docId) || null;
+          const invoice = invoiceJson.invoice;
+          if (!found) throw new Error('Document not found.');
+          if (!invoice || String(invoice.id) !== invoiceId || String(invoice.documentId) !== docId) throw new Error('Invoice does not belong to this document.');
+          if (active) {
+            setDoc(found);
+            setSelectedInvoice(invoice);
+            setDraft(parseStoredInvoiceData(invoice));
+          }
         } catch (error) {
-          console.error(error);
+          if (active) setError(error.message || 'Unable to load invoice.');
         } finally {
           if (active) setLoadingDoc(false);
         }
@@ -1071,10 +1117,12 @@ function App() {
     if (loadingDoc) return <><>{nav}</><main className="page"><div className="card upload-panel">Loading invoice...</div></main></>;
     if (!doc) return <><>{nav}</><main className="page"><div className="card upload-panel">Document not found.</div></main></>;
 
-    const selectedInvoice = (doc.invoices || []).find((invoice) => String(invoice.id) === invoiceId);
+    if (error) return <><>{nav}</><main className="page"><div className="card upload-panel"><a href={`/documents/${docId}/invoices`} className="secondary-btn">Back to Invoices</a><p className="subtle-copy mt-4">{error}</p></div></main></>;
     if (!selectedInvoice) return <><>{nav}</><main className="page"><div className="card upload-panel"><a href={`/documents/${docId}/invoices`} className="secondary-btn">Back to Invoices</a><p className="subtle-copy mt-4">Invoice not found in this document.</p></div></main></>;
 
-    const data = parseStoredInvoiceData(selectedInvoice);
+    const data = draft || parseStoredInvoiceData(selectedInvoice);
+    console.log('MULTI INVOICE', invoiceId, selectedInvoice);
+    console.log('MULTI EXTRACTED DATA', data);
     const header = getInvoiceHeader(selectedInvoice);
     const shipmentKey = Array.isArray(data.shipmentDetails) ? 'shipmentDetails' : 'shipmentDetail';
     const shipmentRecords = Array.isArray(data[shipmentKey]) ? data[shipmentKey] : [];
@@ -1100,6 +1148,44 @@ function App() {
       return <div className="detail-field" key={key}><span>{label}</span><strong>{value === null || value === undefined || value === '' ? 'N/A' : String(value)}</strong></div>;
     };
 
+    const updatePath = (parts, value) => {
+      setDraft((current) => {
+        const next = JSON.parse(JSON.stringify(current || {}));
+        let target = next;
+        parts.slice(0, -1).forEach((part) => { target = target[part]; });
+        target[parts[parts.length - 1]] = value;
+        return next;
+      });
+    };
+
+    const renderEditableValue = (value, label, parts) => {
+      if (Array.isArray(value)) {
+        return <div className="detail-record-list" key={parts.join('.')}><div className="field-label">{label}</div>{value.length === 0 ? <div className="subtle-copy">No records found</div> : value.map((item, index) => <div className="detail-record" key={`${parts.join('.')}-${index}`}>{renderEditableValue(item, `${label} ${index + 1}`, [...parts, index])}</div>)}</div>;
+      }
+      if (value && typeof value === 'object') {
+        return <div className="detail-field-grid" key={parts.join('.')}>{Object.entries(value).map(([childKey, childValue]) => renderEditableValue(childValue, childKey, [...parts, childKey]))}</div>;
+      }
+      return <label className="detail-field" key={parts.join('.')}><span>{label}</span><input className="field-input" value={value === null || value === undefined ? '' : String(value)} onChange={(event) => updatePath(parts, event.target.value)} /></label>;
+    };
+
+    const saveSelectedInvoice = async () => {
+      setSaving(true);
+      try {
+        const response = await fetch(`${API}/documents/${docId}/review`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ invoiceId, editedData: draft }),
+        });
+        const result = await response.json();
+        if (!response.ok || !result.success) throw new Error(result.error || 'Unable to save invoice.');
+        setSelectedInvoice((current) => ({ ...current, extractedData: draft, canonicalJson: JSON.stringify(draft), status: 'APPROVED' }));
+      } catch (saveError) {
+        setError(saveError.message || 'Unable to save invoice.');
+      } finally {
+        setSaving(false);
+      }
+    };
+
     return (
       <>
         {nav}
@@ -1118,12 +1204,17 @@ function App() {
               <strong>{getInvoiceLabel(selectedInvoice)}</strong>
               <span className="subtle-copy">{getInvoiceDate(selectedInvoice) || 'Date unavailable'}</span>
               <span className="invoice-detail-total">{getInvoiceTotal(selectedInvoice) ?? 'N/A'} {getInvoiceCurrency(selectedInvoice) || ''}</span>
+              <span className="subtle-copy">Pages {selectedInvoice.pageStart ?? 'N/A'}–{selectedInvoice.pageEnd ?? 'N/A'}</span>
+              <span className="subtle-copy">Confidence {selectedInvoice.overallConfidence ?? 'N/A'}</span>
+              <iframe className="document-scroll-viewer" style={{ height: '420px', minHeight: '420px', marginTop: '0.5rem' }} src={`${API}/documents/${docId}/file#page=${selectedInvoice.pageStart || 1}`} title="Selected invoice pages" />
             </div>
             <div className="card editor-panel multi-invoice-detail-panel">
+              <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: '1rem' }}><button type="button" className="primary-btn" onClick={saveSelectedInvoice} disabled={saving}>{saving ? 'Saving...' : 'Save Invoice'}</button></div>
               <div className="invoice-section-tabs" role="tablist" aria-label="Invoice detail sections">
                 {sections.map((section) => <button key={section.id} type="button" role="tab" aria-selected={activeSection.id === section.id} className={activeSection.id === section.id ? 'primary-btn' : 'secondary-btn'} onClick={() => setSelectedSection(section.id)}>{section.label}</button>)}
               </div>
-              <div className="detail-fields">{Object.keys(activeSection.value || {}).length === 0 && !Array.isArray(activeSection.value) ? <div className="empty-state">No extracted fields available.</div> : renderValue(activeSection.value, activeSection.label, activeSection.id)}</div>
+              <div className="detail-fields">{Object.keys(data).length === 0 ? <div className="empty-state">Extraction data unavailable.</div> : Object.keys(activeSection.value || {}).length === 0 && !Array.isArray(activeSection.value) ? <div className="empty-state">No extracted fields available.</div> : renderEditableValue(activeSection.value, activeSection.label, [activeSection.id === 'header' ? 'invoiceHeader' : activeSection.id === 'shipment' ? shipmentKey : activeSection.id === 'charges' ? 'chargeLineItems' : 'other'])}</div>
+              {selectedInvoice.rawOcrText && <details className="raw-ocr-panel"><summary>Raw OCR text</summary><pre>{selectedInvoice.rawOcrText}</pre></details>}
             </div>
           </div>
         </main>

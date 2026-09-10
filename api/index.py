@@ -324,14 +324,14 @@ def _send_spa_html(path):
     }
 
     function parseExtractedData(value) {
-      if (value && typeof value === 'object' && !Array.isArray(value)) return value;
-      if (typeof value !== 'string') return {};
-      try {
-        const parsed = JSON.parse(value);
-        return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
-      } catch (error) {
-        return {};
+      let parsed = value;
+      if (typeof parsed === 'string') {
+        try { parsed = JSON.parse(parsed); } catch (error) { return {}; }
       }
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed) && parsed.extractedData && typeof parsed.extractedData === 'object') {
+        return parseExtractedData(parsed.extractedData);
+      }
+      return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
     }
 
     function getSingleInvoiceExtractedData(doc) {
@@ -801,10 +801,16 @@ def _send_spa_html(path):
       const d = documentOverride ? null : await getDocuments(true);
       const doc = documentOverride || (d.documents || []).find(item => item.id === docId) || {};
 
+      console.log('REVIEW API RESPONSE', { status: documentOverride ? 'cached-document' : 200, response: doc, documentId: docId });
+
       const selectedInvoice = (Array.isArray(doc.invoices) && doc.invoices[0]) || { id: `${docId}-extracted` };
       let canonical = getSingleInvoiceExtractedData(doc);
+      console.log('EXTRACTED DATA', canonical);
+      console.log('INVOICE HEADER', canonical?.invoiceHeader);
 
-      const extractionPending = Object.keys(canonical).length === 0;
+      const extractionUnavailable = Object.keys(canonical).length === 0
+        && ['EXTRACTED', 'IN_REVIEW', 'APPROVED', 'INVOICE_GENERATED'].includes(doc.status);
+      const extractionPending = Object.keys(canonical).length === 0 && !extractionUnavailable;
       const isPdfDocument = (doc.mimeType || '').toLowerCase().includes('pdf')
         || (doc.fileName || '').toLowerCase().endsWith('.pdf');
       const pollKey = `doc-status-${docId}`;
@@ -856,7 +862,14 @@ def _send_spa_html(path):
       };
 
       let fieldsHtml = '';
-      if (extractionPending) {
+      if (extractionUnavailable) {
+        fieldsHtml = `
+          <div class="rounded-2xl border border-amber-500/25 bg-amber-500/5 p-5">
+            <p class="text-sm font-semibold text-amber-300">Extraction data unavailable</p>
+            <p class="mt-2 text-xs text-slate-400">The review API returned no extracted invoice data for this document.</p>
+          </div>
+        `;
+      } else if (extractionPending) {
         const processingSteps = [
           { label: 'Document Uploaded', complete: true },
           { label: 'Extracting Information', active: true },
@@ -1475,6 +1488,8 @@ def get_documents():
             invoice_data = json.loads(invoice[6] or invoice[8] or '{}')
           except (TypeError, json.JSONDecodeError):
             pass
+          if isinstance(invoice_data, dict) and isinstance(invoice_data.get('extractedData'), (dict, list)):
+            invoice_data = invoice_data['extractedData']
           invoice_header = invoice_data.get('invoiceHeader') if isinstance(invoice_data, dict) else None
           if not isinstance(invoice_header, dict):
             invoice_header = invoice_data if isinstance(invoice_data, dict) else {}
@@ -1498,6 +1513,8 @@ def get_documents():
                     extracted_data = json.loads(r[10])
                 except (TypeError, json.JSONDecodeError):
                     extracted_data = {}
+                if isinstance(extracted_data, dict) and isinstance(extracted_data.get('extractedData'), (dict, list)):
+                  extracted_data = extracted_data['extractedData']
                 extraction_payload = {
                     "canonicalJson": r[10],
                     "confidenceScores": r[11],
@@ -1539,6 +1556,63 @@ def get_documents():
         response = JSONResponse({"error": str(e), "trace": traceback.format_exc()}, status_code=500)
         response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
         return response
+
+def _parse_invoice_json(value):
+  if isinstance(value, str):
+    try:
+      value = json.loads(value)
+    except (TypeError, json.JSONDecodeError):
+      return {}
+  if isinstance(value, dict) and isinstance(value.get('extractedData'), (dict, list)):
+    value = value['extractedData']
+  return value if isinstance(value, dict) else {}
+
+
+def _serialize_invoice_row(row):
+  extracted_data = _parse_invoice_json(row[6] or row[8] or {})
+  confidence_scores = _parse_invoice_json(row[7]) if row[7] else {}
+  return {
+    "id": row[0],
+    "invoiceId": row[0],
+    "documentId": row[1],
+    "invoiceIndex": row[2],
+    "pageStart": row[3],
+    "pageEnd": row[4],
+    "rawOcrText": row[5],
+    "canonicalJson": row[6],
+    "extractedData": extracted_data,
+    "confidenceScores": confidence_scores,
+    "finalSubmittedData": row[8],
+    "status": row[9],
+    "extractionStatus": row[9] or "PENDING",
+    "overallConfidence": row[10],
+    "extractionComplete": bool(row[6] or row[8]),
+  }
+
+
+@app.get("/api/documents/{doc_id}/invoices")
+def get_document_invoices(doc_id: str):
+  conn = get_db()
+  document_cursor = execute_query(conn, "SELECT 1 FROM Document WHERE id = ?", (doc_id,))
+  if not document_cursor.fetchone():
+    conn.close()
+    return JSONResponse({"error": "Document not found"}, status_code=404)
+  cursor = execute_query(conn, "SELECT id, documentId, invoiceIndex, pageStart, pageEnd, rawOcrText, canonicalJson, confidenceScores, finalSubmittedData, status, overallConfidence FROM DocumentInvoice WHERE documentId = ? ORDER BY invoiceIndex", (doc_id,))
+  invoices = [_serialize_invoice_row(row) for row in cursor.fetchall()]
+  conn.close()
+  return {"success": True, "documentId": doc_id, "invoiceCount": len(invoices), "invoices": invoices}
+
+
+@app.get("/api/documents/{doc_id}/invoices/{invoice_id}")
+def get_document_invoice(doc_id: str, invoice_id: str):
+  conn = get_db()
+  cursor = execute_query(conn, "SELECT id, documentId, invoiceIndex, pageStart, pageEnd, rawOcrText, canonicalJson, confidenceScores, finalSubmittedData, status, overallConfidence FROM DocumentInvoice WHERE id = ? AND documentId = ?", (invoice_id, doc_id))
+  row = cursor.fetchone()
+  conn.close()
+  if not row:
+    return JSONResponse({"error": "Invoice not found for this document", "documentId": doc_id, "invoiceId": invoice_id}, status_code=404)
+  return {"success": True, "invoice": _serialize_invoice_row(row)}
+
 
 @app.delete("/api/documents/{doc_id}")
 def delete_document(doc_id: str):
