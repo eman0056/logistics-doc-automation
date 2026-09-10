@@ -1,6 +1,28 @@
-import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 const API = '/api';
+
+class RouteErrorBoundary extends React.Component {
+  constructor(props) {
+    super(props);
+    this.state = { hasError: false };
+  }
+
+  static getDerivedStateFromError() {
+    return { hasError: true };
+  }
+
+  componentDidCatch(error) {
+    console.error('Route render error', error);
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return <main className="page"><div className="card empty-state">Unable to render this page. Refresh and try again.</div></main>;
+    }
+    return this.props.children;
+  }
+}
 
 const defaultCustomer = {
   name: 'Apex Freight Logistics',
@@ -118,11 +140,19 @@ const InvoiceExtractionCard = ({ invoice, isActive, onSelect }) => {
   const [draft, setDraft] = useState(initialData);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState('');
+  const [activeSheet, setActiveSheet] = useState('header');
   const cardRef = useRef(null);
   const sections = useMemo(() => invoiceSections(draft), [draft]);
+  const sheetDefinitions = [
+    { id: 'header', label: 'Invoice Header', value: sections.header, path: ['invoiceHeader'] },
+    { id: 'shipments', label: 'Shipments', value: sections.shipments, path: [Array.isArray(draft.shipmentDetails) ? 'shipmentDetails' : 'shipments'] },
+    { id: 'charges', label: 'Charge Line Items', value: sections.charges, path: ['chargeLineItems'] },
+  ];
+  const activeSheetDefinition = sheetDefinitions.find((sheet) => sheet.id === activeSheet) || sheetDefinitions[0];
 
   useEffect(() => {
     setDraft(parseStoredInvoiceData(invoice));
+    setActiveSheet('header');
   }, [invoice]);
 
   useEffect(() => {
@@ -195,11 +225,14 @@ const InvoiceExtractionCard = ({ invoice, isActive, onSelect }) => {
       </div>
       {saveError && <div className="invoice-card-error">{saveError}</div>}
       {Object.keys(draft).length === 0 ? <div className="empty-state">Extraction data unavailable.</div> : (
-        <div className="invoice-card-sections">
-          <section><h3>Invoice Header</h3>{renderEditable(sections.header, 'Invoice Header', ['invoiceHeader'])}</section>
-          <section><h3>Shipments / Freight</h3>{renderEditable(sections.shipments, 'Shipment', [Array.isArray(draft.shipmentDetails) ? 'shipmentDetails' : 'shipments'])}</section>
-          <section><h3>Charge Line Items</h3>{renderEditable(sections.charges, 'Charge', ['chargeLineItems'])}</section>
-        </div>
+        <>
+          <div className="invoice-card-tabs" role="tablist" aria-label={`Invoice ${Number(invoice.invoiceIndex ?? 0) + 1} sheets`}>
+            {sheetDefinitions.map((sheet) => <button key={sheet.id} type="button" role="tab" aria-selected={activeSheet === sheet.id} className={activeSheet === sheet.id ? 'primary-btn' : 'secondary-btn'} onClick={(event) => { event.stopPropagation(); setActiveSheet(sheet.id); }}>{sheet.label}</button>)}
+          </div>
+          <div className="invoice-card-sections">
+            <section><h3>{activeSheetDefinition.label}</h3>{renderEditable(activeSheetDefinition.value, activeSheetDefinition.label, activeSheetDefinition.path)}</section>
+          </div>
+        </>
       )}
       {invoice.confidenceScores && <div className="invoice-card-confidence"><strong>Confidence scores</strong><span>{Object.entries(invoice.confidenceScores).map(([key, value]) => `${key}: ${value}`).join(' | ')}</span></div>}
     </article>
@@ -227,6 +260,7 @@ function App() {
   const [customer, setCustomer] = useState(defaultCustomer);
   const [documents, setDocuments] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState('');
   const [path, setPath] = useState(window.location.pathname + window.location.search);
   const [deleteTarget, setDeleteTarget] = useState(null);
   const [deletingId, setDeletingId] = useState(null);
@@ -253,6 +287,7 @@ function App() {
         if (customerJson.customer) setCustomer(customerJson.customer);
         setDocuments(docsJson.documents || []);
       } catch (error) {
+        setLoadError(error.message || 'Unable to load application data.');
         console.error('Load error', error);
       } finally {
         setLoading(false);
@@ -1473,9 +1508,7 @@ function App() {
     );
   };
 
-  if (loading) {
-    return <div className="app-shell"><div className="card upload-panel">Loading dashboard...</div></div>;
-  }
+  if (loading) return <><>{nav}</><RouteSkeleton label="Loading dashboard..." /></>;
 
   let renderedRoute;
   switch (route) {
@@ -1488,7 +1521,7 @@ function App() {
     case 'queue': renderedRoute = <QueueView />; break;
     default: renderedRoute = renderDocumentsView();
   }
-  return <><>{nav}</><Suspense fallback={<RouteSkeleton />}>{renderedRoute}</Suspense></>;
+  return <><>{nav}{loadError && <div className="app-load-error" role="alert">{loadError}</div>}</><Suspense fallback={<RouteSkeleton />}><RouteErrorBoundary>{renderedRoute}</RouteErrorBoundary></Suspense></>;
 }
 
 export default App;

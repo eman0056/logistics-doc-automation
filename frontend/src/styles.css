@@ -3,24 +3,24 @@
   line-height: 1.5;
   font-weight: 400;
   color: #ffffff;
-  background: #E8EEF5;
+  background: #0f172a;
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 
-  --page-bg: #E8EEF5;
-  --card-bg: #0F2033;
-  --header-bg: #172B3F;
-  --panel-bg: #0F2033;
-  --panel-alt: #172B3F;
-  --table-header: #172B3F;
-  --border: #294157;
-  --text-primary: #FFFFFF;
-  --text-secondary: #C9D4DF;
-  --text-muted: #A7B7C7;
-  --primary: #0B8FD3;
-  --primary-strong: #0A7DBA;
+  --page-bg: #0f172a;
+  --card-bg: #1e293b;
+  --header-bg: #111827;
+  --panel-bg: #1e293b;
+  --panel-alt: #273449;
+  --table-header: #273449;
+  --border: #334155;
+  --text-primary: #f8fafc;
+  --text-secondary: #cbd5e1;
+  --text-muted: #94a3b8;
+  --primary: #6366f1;
+  --primary-strong: #4f46e5;
   --success: #1FC991;
   --warning: #D9A35B;
   --danger: #EA6A6A;
@@ -74,6 +74,16 @@ img {
   background: var(--header-bg);
   border-bottom: 1px solid var(--border);
   box-shadow: var(--shadow);
+}
+
+.app-load-error {
+  max-width: 1280px;
+  margin: 0 auto;
+  padding: 0.7rem 1rem;
+  border-bottom: 1px solid rgba(248, 113, 113, 0.35);
+  color: #fecaca;
+  background: rgba(127, 29, 29, 0.35);
+  font-size: 0.82rem;
 }
 
 .topbar-inner {
@@ -517,6 +527,18 @@ img {
 .invoice-card-sections {
   display: grid;
   gap: 1rem;
+}
+
+.invoice-card-tabs {
+  display: flex;
+  gap: 0.5rem;
+  overflow-x: auto;
+  padding-bottom: 0.15rem;
+}
+
+.invoice-card-tabs button {
+  flex: 0 0 auto;
+  white-space: nowrap;
 }
 
 .invoice-card-sections section {
