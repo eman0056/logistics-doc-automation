@@ -281,6 +281,13 @@ function App() {
           fetchJson(`${API}/documents?refresh=${Date.now()}`),
         ]);
 
+        if (!customerRes.ok) {
+          throw new Error('Unable to load customer data.');
+        }
+        if (!docsRes.ok) {
+          throw new Error('Unable to load document data.');
+        }
+
         const customerJson = await customerRes.json();
         const docsJson = await docsRes.json();
 
@@ -862,8 +869,19 @@ function App() {
       const hasRealExtraction = Object.keys(getSingleInvoiceData(doc)).length > 0;
       const invoicesPending = doc?.invoices?.some((invoice) => !hasStoredInvoiceData(invoice) && invoice.extractionStatus !== 'EXTRACTED');
       const isDocReady = doc && hasRealExtraction;
+      const terminalStatuses = new Set(['FAILED', 'EXTRACTED', 'APPROVED', 'INVOICE_GENERATED', 'IN_REVIEW']);
 
-      if (!doc || (!isDocReady && !invoicesPending)) {
+      if (!doc) {
+        setProcessing(false);
+        return undefined;
+      }
+
+      if (terminalStatuses.has(doc.status)) {
+        setProcessing(false);
+        return undefined;
+      }
+
+      if (!isDocReady && !invoicesPending) {
         pollingRef.current.cancelled = false;
         const poll = async () => {
           if (pollingRef.current.cancelled) return;
@@ -877,6 +895,14 @@ function App() {
             const documentsJson = await documentsRes.json();
             const latestDoc = (documentsJson.documents || []).find((item) => item.id === docId);
             if (pollingRef.current.cancelled) return;
+
+            const terminalApiStatus = status?.status || '';
+            const stopPolling = Boolean(status?.isExtracted || terminalStatuses.has(terminalApiStatus));
+            if (stopPolling) {
+              setProcessing(false);
+              return;
+            }
+
             if (latestDoc && status.extractedData && Object.keys(status.extractedData).length > 0) {
               latestDoc.extraction = {
                 ...(latestDoc.extraction || {}),
@@ -888,8 +914,11 @@ function App() {
             if (status.status === 'FAILED') setProcessing(false);
           } catch (error) {
             if (error.name !== 'AbortError' && !pollingRef.current.cancelled) console.error(error);
+            setProcessing(false);
+            return;
           }
           if (!pollingRef.current.cancelled) {
+            if (pollingRef.current.controller?.signal?.aborted) return;
             pollingRef.current.timeout = window.setTimeout(poll, 1500);
           }
         };
