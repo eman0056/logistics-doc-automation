@@ -621,11 +621,62 @@ function App() {
       const formData = new FormData();
       selectedFiles.forEach((file) => formData.append('file', file));
 
+      let redirectScheduled = false;
+      let redirectAttempts = 0;
+      const maxRedirectAttempts = 12;
+
+      const scheduleRedirect = async (completedId) => {
+        if (redirectScheduled) return;
+        redirectScheduled = true;
+
+        const tryResolveRoute = async () => {
+          try {
+            const documentsResponse = await fetchJson(`${API}/documents?refresh=${Date.now()}`);
+            const documentsJson = await documentsResponse.json();
+            const completedDocument = (documentsJson.documents || []).find((document) => document.id === completedId) || null;
+            const invoiceCount = Number(completedDocument?.invoiceCount ?? completedDocument?.invoices?.length ?? 0);
+
+            if (!completedDocument || invoiceCount < 1) {
+              redirectAttempts += 1;
+              if (redirectAttempts < maxRedirectAttempts) {
+                window.setTimeout(() => tryResolveRoute(), 1500);
+                return;
+              }
+              setUploading(false);
+              setStatusText('Waiting for invoice count...');
+              console.error('Upload redirect stalled because invoice count is missing or invalid for document', completedId);
+              return;
+            }
+
+            const target = invoiceCount > 1
+              ? `/documents/${completedId}/invoices`
+              : `/documents/${completedId}/review`;
+
+            setUploading(false);
+            setStatusText('Redirecting...');
+
+            if (window.location.pathname !== target) {
+              window.location.assign(target);
+            }
+          } catch (error) {
+            redirectAttempts += 1;
+            if (redirectAttempts < maxRedirectAttempts) {
+              window.setTimeout(() => tryResolveRoute(), 1500);
+              return;
+            }
+            setUploading(false);
+            setStatusText('Waiting for invoice count...');
+            console.error('Upload redirect error', error);
+          }
+        };
+
+        window.setTimeout(() => tryResolveRoute(), 800);
+      };
+
       try {
         const res = await fetchJson(`${API}/documents/upload`, { method: 'POST', body: formData });
         const data = await res.json();
         if (data.success && data.documentIds && data.documentIds.length > 0) {
-          // Build a lookup map: documentId -> workflowType from the dispatches array the server now returns
           const dispatchMap = {};
           (data.dispatches || []).forEach((d) => { dispatchMap[d.documentId] = d; });
 
@@ -642,43 +693,22 @@ function App() {
             const total = statuses.reduce((sum, status) => sum + (status.pageCount || 1), 0);
             setPageProgress({ current, total });
             setStatusText(current >= total ? `Extraction completed — ${total}/${total} pages processed` : `Processing ${current}/${total}`);
+
             if (current >= total || statuses.every((status) => status.isExtracted)) {
               const firstCompletedDoc = data.documentIds.find((documentId, index) => statuses[index]?.isExtracted);
               const completedId = firstCompletedDoc || data.documentIds[0];
 
-              setTimeout(async () => {
-                try {
-                  const documentsResponse = await fetchJson(`${API}/documents?refresh=${Date.now()}`);
-                  const documentsJson = await documentsResponse.json();
-                  const completedDocument = (documentsJson.documents || []).find((document) => document.id === completedId);
-
-                  // Primary: use the dispatch record returned by the server on upload
-                  const dispatchRecord = dispatchMap[completedId];
-                  const workflowType = dispatchRecord?.workflowType;
-
-                  // Fallback: if dispatch info is missing, check invoiceCount on the fetched document
-                  const isMulti = workflowType === 'multi-invoice'
-                    || (!workflowType && ((completedDocument?.invoiceCount ?? 0) > 1 || (completedDocument?.invoices || []).length > 1));
-
-                  setUploading(false);
-                  setStatusText('Redirecting...');
-                  window.location.href = isMulti
-                    ? `/review-multi/${completedId}`
-                    : `/documents/${completedId}/review`;
-                } catch (error) {
-                  const dispatchRecord = dispatchMap[completedId];
-                  const isMulti = dispatchRecord?.workflowType === 'multi-invoice';
-                  setUploading(false);
-                  setStatusText('Redirecting...');
-                  window.location.href = isMulti
-                    ? `/review-multi/${completedId}`
-                    : `/documents/${completedId}/review`;
-                }
-              }, 800);
+              if (!redirectScheduled) {
+                scheduleRedirect(completedId);
+              }
               return;
             }
-            window.setTimeout(pollProgress, 1500);
+
+            if (!redirectScheduled) {
+              window.setTimeout(pollProgress, 1500);
+            }
           };
+
           window.setTimeout(pollProgress, 1000);
         } else {
           alert(data.error || 'Upload failed');
