@@ -299,6 +299,7 @@ function App() {
 
   const route = useMemo(() => {
     if (path === '/documents/upload') return 'upload';
+    if (path.startsWith('/review-multi/')) return 'review-multi';
     if (path.startsWith('/documents/') && path.includes('/invoices/')) return 'multi-invoice-detail';
     if (path.startsWith('/documents/') && path.endsWith('/invoices')) return 'multi-invoice-list';
     if (path.startsWith('/documents/') && path.includes('/review')) return 'review';
@@ -624,6 +625,10 @@ function App() {
         const res = await fetchJson(`${API}/documents/upload`, { method: 'POST', body: formData });
         const data = await res.json();
         if (data.success && data.documentIds && data.documentIds.length > 0) {
+          // Build a lookup map: documentId -> workflowType from the dispatches array the server now returns
+          const dispatchMap = {};
+          (data.dispatches || []).forEach((d) => { dispatchMap[d.documentId] = d; });
+
           const totalPages = Object.values(data.pageCounts || {}).reduce((sum, count) => sum + count, 0);
           setPageProgress({ current: 0, total: totalPages || data.documentIds.length });
           setStatusText(`${totalPages || data.documentIds.length} pages detected. Processing 0/${totalPages || data.documentIds.length}`);
@@ -640,17 +645,34 @@ function App() {
             if (current >= total || statuses.every((status) => status.isExtracted)) {
               const firstCompletedDoc = data.documentIds.find((documentId, index) => statuses[index]?.isExtracted);
               const completedId = firstCompletedDoc || data.documentIds[0];
+
               setTimeout(async () => {
                 try {
                   const documentsResponse = await fetchJson(`${API}/documents?refresh=${Date.now()}`);
                   const documentsJson = await documentsResponse.json();
                   const completedDocument = (documentsJson.documents || []).find((document) => document.id === completedId);
-                  const destination = (completedDocument?.invoices || []).length > 1
-                    ? `/documents/${completedId}/invoices`
+
+                  // Primary: use the dispatch record returned by the server on upload
+                  const dispatchRecord = dispatchMap[completedId];
+                  const workflowType = dispatchRecord?.workflowType;
+
+                  // Fallback: if dispatch info is missing, check invoiceCount on the fetched document
+                  const isMulti = workflowType === 'multi-invoice'
+                    || (!workflowType && ((completedDocument?.invoiceCount ?? 0) > 1 || (completedDocument?.invoices || []).length > 1));
+
+                  setUploading(false);
+                  setStatusText('Redirecting...');
+                  window.location.href = isMulti
+                    ? `/review-multi/${completedId}`
                     : `/documents/${completedId}/review`;
-                  window.location.href = destination;
                 } catch (error) {
-                  window.location.href = `/documents/${completedId}/review`;
+                  const dispatchRecord = dispatchMap[completedId];
+                  const isMulti = dispatchRecord?.workflowType === 'multi-invoice';
+                  setUploading(false);
+                  setStatusText('Redirecting...');
+                  window.location.href = isMulti
+                    ? `/review-multi/${completedId}`
+                    : `/documents/${completedId}/review`;
                 }
               }, 800);
               return;
@@ -660,10 +682,10 @@ function App() {
           window.setTimeout(pollProgress, 1000);
         } else {
           alert(data.error || 'Upload failed');
+          setUploading(false);
         }
       } catch (error) {
         alert(error.message || 'Network error');
-      } finally {
         setUploading(false);
       }
     };
@@ -1114,13 +1136,12 @@ function App() {
   };
 
   const MultiInvoiceListView = () => {
-    const docId = path.split('/')[2];
+    const docId = path.startsWith('/review-multi/') ? path.split('/')[2] : path.split('/')[2];
     const [doc, setDoc] = useState(null);
     const [invoices, setInvoices] = useState([]);
     const [loadingDoc, setLoadingDoc] = useState(true);
     const [processing, setProcessing] = useState(false);
     const [error, setError] = useState('');
-    const [activeInvoiceIndex, setActiveInvoiceIndex] = useState(0);
 
     useEffect(() => {
       let active = true;
@@ -1186,57 +1207,273 @@ function App() {
     if (loadingDoc) return <RouteSkeleton label="Loading invoices..." />;
     if (!doc) return <main className="page"><div className="card upload-panel">Document not found.</div></main>;
 
-    const pageEntries = useMemo(() => invoices.flatMap((invoice) => {
-      const start = Number(invoice.pageStart);
-      const end = Number(invoice.pageEnd || invoice.pageStart);
-      if (!Number.isFinite(start) || !Number.isFinite(end)) return [];
-      return Array.from({ length: Math.max(1, end - start + 1) }, (_, offset) => ({
-        pageNumber: start + offset,
-        invoiceIndex: Number(invoice.invoiceIndex ?? 0),
-      }));
-    }), [invoices]);
+    return <MultiInvoiceSplitView doc={doc} invoices={invoices} docId={docId} error={error} processing={processing} />;
+  };
 
-    const handlePageVisible = useCallback((invoiceIndex) => {
-      setActiveInvoiceIndex((current) => current === invoiceIndex ? current : invoiceIndex);
-    }, []);
+  // ─────────────────────────────────────────────────────────────────────────────
+  // MultiInvoiceSplitView — isolated Left Sidebar + Right Editable Fields Panel
+  // ReviewView (single-invoice /documents/:id/review) is completely untouched.
+  // ─────────────────────────────────────────────────────────────────────────────
+  const MultiInvoiceSplitView = ({ doc, invoices, docId, error, processing }) => {
+    const [selectedInvoiceIndex, setSelectedInvoiceIndex] = useState(0);
+    const [drafts, setDrafts] = useState(() => {
+      const initial = {};
+      invoices.forEach((inv, idx) => { initial[idx] = parseStoredInvoiceData(inv); });
+      return initial;
+    });
+    const [activeTab, setActiveTab] = useState('header');
+    const [savingIndex, setSavingIndex] = useState(null);
+    const [saveError, setSaveError] = useState('');
+    const [saveSuccess, setSaveSuccess] = useState(false);
+    const rightPanelRef = useRef(null);
 
-    const selectInvoice = useCallback((invoiceIndex) => {
-      setActiveInvoiceIndex(invoiceIndex);
-      const target = document.querySelector(`[data-invoice-card="${invoiceIndex}"]`);
-      target?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-      const firstPage = pageEntries.find((page) => page.invoiceIndex === invoiceIndex);
-      if (firstPage) document.querySelector(`[data-page-number="${firstPage.pageNumber}"]`)?.scrollIntoView({ behavior: 'smooth', block: 'center' });
-    }, [pageEntries]);
+    // Seed new invoices into drafts when the invoices array changes (polling updates)
+    useEffect(() => {
+      setDrafts((current) => {
+        const next = { ...current };
+        invoices.forEach((inv, idx) => {
+          if (!next[idx] || Object.keys(next[idx]).length === 0) {
+            next[idx] = parseStoredInvoiceData(inv);
+          }
+        });
+        return next;
+      });
+    }, [invoices]);
+
+    // Reset tab + feedback when switching invoices
+    useEffect(() => {
+      setActiveTab('header');
+      setSaveError('');
+      setSaveSuccess(false);
+      rightPanelRef.current?.scrollTo({ top: 0, behavior: 'smooth' });
+    }, [selectedInvoiceIndex]);
+
+    const selectedInvoice = invoices[selectedInvoiceIndex] || null;
+    const selectedDraft = drafts[selectedInvoiceIndex] || {};
+    const sections = useMemo(() => invoiceSections(selectedDraft), [selectedDraft]);
+
+    const tabDefs = [
+      { id: 'header', label: 'Invoice Header', value: sections.header, path: ['invoiceHeader'] },
+      { id: 'shipments', label: 'Shipments', value: sections.shipments, path: [Array.isArray(selectedDraft.shipmentDetails) ? 'shipmentDetails' : 'shipments'] },
+      { id: 'charges', label: 'Charge Line Items', value: sections.charges, path: ['chargeLineItems'] },
+    ];
+    const activeTabDef = tabDefs.find((t) => t.id === activeTab) || tabDefs[0];
+
+    // Deep path updater — ONLY mutates the draft for the currently selected invoice
+    const updateDraftPath = useCallback((parts, value) => {
+      setDrafts((current) => {
+        const next = JSON.parse(JSON.stringify(current[selectedInvoiceIndex] || {}));
+        let target = next;
+        parts.slice(0, -1).forEach((part) => { target = target[part]; });
+        target[parts[parts.length - 1]] = value;
+        return { ...current, [selectedInvoiceIndex]: next };
+      });
+    }, [selectedInvoiceIndex]);
+
+    // Recursive editable field renderer
+    const renderEditable = useCallback((value, label, parts) => {
+      if (Array.isArray(value)) {
+        return (
+          <div className="mir-record-list" key={parts.join('.')}>
+            {value.length === 0
+              ? <div className="subtle-copy">No records found</div>
+              : value.map((item, idx) => (
+                <div className="mir-record" key={`${parts.join('.')}-${idx}`}>
+                  <div className="mir-record-label">{label} {idx + 1}</div>
+                  {renderEditable(item, '', [...parts, idx])}
+                </div>
+              ))}
+          </div>
+        );
+      }
+      if (value && typeof value === 'object') {
+        return (
+          <div className="mir-field-grid" key={parts.join('.')}>
+            {Object.entries(value).map(([key, child]) => renderEditable(child, key, [...parts, key]))}
+          </div>
+        );
+      }
+      return (
+        <label className="mir-field" key={parts.join('.')}>
+          <span className="mir-field-label">{label || parts[parts.length - 1]}</span>
+          <input
+            className="mir-field-input"
+            value={value === null || value === undefined ? '' : String(value)}
+            onChange={(e) => updateDraftPath(parts, e.target.value)}
+          />
+        </label>
+      );
+    }, [updateDraftPath]);
+
+    const saveCurrentInvoice = async () => {
+      if (!selectedInvoice) return;
+      setSavingIndex(selectedInvoiceIndex);
+      setSaveError('');
+      setSaveSuccess(false);
+      try {
+        const invoiceId = selectedInvoice.id || selectedInvoice.invoiceId;
+        const response = await fetch(`${API}/documents/${docId}/review`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ invoiceId, editedData: selectedDraft }),
+        });
+        const result = await response.json();
+        if (!response.ok || !result.success) throw new Error(result.error || 'Unable to save invoice.');
+        setSaveSuccess(true);
+        window.setTimeout(() => setSaveSuccess(false), 2500);
+      } catch (err) {
+        setSaveError(err.message || 'Unable to save invoice.');
+      } finally {
+        setSavingIndex(null);
+      }
+    };
+
+    const isSaving = savingIndex === selectedInvoiceIndex;
+    const isEmpty = Object.keys(selectedDraft).length === 0;
 
     return (
       <>
-        <main className="page multi-invoice-review-page">
+        <main className="page">
           <div className="section-header">
             <div>
-              <div className="eyebrow">Multiple invoices</div>
+              <div className="eyebrow">Multi-Invoice Review</div>
               <h1 className="page-title">{doc.fileName}</h1>
-              <p className="subtle-copy mt-2">{invoices.length > 0 ? `${invoices.length} extracted invoices` : 'Invoices detected in this document will appear here.'}</p>
+              <p className="subtle-copy mt-2">
+                {invoices.length > 0
+                  ? <><strong style={{ color: 'var(--primary)' }}>{invoices.length}</strong> invoices extracted — select one to review and edit</>
+                  : 'Invoices detected in this document will appear here.'}
+              </p>
             </div>
-            <a href="/documents" className="secondary-btn">Back to Documents</a>
+            <a href="/documents" className="secondary-btn">← Back to Documents</a>
           </div>
 
-          {error && <div className="card empty-state">{error}</div>}
-          {!error && processing && <div className="progress-box multi-invoice-progress">The document is still being processed. This list will update automatically.</div>}
-          {!error && !processing && invoices.length === 0 && <div className="card empty-state">No invoice records are available for this document.</div>}
-          {invoices.length > 0 && <div className="multi-invoice-layout">
-            <div className="document-pages-panel" aria-label="Document pages">
-              {pageEntries.length > 0 ? pageEntries.map((page) => (
-                <DocumentPage key={`${page.invoiceIndex}-${page.pageNumber}`} docId={docId} pageNumber={page.pageNumber} invoiceIndex={page.invoiceIndex} active={activeInvoiceIndex === page.invoiceIndex} onVisible={handlePageVisible} />
-              )) : <div className="empty-state">Page ranges are unavailable for this document.</div>}
+          {error && <div className="card empty-state" style={{ marginBottom: '1rem' }}>{error}</div>}
+          {!error && processing && (
+            <div className="progress-box multi-invoice-progress">
+              ⏳ The document is still being processed. This view will update automatically.
             </div>
-            <div className="invoice-cards-panel" aria-label="Extracted invoice fields">
-              {invoices.map((invoice) => <InvoiceExtractionCard key={invoice.invoiceId || invoice.id} invoice={invoice} isActive={activeInvoiceIndex === Number(invoice.invoiceIndex ?? 0)} onSelect={() => selectInvoice(Number(invoice.invoiceIndex ?? 0))} />)}
+          )}
+          {!error && !processing && invoices.length === 0 && (
+            <div className="card empty-state">No invoice records are available for this document yet.</div>
+          )}
+
+          {invoices.length > 0 && (
+            <div className="mir-shell">
+
+              {/* ── LEFT SIDEBAR: Invoice 1…N Selector ─────────────────── */}
+              <aside className="mir-sidebar" aria-label="Invoice selector">
+                <div className="mir-sidebar-header">
+                  <span className="mir-sidebar-title">Invoices</span>
+                  <span className="mir-count-badge">{invoices.length}</span>
+                </div>
+                <nav className="mir-invoice-list">
+                  {invoices.map((inv, idx) => {
+                    const label = getInvoiceLabel(inv);
+                    const total = getInvoiceTotal(inv);
+                    const currency = getInvoiceCurrency(inv);
+                    const status = inv.status || inv.extractionStatus || 'EXTRACTED';
+                    const isActive = selectedInvoiceIndex === idx;
+                    return (
+                      <button
+                        key={inv.invoiceId || inv.id || idx}
+                        type="button"
+                        id={`invoice-selector-${idx}`}
+                        className={`mir-invoice-item${isActive ? ' is-active' : ''}`}
+                        onClick={() => setSelectedInvoiceIndex(idx)}
+                        aria-pressed={isActive}
+                      >
+                        <div className="mir-invoice-item-top">
+                          <span className="mir-invoice-index">Invoice {idx + 1}</span>
+                          {isActive && <span className="mir-active-dot" aria-hidden="true" />}
+                        </div>
+                        <div className="mir-invoice-item-label">{label}</div>
+                        <div className="mir-invoice-item-meta">
+                          {total != null && <span className="mir-invoice-total">{currency || ''} {total}</span>}
+                          <span className={`status-pill ${normalizeStatus(status)}`}>{status}</span>
+                        </div>
+                        {inv.pageStart != null && (
+                          <div className="mir-invoice-pages">Pages {inv.pageStart}–{inv.pageEnd ?? inv.pageStart}</div>
+                        )}
+                        {inv.overallConfidence != null && (
+                          <div className="mir-invoice-confidence">Confidence {inv.overallConfidence}</div>
+                        )}
+                      </button>
+                    );
+                  })}
+                </nav>
+              </aside>
+
+              {/* ── RIGHT PANEL: Editable Extracted Fields ───────────────── */}
+              <section className="mir-detail-panel" ref={rightPanelRef} aria-label="Invoice extracted fields">
+                {selectedInvoice ? (
+                  <>
+                    <div className="mir-panel-header">
+                      <div>
+                        <div className="eyebrow" style={{ marginBottom: '0.25rem' }}>
+                          Invoice {selectedInvoiceIndex + 1} of {invoices.length}
+                        </div>
+                        <div className="mir-panel-title">{getInvoiceLabel(selectedInvoice)}</div>
+                        <div className="subtle-copy" style={{ fontSize: '0.8rem', marginTop: '0.2rem' }}>
+                          All fields are editable — changes are isolated to this invoice only
+                        </div>
+                      </div>
+                      <div style={{ display: 'flex', gap: '0.6rem', alignItems: 'center', flexWrap: 'wrap' }}>
+                        {saveSuccess && <span className="mir-save-success" role="status">✓ Saved</span>}
+                        {saveError && <span className="mir-save-error" role="alert">{saveError}</span>}
+                        <button
+                          id={`save-invoice-${selectedInvoiceIndex}`}
+                          type="button"
+                          className="primary-btn"
+                          onClick={saveCurrentInvoice}
+                          disabled={isSaving || isEmpty}
+                        >
+                          {isSaving ? 'Saving…' : 'Save Invoice'}
+                        </button>
+                      </div>
+                    </div>
+
+                    <div className="mir-tabs" role="tablist" aria-label={`Invoice ${selectedInvoiceIndex + 1} sections`}>
+                      {tabDefs.map((tab) => (
+                        <button
+                          key={tab.id}
+                          id={`tab-${tab.id}-${selectedInvoiceIndex}`}
+                          type="button"
+                          role="tab"
+                          aria-selected={activeTab === tab.id}
+                          className={`mir-tab${activeTab === tab.id ? ' is-active' : ''}`}
+                          onClick={() => setActiveTab(tab.id)}
+                        >
+                          {tab.label}
+                        </button>
+                      ))}
+                    </div>
+
+                    <div className="mir-fields-body">
+                      {isEmpty
+                        ? <div className="empty-state">Extraction data unavailable for this invoice.</div>
+                        : renderEditable(activeTabDef.value, activeTabDef.label, activeTabDef.path)
+                      }
+                    </div>
+
+                    {selectedInvoice.confidenceScores && (
+                      <div className="mir-confidence-footer">
+                        <strong>Confidence scores:</strong>{' '}
+                        {Object.entries(selectedInvoice.confidenceScores).map(([k, v]) => `${k}: ${v}`).join(' · ')}
+                      </div>
+                    )}
+                  </>
+                ) : (
+                  <div className="empty-state">Select an invoice on the left to view its details.</div>
+                )}
+              </section>
+
             </div>
-          </div>}
+          )}
         </main>
       </>
     );
   };
+
 
   const MultiInvoiceDetailView = () => {
     const routeParts = path.split('/');
@@ -1514,6 +1751,7 @@ function App() {
   switch (route) {
     case 'upload': renderedRoute = <UploadView />; break;
     case 'review': renderedRoute = <ReviewView />; break;
+    case 'review-multi': renderedRoute = <MultiInvoiceListView />; break;
     case 'multi-invoice-list': renderedRoute = <MultiInvoiceListView />; break;
     case 'multi-invoice-detail': renderedRoute = <MultiInvoiceDetailView />; break;
     case 'invoice': renderedRoute = <InvoiceView />; break;

@@ -78,8 +78,18 @@ def init_db():
     # Check and add missing columns if upgrading existing dev.db
     cursor.execute("PRAGMA table_info(Document);")
     doc_cols = [col[1] for col in cursor.fetchall()]
+    if "customerId" not in doc_cols:
+        cursor.execute("ALTER TABLE Document ADD COLUMN customerId TEXT DEFAULT 'cust-1';")
+    if "updatedAt" not in doc_cols:
+        cursor.execute("ALTER TABLE Document ADD COLUMN updatedAt DATETIME;")
     if "invoiceGeneratedAt" not in doc_cols:
         cursor.execute("ALTER TABLE Document ADD COLUMN invoiceGeneratedAt DATETIME;")
+    if "fileData" not in doc_cols:
+        cursor.execute("ALTER TABLE Document ADD COLUMN fileData TEXT;")
+    if "pageCount" not in doc_cols:
+        cursor.execute("ALTER TABLE Document ADD COLUMN pageCount INTEGER DEFAULT 1;")
+    if "processedPages" not in doc_cols:
+        cursor.execute("ALTER TABLE Document ADD COLUMN processedPages INTEGER DEFAULT 0;")
 
     cursor.execute("PRAGMA table_info(Extraction);")
     ext_cols = [col[1] for col in cursor.fetchall()]

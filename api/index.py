@@ -72,6 +72,8 @@ def init_db(conn):
     
     # Safely add columns that might already exist
     alter_statements = [
+        "ALTER TABLE Document ADD COLUMN customerId TEXT DEFAULT 'cust-1';",
+        "ALTER TABLE Document ADD COLUMN updatedAt DATETIME;",
         "ALTER TABLE Document ADD COLUMN fileData TEXT;",
         "ALTER TABLE Document ADD COLUMN pageCount INTEGER DEFAULT 1;",
         "ALTER TABLE Document ADD COLUMN processedPages INTEGER DEFAULT 0;",

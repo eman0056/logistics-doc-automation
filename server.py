@@ -349,6 +349,7 @@ class LogisticsAutomationHandler(http.server.BaseHTTPRequestHandler):
                 print(f"Invoice routing webhook error: document={data.get('documentId')} count={data.get('detectedInvoiceCount')} workflow={data.get('workflowType')} webhook={url} error={e}")
 
         results = []
+        dispatches_list = []
         try:
             for file_item in file_items:
                 if not file_item.filename: continue
@@ -359,6 +360,7 @@ class LogisticsAutomationHandler(http.server.BaseHTTPRequestHandler):
 
                 invoice_groups = detect_invoice_groups(file_bytes, file_item.filename)
                 invoice_count = len(invoice_groups)
+                workflow_type = "multi-invoice" if invoice_count >= 2 else "single-invoice"
                 selected_webhook_url = multi_webhook_url if invoice_count >= 2 else single_webhook_url
                 
                 res = ingest_file(temp_file_path)
@@ -372,7 +374,7 @@ class LogisticsAutomationHandler(http.server.BaseHTTPRequestHandler):
                     "detectedInvoiceCount": invoice_count,
                     "detectedInvoiceGroups": invoice_groups,
                     "rawOcrText": "\n\f\n".join(group.get("rawOcrText", "") for group in invoice_groups),
-                    "workflowType": "multi-invoice" if invoice_count >= 2 else "single-invoice",
+                    "workflowType": workflow_type,
                     "callbackUrl": f"{app_base_url}/api/documents/{res['documentId']}/extraction/callback"
                 }
                 
@@ -386,10 +388,16 @@ class LogisticsAutomationHandler(http.server.BaseHTTPRequestHandler):
                 conn.close()
                 
                 results.append(res["documentId"])
+                dispatches_list.append({
+                    "documentId": res["documentId"],
+                    "workflowType": workflow_type,
+                    "invoiceCount": invoice_count
+                })
                 
             self._send_json({
                 "success": True,
-                "documentIds": results
+                "documentIds": results,
+                "dispatches": dispatches_list
             })
         except Exception as e:
             self._send_json({"error": str(e)}, 500)

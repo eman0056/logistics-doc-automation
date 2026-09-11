@@ -27,6 +27,73 @@ ALLOWED_MIME_TYPES = {
 
 MAX_FILE_SIZE_BYTES = 25 * 1024 * 1024  # 25 MB
 
+def ensure_document_columns(conn):
+    """Compatibility shim for older SQLite schemas that predate the customer and metadata columns.
+    This lets the repo's verification and ingestion scripts keep working against an existing dev.db.
+    """
+    cursor = conn.cursor()
+    try:
+        cursor.execute("PRAGMA table_info(Document)")
+        columns = {row[1] for row in cursor.fetchall()}
+
+        if "customerId" not in columns:
+            cursor.execute("ALTER TABLE Document ADD COLUMN customerId TEXT DEFAULT 'cust-1';")
+        if "updatedAt" not in columns:
+            cursor.execute("ALTER TABLE Document ADD COLUMN updatedAt DATETIME;")
+        if "fileData" not in columns:
+            cursor.execute("ALTER TABLE Document ADD COLUMN fileData TEXT;")
+        if "pageCount" not in columns:
+            cursor.execute("ALTER TABLE Document ADD COLUMN pageCount INTEGER DEFAULT 1;")
+        if "processedPages" not in columns:
+            cursor.execute("ALTER TABLE Document ADD COLUMN processedPages INTEGER DEFAULT 0;")
+        if "invoiceGeneratedAt" not in columns:
+            cursor.execute("ALTER TABLE Document ADD COLUMN invoiceGeneratedAt DATETIME;")
+        conn.commit()
+    except sqlite3.OperationalError:
+        # If the table is absent or the database is very fresh, ignore the migration and let later code create it.
+        conn.rollback()
+
+
+def ensure_extraction_columns(conn):
+    cursor = conn.cursor()
+    try:
+        cursor.execute("PRAGMA table_info(Extraction)")
+        columns = {row[1] for row in cursor.fetchall()}
+
+        if "id" not in columns:
+            cursor.execute("ALTER TABLE Extraction ADD COLUMN id TEXT;")
+        if "rawOcrText" not in columns:
+            cursor.execute("ALTER TABLE Extraction ADD COLUMN rawOcrText TEXT;")
+        if "extractedAt" not in columns:
+            cursor.execute("ALTER TABLE Extraction ADD COLUMN extractedAt DATETIME;")
+        if "finalSubmittedData" not in columns:
+            cursor.execute("ALTER TABLE Extraction ADD COLUMN finalSubmittedData TEXT;")
+        conn.commit()
+    except sqlite3.OperationalError:
+        conn.rollback()
+
+
+def ensure_auditlog_columns(conn):
+    cursor = conn.cursor()
+    try:
+        cursor.execute("PRAGMA table_info(AuditLog)")
+        columns = {row[1] for row in cursor.fetchall()}
+
+        if "metadataJson" not in columns:
+            cursor.execute("ALTER TABLE AuditLog ADD COLUMN metadataJson TEXT;")
+        if "userId" not in columns:
+            cursor.execute("ALTER TABLE AuditLog ADD COLUMN userId TEXT;")
+        conn.commit()
+    except sqlite3.OperationalError:
+        conn.rollback()
+
+
+def ensure_compatibility(conn):
+    ensure_document_columns(conn)
+    ensure_extraction_columns(conn)
+    ensure_auditlog_columns(conn)
+
+
 def extract_raw_text_from_file(file_path: str) -> str:
     ext = os.path.splitext(file_path)[1].lower()
     if ext == ".txt":
@@ -101,6 +168,10 @@ def extract_raw_text_from_file(file_path: str) -> str:
 def ingest_file(file_path: str, customer_id: str = None) -> dict:
     if not os.path.exists(file_path):
         raise FileNotFoundError(f"Source file not found at {file_path}")
+
+    conn = sqlite3.connect(DB_PATH)
+    ensure_compatibility(conn)
+    conn.close()
 
     file_size = os.path.getsize(file_path)
     if file_size > MAX_FILE_SIZE_BYTES:
