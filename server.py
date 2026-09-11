@@ -250,12 +250,22 @@ class LogisticsAutomationHandler(http.server.BaseHTTPRequestHandler):
         cursor = conn.cursor()
         cursor.execute("SELECT id, fileName, status, overallConfidence FROM Document WHERE id = ?;", (doc_id,))
         row = cursor.fetchone()
-        conn.close()
-
         if not row:
+            conn.close()
             return self._send_json({"error": "Document not found"}, 404)
 
+        # Count invoices from the legacy invoice table when present; the
+        # single-invoice path remains the existing /review route, while the
+        # multi-invoice path continues to /documents/{doc_id}/invoices.
+        try:
+            cursor.execute("SELECT COUNT(*) FROM DocumentInvoice WHERE documentId = ?;", (doc_id,))
+            invoice_count = cursor.fetchone()[0]
+        except sqlite3.OperationalError:
+            invoice_count = 0
+        conn.close()
+
         is_extracted = row[2] in ["EXTRACTED", "IN_REVIEW", "APPROVED", "INVOICE_GENERATED"]
+        review_url = f"/documents/{row[0]}/invoices" if invoice_count > 1 else f"/documents/{row[0]}/review"
         self._send_json({
             "success": True,
             "documentId": row[0],
@@ -263,7 +273,7 @@ class LogisticsAutomationHandler(http.server.BaseHTTPRequestHandler):
             "status": row[2],
             "isExtracted": is_extracted,
             "overallConfidence": row[3],
-            "reviewUrl": f"/documents/{row[0]}/review"
+            "reviewUrl": review_url
         })
 
     def _handle_delete_document(self, doc_id):
@@ -478,7 +488,8 @@ class LogisticsAutomationHandler(http.server.BaseHTTPRequestHandler):
         conn.commit()
         conn.close()
 
-        self._send_json({"success": True, "invoiceCount": received_count, "complete": received_count >= expected_count, "reviewUrl": f"/documents/{doc_id}/review"})
+        review_url = f"/documents/{doc_id}/invoices" if expected_count > 1 else f"/documents/{doc_id}/review"
+        self._send_json({"success": True, "invoiceCount": received_count, "complete": received_count >= expected_count, "reviewUrl": review_url})
 
     def _handle_get_review_tasks(self):
         conn = sqlite3.connect(DB_PATH)

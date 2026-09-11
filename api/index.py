@@ -1829,12 +1829,15 @@ def get_document_status(doc_id: str):
         WHERE d.id = ?;
     """, (doc_id,))
     row = cursor.fetchone()
-    conn.close()
-
     if not row:
+        conn.close()
         response = JSONResponse({"error": "Document not found"}, status_code=404)
         response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
         return response
+
+    invoice_cursor = execute_query(conn, "SELECT COUNT(*) FROM DocumentInvoice WHERE documentId = ?;", (doc_id,))
+    invoice_count = invoice_cursor.fetchone()[0] if invoice_cursor else 0
+    conn.close()
 
     extracted_data = {}
     for stored in (row[7], row[6]):
@@ -1848,6 +1851,7 @@ def get_document_status(doc_id: str):
             extracted_data = parsed
             break
     is_extracted = bool(extracted_data) or row[2] in ["EXTRACTED", "IN_REVIEW", "APPROVED", "INVOICE_GENERATED"]
+    review_url = f"/documents/{row[0]}/invoices" if int(invoice_count) > 1 else f"/documents/{row[0]}/review"
     response = JSONResponse({
         "success": True,
         "documentId": row[0],
@@ -1859,7 +1863,7 @@ def get_document_status(doc_id: str):
         "processedPages": row[5],
         "extractedData": extracted_data,
         "progress": {"current": row[5], "total": row[4]},
-        "reviewUrl": f"/documents/{row[0]}/review"
+        "reviewUrl": review_url
     })
     response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
     response.headers["Pragma"] = "no-cache"
@@ -2040,7 +2044,8 @@ async def extraction_callback(doc_id: str, request: Request):
         execute_query(conn, "UPDATE Document SET status = ?, processedPages = CASE WHEN ? THEN COALESCE(pageCount, 1) ELSE processedPages END WHERE id = ?", ('EXTRACTED' if is_complete else 'PREPROCESSED', is_complete, doc_id))
         conn.commit()
 
-        return {"success": True, "invoiceCount": received_count, "expectedInvoiceCount": expected_count, "complete": is_complete, "reviewUrl": f"/documents/{doc_id}/review"}
+        review_url = f"/documents/{doc_id}/invoices" if expected_count > 1 else f"/documents/{doc_id}/review"
+        return {"success": True, "invoiceCount": received_count, "expectedInvoiceCount": expected_count, "complete": is_complete, "reviewUrl": review_url}
 
     except Exception as e:
         if conn:

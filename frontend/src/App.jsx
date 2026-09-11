@@ -1289,19 +1289,23 @@ function App() {
     ];
     const activeTabDef = tabDefs.find((t) => t.id === activeTab) || tabDefs[0];
 
-    // Deep path updater — ONLY mutates the draft for the currently selected invoice
-    const updateDraftPath = useCallback((parts, value) => {
+    // Deep path updater — mutates the draft for whichever invoice index owns the field card.
+    const updateDraftPathForIndex = useCallback((invoiceIndex, parts, value) => {
       setDrafts((current) => {
-        const next = JSON.parse(JSON.stringify(current[selectedInvoiceIndex] || {}));
+        const next = JSON.parse(JSON.stringify(current[invoiceIndex] || {}));
         let target = next;
         parts.slice(0, -1).forEach((part) => { target = target[part]; });
         target[parts[parts.length - 1]] = value;
-        return { ...current, [selectedInvoiceIndex]: next };
+        return { ...current, [invoiceIndex]: next };
       });
-    }, [selectedInvoiceIndex]);
+    }, []);
 
-    // Recursive editable field renderer
-    const renderEditable = useCallback((value, label, parts) => {
+    const updateDraftPath = useCallback((parts, value) => {
+      updateDraftPathForIndex(selectedInvoiceIndex, parts, value);
+    }, [selectedInvoiceIndex, updateDraftPathForIndex]);
+
+    // Recursive editable field renderer bound to the invoice card being rendered.
+    const renderEditable = useCallback((value, label, parts, invoiceIndex = selectedInvoiceIndex) => {
       if (Array.isArray(value)) {
         return (
           <div className="mir-record-list" key={parts.join('.')}>
@@ -1310,7 +1314,7 @@ function App() {
               : value.map((item, idx) => (
                 <div className="mir-record" key={`${parts.join('.')}-${idx}`}>
                   <div className="mir-record-label">{label} {idx + 1}</div>
-                  {renderEditable(item, '', [...parts, idx])}
+                  {renderEditable(item, '', [...parts, idx], invoiceIndex)}
                 </div>
               ))}
           </div>
@@ -1319,7 +1323,7 @@ function App() {
       if (value && typeof value === 'object') {
         return (
           <div className="mir-field-grid" key={parts.join('.')}>
-            {Object.entries(value).map(([key, child]) => renderEditable(child, key, [...parts, key]))}
+            {Object.entries(value).map(([key, child]) => renderEditable(child, key, [...parts, key], invoiceIndex))}
           </div>
         );
       }
@@ -1329,11 +1333,11 @@ function App() {
           <input
             className="mir-field-input"
             value={value === null || value === undefined ? '' : String(value)}
-            onChange={(e) => updateDraftPath(parts, e.target.value)}
+            onChange={(e) => updateDraftPathForIndex(invoiceIndex, parts, e.target.value)}
           />
         </label>
       );
-    }, [updateDraftPath]);
+    }, [selectedInvoiceIndex, updateDraftPathForIndex]);
 
     const saveCurrentInvoice = async () => {
       if (!selectedInvoice) return;
@@ -1479,10 +1483,43 @@ function App() {
                     </div>
 
                     <div className="mir-fields-body">
-                      {isEmpty
-                        ? <div className="empty-state">Extraction data unavailable for this invoice.</div>
-                        : renderEditable(activeTabDef.value, activeTabDef.label, activeTabDef.path)
-                      }
+                      {invoices.length > 1 ? (
+                        <div className="mir-field-cards">
+                          {invoices.map((inv, idx) => {
+                            const idxDraft = drafts[idx] || parseStoredInvoiceData(inv);
+                            const idxSections = invoiceSections(idxDraft);
+                            return (
+                              <article className="mir-field-card" key={inv.id || inv.invoiceId || idx}>
+                                <div className="mir-field-card-heading">
+                                  <div>
+                                    <span className="eyebrow">Invoice {idx + 1}</span>
+                                    <div className="mir-panel-title">{getInvoiceLabel(inv)}</div>
+                                  </div>
+                                  <span className="status-pill success">{inv.status || inv.extractionStatus || 'EXTRACTED'}</span>
+                                </div>
+                                <div className="mir-field-card-sections">
+                                  <section className="mir-field-card-section">
+                                    <div className="mir-field-card-section-title">Invoice Header</div>
+                                    {renderEditable(idxSections.header, 'Invoice Header', ['invoiceHeader'], idx)}
+                                  </section>
+                                  <section className="mir-field-card-section">
+                                    <div className="mir-field-card-section-title">Shipment Details</div>
+                                    {renderEditable(idxSections.shipments, 'Shipment Details', [Array.isArray(idxDraft.shipmentDetails) ? 'shipmentDetails' : 'shipments'], idx)}
+                                  </section>
+                                  <section className="mir-field-card-section">
+                                    <div className="mir-field-card-section-title">Charge Line Items</div>
+                                    {renderEditable(idxSections.charges, 'Charge Line Items', ['chargeLineItems'], idx)}
+                                  </section>
+                                </div>
+                              </article>
+                            );
+                          })}
+                        </div>
+                      ) : (
+                        isEmpty
+                          ? <div className="empty-state">Extraction data unavailable for this invoice.</div>
+                          : renderEditable(activeTabDef.value, activeTabDef.label, activeTabDef.path)
+                      )}
                     </div>
 
                     {selectedInvoice.confidenceScores && (
