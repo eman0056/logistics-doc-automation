@@ -711,27 +711,36 @@ function App() {
           setStatusText(`${totalPages || data.documentIds.length} pages detected. Processing 0/${totalPages || data.documentIds.length}`);
 
           const pollProgress = async () => {
-            const statuses = await Promise.all(data.documentIds.map(async (documentId) => {
-              const response = await fetchJson(`${API}/documents/${documentId}/status?refresh=${Date.now()}`);
-              return response.json();
-            }));
-            const current = statuses.reduce((sum, status) => sum + (status.processedPages || 0), 0);
-            const total = statuses.reduce((sum, status) => sum + (status.pageCount || 1), 0);
-            setPageProgress({ current, total });
-            setStatusText(current >= total ? `Extraction completed — ${total}/${total} pages processed` : `Processing ${current}/${total}`);
+            try {
+              const statuses = await Promise.all(data.documentIds.map(async (documentId) => {
+                // Bypass cache for status polling - use no-store to ensure fresh data
+                const response = await fetch(`${API}/documents/${documentId}/status`, { cache: 'no-store' });
+                if (!response.ok) throw new Error(`Status request failed: ${response.status}`);
+                return response.json();
+              }));
+              const current = statuses.reduce((sum, status) => sum + (status.processedPages || 0), 0);
+              const total = statuses.reduce((sum, status) => sum + (status.pageCount || 1), 0);
+              setPageProgress({ current, total });
+              setStatusText(current >= total ? `Extraction completed — ${total}/${total} pages processed` : `Processing ${current}/${total}`);
 
-            if (current >= total || statuses.every((status) => status.isExtracted)) {
-              const firstCompletedDoc = data.documentIds.find((documentId, index) => statuses[index]?.isExtracted);
-              const completedId = firstCompletedDoc || data.documentIds[0];
+              if (current >= total || statuses.every((status) => status.isExtracted)) {
+                const firstCompletedDoc = data.documentIds.find((documentId, index) => statuses[index]?.isExtracted);
+                const completedId = firstCompletedDoc || data.documentIds[0];
+
+                if (!redirectScheduled) {
+                  scheduleRedirect(completedId);
+                }
+                return;
+              }
 
               if (!redirectScheduled) {
-                scheduleRedirect(completedId);
+                window.setTimeout(pollProgress, 1500);
               }
-              return;
-            }
-
-            if (!redirectScheduled) {
-              window.setTimeout(pollProgress, 1500);
+            } catch (error) {
+              console.error('Poll error:', error);
+              if (!redirectScheduled) {
+                window.setTimeout(pollProgress, 2000);
+              }
             }
           };
 
