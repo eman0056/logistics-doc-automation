@@ -137,19 +137,20 @@
     {
       "parameters": {
         "method": "POST",
-        "url": "={{ $json.callbackUrl || ('http://localhost:3000/api/documents/' + $json.documentId + '/extraction/callback') }}",
+        "url": "={{ $json.callbackUrl }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-vercel-protection-bypass",
+              "value": "TrgkowxmK0ItTonMRQisGnrkAiLTIl56"
+            }
+          ]
+        },
         "sendBody": true,
         "specifyBody": "json",
         "jsonBody": "={{ JSON.stringify({ invoiceId: $json.invoiceId, invoiceIndex: $json.invoiceIndex, invoiceCount: $json.invoiceCount, pageStart: $json.pageStart, pageEnd: $json.pageEnd, rawOcrText: $json.rawOcrText, extractedData: $json.extractedData, confidenceScores: $json.confidenceScores, overallConfidence: $json.overallConfidence }) }}",
-        "options": {},
-        "headerParametersUi": {
-          "parameter": [
-            {
-              "name": "Content-Type",
-              "value": "application/json"
-            }
-          ]
-        }
+        "options": {}
       },
       "name": "Node 6: Send Node.js Callback",
       "type": "n8n-nodes-base.httpRequest",
