@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
+    "test": "node --test src/dataCache.test.js",
     "preview": "vite preview --host 0.0.0.0"
   },
   "dependencies": {

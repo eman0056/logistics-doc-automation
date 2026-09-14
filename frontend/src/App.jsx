@@ -1,4 +1,5 @@
 import React, { Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { apiGetJson, normalizeApiCacheUrl } from './dataCache.js';
 
 const API = '/api';
 
@@ -45,8 +46,9 @@ const normalizeStatus = (status) => {
 };
 
 const fetchJson = async (url, options = {}) => {
-  const res = await fetch(url, { cache: 'no-store', ...options });
-  return res;
+  const normalizedUrl = normalizeApiCacheUrl(url);
+  const response = await fetch(normalizedUrl, { cache: 'force-cache', ...options });
+  return response;
 };
 
 const parseStoredInvoiceData = (invoice) => {
@@ -274,11 +276,28 @@ function App() {
   }, []);
 
   useEffect(() => {
+    const onClick = (event) => {
+      const anchor = event.target?.closest?.('a[href]');
+      if (!anchor) return;
+      const href = anchor.getAttribute('href');
+      if (!href || href.startsWith('#') || href.startsWith('http') || href.startsWith('mailto:') || anchor.target === '_blank') return;
+      const routeUrl = new URL(href, window.location.origin);
+      if (routeUrl.origin !== window.location.origin) return;
+      if (routeUrl.pathname === window.location.pathname && routeUrl.search === window.location.search) return;
+      event.preventDefault();
+      window.history.pushState({}, '', routeUrl.pathname + routeUrl.search);
+      setPath(routeUrl.pathname + routeUrl.search);
+    };
+    document.addEventListener('click', onClick);
+    return () => document.removeEventListener('click', onClick);
+  }, []);
+
+  useEffect(() => {
     const loadData = async () => {
       try {
         const [customerRes, docsRes] = await Promise.all([
           fetchJson(`${API}/customer`),
-          fetchJson(`${API}/documents?refresh=${Date.now()}`),
+          fetchJson(`${API}/documents`),
         ]);
 
         if (!customerRes.ok) {
