@@ -715,7 +715,14 @@ function App() {
               const statuses = await Promise.all(data.documentIds.map(async (documentId) => {
                 // Bypass cache for status polling - use no-store to ensure fresh data
                 const response = await fetch(`${API}/documents/${documentId}/status`, { cache: 'no-store' });
-                if (!response.ok) throw new Error(`Status request failed: ${response.status}`);
+                if (!response.ok) {
+                  let detail = '';
+                  try {
+                    const errorPayload = await response.json();
+                    detail = errorPayload.error ? `: ${errorPayload.error}` : '';
+                  } catch (error) { }
+                  throw new Error(`Status request failed (${response.status})${detail}`);
+                }
                 return response.json();
               }));
               const current = statuses.reduce((sum, status) => sum + (status.processedPages || 0), 0);
@@ -738,6 +745,11 @@ function App() {
               }
             } catch (error) {
               console.error('Poll error:', error);
+              if (/^Status request failed \((?:4\d\d|5\d\d)\)/.test(error.message || '')) {
+                setUploading(false);
+                setStatusText(`Unable to read processing status: ${error.message}`);
+                return;
+              }
               if (!redirectScheduled) {
                 window.setTimeout(pollProgress, 2000);
               }

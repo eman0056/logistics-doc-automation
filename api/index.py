@@ -54,6 +54,13 @@ if not POSTGRES_URL:
 
 DB_INITIALIZED = False
 
+def require_durable_database():
+    if os.getenv("VERCEL") and not POSTGRES_URL:
+        raise RuntimeError(
+            "Durable database is not configured. Set POSTGRES_URL or DATABASE_URL "
+            "to a PostgreSQL connection before using document processing on Vercel."
+        )
+
 def init_db(conn):
     global DB_INITIALIZED
     if DB_INITIALIZED: return
@@ -1651,6 +1658,11 @@ def delete_document(doc_id: str):
 
 @app.post("/api/documents/upload")
 async def upload_documents(request: Request):
+    try:
+        require_durable_database()
+    except RuntimeError as exc:
+        return JSONResponse({"error": str(exc), "code": "DURABLE_DATABASE_REQUIRED"}, status_code=503)
+
     form = await request.form()
     files = form.getlist('file')
     if not files:
@@ -1819,7 +1831,13 @@ async def batch_generate(request: Request):
 
 @app.get("/api/documents/{doc_id}/status")
 def get_document_status(doc_id: str):
-    conn = get_db()
+    try:
+        require_durable_database()
+        conn = get_db()
+    except RuntimeError as exc:
+        response = JSONResponse({"error": str(exc), "code": "DURABLE_DATABASE_REQUIRED"}, status_code=503)
+        response.headers["Cache-Control"] = "no-store"
+        return response
     cursor = execute_query(conn, """
         SELECT d.id, d.fileName, d.status, d.overallConfidence,
                COALESCE(d.pageCount, 1), COALESCE(d.processedPages, 0),
@@ -1946,6 +1964,11 @@ async def generate_invoice(doc_id: str, request: Request):
 
 @app.post("/api/documents/{doc_id}/extraction/callback")
 async def extraction_callback(doc_id: str, request: Request):
+    try:
+        require_durable_database()
+    except RuntimeError as exc:
+        return JSONResponse({"error": str(exc), "code": "DURABLE_DATABASE_REQUIRED"}, status_code=503)
+
     try:
         body = await request.json()
     except Exception as e:
