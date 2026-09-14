@@ -1,10 +1,106 @@
+# Environment Variables
 .env
+.env.local
+.env.*.local
 .env.*
 !.env.example
+
+# Python
 .venv/
+venv/
 __pycache__/
-*.pyc
-*.pyo
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+pip-wheel-metadata/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Node & Frontend
+node_modules/
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+lerna-debug.log*
+.turbo/
+
+# Database
 *.db
 *.sqlite
 *.sqlite3
+*.postgres
+*.pgsql
+
+# IDE & Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+*.sublime-project
+*.sublime-workspace
+
+# OS
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+desktop.ini
+
+# Build & Compiled
+dist/
+build/
+*.o
+*.a
+
+# Logs
+logs/
+*.log
+
+# Testing
+.coverage
+.pytest_cache/
+coverage/
+htmlcov/
+
+# Prisma
+node_modules/@prisma/client/
+prisma/node_modules/
+*.generated.ts
+
+# OS temp files
+*~
+*.swp
+.directory
+
+# Vercel
+.vercel/
+
+# Local development
+.DS_Store
+.AppleDouble
+.LSOverride
