@@ -936,13 +936,6 @@ function App() {
             const latestDoc = (documentsJson.documents || []).find((item) => item.id === docId);
             if (pollingRef.current.cancelled) return;
 
-            const terminalApiStatus = status?.status || '';
-            const stopPolling = Boolean(status?.isExtracted || terminalStatuses.has(terminalApiStatus));
-            if (stopPolling) {
-              setProcessing(false);
-              return;
-            }
-
             if (latestDoc && status.extractedData && Object.keys(status.extractedData).length > 0) {
               latestDoc.extraction = {
                 ...(latestDoc.extraction || {}),
@@ -951,6 +944,14 @@ function App() {
               };
             }
             if (latestDoc) setDoc(latestDoc);
+
+            const terminalApiStatus = status?.status || '';
+            const stopPolling = Boolean(status?.isExtracted || terminalStatuses.has(terminalApiStatus));
+            if (stopPolling) {
+              setProcessing(false);
+              return;
+            }
+
             if (status.status === 'FAILED') setProcessing(false);
           } catch (error) {
             if (error.name !== 'AbortError' && !pollingRef.current.cancelled) console.error(error);
