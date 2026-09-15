@@ -47,7 +47,7 @@ const normalizeStatus = (status) => {
 
 const fetchJson = async (url, options = {}) => {
   const normalizedUrl = normalizeApiCacheUrl(url);
-  const response = await fetch(normalizedUrl, { cache: 'force-cache', ...options });
+  const response = await fetch(normalizedUrl, { cache: 'no-store', ...options });
   return response;
 };
 
@@ -703,6 +703,14 @@ function App() {
         const res = await fetchJson(`${API}/documents/upload`, { method: 'POST', body: formData });
         const data = await res.json();
         if (data.success && data.documentIds && data.documentIds.length > 0) {
+          const failedDispatch = (data.dispatches || []).find((dispatch) => {
+            const status = Number(dispatch.webhookResponse?.status);
+            return !Number.isFinite(status) || status < 200 || status >= 300;
+          });
+          if (failedDispatch) {
+            throw new Error(failedDispatch.webhookResponse?.error || 'The n8n workflow could not be started.');
+          }
+
           const dispatchMap = {};
           (data.dispatches || []).forEach((d) => { dispatchMap[d.documentId] = d; });
 

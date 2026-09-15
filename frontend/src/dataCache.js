@@ -25,7 +25,7 @@ export const apiGet = async (url, options = {}) => {
   }
 
   const response = await fetch(normalizedUrl, {
-    cache: 'force-cache',
+    cache: 'no-store',
     headers: { Accept: 'application/json' },
     ...options,
   });
