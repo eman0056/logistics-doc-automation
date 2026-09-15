@@ -90,6 +90,9 @@ class LogisticsAutomationHandler(http.server.BaseHTTPRequestHandler):
         elif path.startswith("/api/documents/") and path.endswith("/status"):
             doc_id = path.split("/")[3]
             return self._handle_get_document_status(doc_id)
+        elif path.startswith("/api/documents/") and path.endswith("/detect-invoices"):
+            doc_id = path.split("/")[3]
+            return self._handle_detect_invoices(doc_id)
         elif path == "/api/review-tasks":
             return self._handle_get_review_tasks()
         
@@ -106,9 +109,16 @@ class LogisticsAutomationHandler(http.server.BaseHTTPRequestHandler):
 
         if path == "/api/documents/upload":
             return self._handle_upload_document()
+        elif path == "/api/documents/upload-multi":
+            return self._handle_upload_multi_document()
         elif path.startswith("/api/documents/") and path.endswith("/process"):
             doc_id = path.split("/")[3]
             return self._handle_process_document(doc_id)
+        elif path.startswith("/api/documents/") and "/process-single-invoice/" in path:
+            parts = path.split("/")
+            doc_id = parts[3]
+            invoice_index = parts[5]
+            return self._handle_process_single_invoice(doc_id, invoice_index)
         elif path.startswith("/api/documents/") and path.endswith("/validate"):
             doc_id = path.split("/")[3]
             return self._handle_validate_document(doc_id)
@@ -245,6 +255,29 @@ class LogisticsAutomationHandler(http.server.BaseHTTPRequestHandler):
             })
         self._send_json({"success": True, "documents": docs})
 
+    def _handle_detect_invoices(self, doc_id):
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        cursor.execute("SELECT storagePath, fileName FROM Document WHERE id = ?", (doc_id,))
+        row = cursor.fetchone()
+        conn.close()
+        
+        if not row:
+            return self._send_json({"error": "Document not found"}, 404)
+            
+        rel_storage_path, file_name = row
+        file_path = os.path.join(BASE_DIR, rel_storage_path)
+        
+        if not os.path.exists(file_path):
+            return self._send_json({"error": "File not found on disk"}, 404)
+            
+        try:
+            with open(file_path, "rb") as f:
+                file_bytes = f.read()
+            invoice_groups = detect_invoice_groups(file_bytes, file_name)
+            return self._send_json({"success": True, "invoiceGroups": invoice_groups})
+        except Exception as e:
+            return self._send_json({"error": str(e)}, 500)
     def _handle_get_document_status(self, doc_id):
         conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
@@ -411,6 +444,147 @@ class LogisticsAutomationHandler(http.server.BaseHTTPRequestHandler):
             })
         except Exception as e:
             self._send_json({"error": str(e)}, 500)
+
+    def _handle_upload_multi_document(self):
+        content_type = self.headers.get('Content-Type')
+        if not content_type or 'multipart/form-data' not in content_type:
+            return self._send_json({"error": "Expected multipart/form-data"}, 400)
+
+        form = cgi.FieldStorage(
+            fp=self.rfile,
+            headers=self.headers,
+            environ={'REQUEST_METHOD': 'POST', 'CONTENT_TYPE': self.headers['Content-Type']}
+        )
+
+        if 'file' not in form:
+            return self._send_json({"error": "No file field uploaded"}, 400)
+
+        file_items = form['file']
+        if not isinstance(file_items, list):
+            file_items = [file_items]
+
+        temp_dir = os.path.join(BASE_DIR, "tmp_uploads")
+        os.makedirs(temp_dir, exist_ok=True)
+
+        results = []
+        dispatches_list = []
+        try:
+            for file_item in file_items:
+                if not file_item.filename: continue
+                temp_file_path = os.path.join(temp_dir, file_item.filename)
+                with open(temp_file_path, 'wb') as f:
+                  file_bytes = file_item.file.read()
+                  f.write(file_bytes)
+
+                invoice_groups = detect_invoice_groups(file_bytes, file_item.filename)
+                invoice_count = len(invoice_groups)
+                
+                res = ingest_file(temp_file_path)
+                os.remove(temp_file_path)
+                
+                conn = sqlite3.connect(DB_PATH)
+                cursor = conn.cursor()
+                cursor.execute("UPDATE Document SET status = 'PREPROCESSED' WHERE id = ?;", (res["documentId"],))
+                # Optionally, save the invoice groups to the DB here if needed, but returning them is fine too.
+                # Actually, the requirement says we process them individually.
+                conn.commit()
+                conn.close()
+                
+                results.append(res["documentId"])
+                dispatches_list.append({
+                    "documentId": res["documentId"],
+                    "invoiceCount": invoice_count,
+                    "invoiceGroups": invoice_groups
+                })
+                
+            self._send_json({
+                "success": True,
+                "documentIds": results,
+                "dispatches": dispatches_list
+            })
+        except Exception as e:
+            self._send_json({"error": str(e)}, 500)
+
+    def _handle_process_single_invoice(self, doc_id, index_str):
+        try:
+            invoice_index = int(index_str)
+        except ValueError:
+            return self._send_json({"error": "Invalid index"}, 400)
+            
+        content_length = int(self.headers.get('Content-Length', 0))
+        if content_length > 0:
+            body = json.loads(self.rfile.read(content_length).decode('utf-8'))
+            page_start = body.get('pageStart')
+            page_end = body.get('pageEnd')
+        else:
+            return self._send_json({"error": "Missing page ranges in body"}, 400)
+            
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        cursor.execute("SELECT storagePath, fileName FROM Document WHERE id = ?", (doc_id,))
+        row = cursor.fetchone()
+        conn.close()
+        
+        if not row:
+            return self._send_json({"error": "Document not found"}, 404)
+            
+        rel_storage_path, file_name = row
+        file_path = os.path.join(BASE_DIR, rel_storage_path)
+        
+        if not os.path.exists(file_path):
+            return self._send_json({"error": "File not found on disk"}, 404)
+            
+        ext = os.path.splitext(file_name)[1].lower()
+        extracted_file_bytes = b""
+        
+        if ext == ".pdf":
+            try:
+                from pypdf import PdfReader, PdfWriter
+                import io
+                reader = PdfReader(file_path)
+                writer = PdfWriter()
+                for i in range(page_start - 1, page_end):
+                    writer.add_page(reader.pages[i])
+                
+                out_stream = io.BytesIO()
+                writer.write(out_stream)
+                extracted_file_bytes = out_stream.getvalue()
+            except Exception as e:
+                return self._send_json({"error": f"PDF split failed: {e}"}, 500)
+        else:
+            with open(file_path, "rb") as f:
+                extracted_file_bytes = f.read()
+                
+        env_file = os.path.join(BASE_DIR, ".env.local")
+        multi_webhook_url = MULTI_INVOICE_WEBHOOK_URL
+        if os.path.exists(env_file):
+            with open(env_file, "r") as ef:
+                for line in ef:
+                    if line.startswith("MULTI_INVOICE_N8N_WEBHOOK_URL="):
+                        multi_webhook_url = line.split("=", 1)[1].strip().strip('"')
+                        
+        payload = {
+            "documentId": doc_id,
+            "invoiceIndex": invoice_index,
+            "fileName": f"invoice_{invoice_index}_{file_name}",
+            "fileBase64": base64.b64encode(extracted_file_bytes).decode('ascii'),
+            "pageStart": page_start,
+            "pageEnd": page_end
+        }
+        
+        import urllib.request
+        req = urllib.request.Request(
+            multi_webhook_url, 
+            data=json.dumps(payload).encode('utf-8'), 
+            headers={'Content-Type': 'application/json'},
+            method='POST'
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=120) as response:
+                response_body = response.read().decode('utf-8', errors='replace')
+                return self._send_json(json.loads(response_body))
+        except Exception as e:
+            return self._send_json({"error": f"Webhook error: {e}"}, 500)
             
     def _handle_batch_generate(self):
         content_length = int(self.headers.get('Content-Length', 0))

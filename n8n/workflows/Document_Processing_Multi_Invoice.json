@@ -116,9 +116,11 @@
         "specifyBody": "json",
         "jsonBody": "={{ JSON.stringify({ invoiceId: $json.invoiceId, invoiceIndex: $json.invoiceIndex, invoiceCount: $json.invoiceCount, pageStart: $json.pageStart, pageEnd: $json.pageEnd, rawOcrText: $json.rawOcrText, extractedData: $json.extractedData, confidenceScores: $json.confidenceScores, overallConfidence: $json.overallConfidence }) }}",
         "options": {},
+        "sendHeaders": true,
         "headerParametersUi": {
           "parameter": [
-            { "name": "Content-Type", "value": "application/json" }
+            { "name": "Content-Type", "value": "application/json" },
+            { "name": "x-vercel-protection-bypass", "value": "={{ $env.VERCEL_PROTECTION_BYPASS }}" }
           ]
         }
       },

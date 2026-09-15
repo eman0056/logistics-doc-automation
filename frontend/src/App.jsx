@@ -1,5 +1,6 @@
 import React, { Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { apiGetJson, normalizeApiCacheUrl } from './dataCache.js';
+import { UploadMultiView, MultiInvoiceWorkspace } from './MultiInvoiceViews.jsx';
 
 const API = '/api';
 
@@ -325,6 +326,8 @@ function App() {
 
   const route = useMemo(() => {
     if (path === '/documents/upload') return 'upload';
+    if (path === '/documents/upload-multi') return 'upload-multi';
+    if (path.startsWith('/documents/') && path.endsWith('/multi-workspace')) return 'multi-workspace';
     if (path.startsWith('/review-multi/')) return 'review-multi';
     if (path.startsWith('/documents/') && path.includes('/invoices/')) return 'multi-invoice-detail';
     if (path.startsWith('/documents/') && path.endsWith('/invoices')) return 'multi-invoice-list';
@@ -357,7 +360,8 @@ function App() {
         <nav className="main-nav">
           <a href="/" className="nav-link">Dashboard</a>
           <a href="/documents" className="nav-link">Documents</a>
-          <a href="/documents/upload" className="nav-link">Upload</a>
+          <a href="/documents/upload" className="nav-link">Upload Single</a>
+          <a href="/documents/upload-multi" className="nav-link">Upload Multiple</a>
           <a href="/review-queue" className="nav-link">Review Queue</a>
           <a href="/invoices" className="nav-link">Invoices</a>
         </nav>
@@ -1895,6 +1899,8 @@ function App() {
   let renderedRoute;
   switch (route) {
     case 'upload': renderedRoute = <UploadView />; break;
+    case 'upload-multi': renderedRoute = <UploadMultiView />; break;
+    case 'multi-workspace': renderedRoute = <MultiInvoiceWorkspace />; break;
     case 'review': renderedRoute = <ReviewView />; break;
     case 'review-multi': renderedRoute = <MultiInvoiceListView />; break;
     case 'multi-invoice-list': renderedRoute = <MultiInvoiceListView />; break;

@@ -143,7 +143,7 @@
           "parameters": [
             {
               "name": "x-vercel-protection-bypass",
-              "value": "TrgkowxmK0ItTonMRQisGnrkAiLTIl56"
+              "value": "={{ $env.VERCEL_PROTECTION_BYPASS }}"
             }
           ]
         },

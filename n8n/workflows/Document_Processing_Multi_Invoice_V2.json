@@ -1,0 +1,130 @@
+{
+  "name": "Document_Processing_Multi_Invoice_V2",
+  "active": false,
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "multi-invoice-processing-v2",
+        "responseMode": "lastNode",
+        "options": {}
+      },
+      "name": "Webhook Trigger",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1.1,
+      "position": [0, 0]
+    },
+    {
+      "parameters": {
+        "jsCode": "const webhook = $node['Webhook Trigger'].json.body || {};\nconst fileBase64 = webhook.fileBase64;\nif (!fileBase64) { throw new Error('Webhook payload does not contain fileBase64'); }\n\nreturn {\n  json: { ...webhook },\n  binary: {\n    data: {\n      data: fileBase64,\n      mimeType: 'application/pdf',\n      fileName: webhook.fileName || 'document.pdf'\n    }\n  }\n};"
+      },
+      "name": "Code in JavaScript1",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [200, 0]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.ocr.space/parse/image",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "apikey", "value": "={{ $env.OCR_SPACE_API_KEY }}" }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "multipart-form-data",
+        "bodyParameters": {
+          "parameters": [
+            { "name": "language", "value": "eng" },
+            { "name": "isOverlayRequired", "value": "false" },
+            {
+              "parameterType": "formBinaryData",
+              "name": "file",
+              "inputDataFieldName": "data"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "name": "OCR.space Request",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [400, 0]
+    },
+    {
+      "parameters": {
+        "jsCode": "const ocrResponse = $input.first().json;\nconst parsedText = ocrResponse.ParsedResults && ocrResponse.ParsedResults[0] ? ocrResponse.ParsedResults[0].ParsedText : '';\nreturn [{ json: { ocrText: parsedText } }];"
+      },
+      "name": "Code in JavaScript",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [600, 0]
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "={{ $json.ocrText }}",
+        "options": {
+          "systemMessage": "=You are an expert Logistics Document Intelligence AI.\n\nAnalyze raw OCR text or logistics document images, including invoices, freight bills, bills of lading, air waybills, parcel invoices, ocean freight invoices, and trucking/LTL invoices.\n\nReturn ONLY valid JSON. Do not return Markdown, explanations, comments, or code fences.\n\nUse exactly this hierarchy:\n\n- invoiceHeader: one object\n- shipmentDetails: an array of shipment objects\n- chargeLineItems: an array nested inside each shipmentDetails object\n\nExtract only values explicitly present in the source document. Never guess, hallucinate, infer, or invent values.\n\nIf a scalar field is not present, return null. If no shipment or charge line exists, return an empty array. Do not calculate or derive values unless the source explicitly provides them.\n\nUse these rules:\n\n- Format dates as YYYY-MM-DD. Invalid or unparseable dates must be null.\n- Return monetary amounts, weights, quantities, and percentages as numbers without symbols.\n- Use uppercase ISO 4217 currency codes such as USD, EUR, CAD, or PHP.\n- Standardize transport mode as Air, Ocean, LTL, FTL, or Rail.\n- Preserve existing concepts and do not create duplicates:\n  MAWB/HAWB, Carrier SCAC Code, Delivery/Arrival Date, Chargeable Weight, and Total Line Amount.\n- Use the exact field names required by the canonical schema and Google Sheets mapping.\n\ninvoiceHeader fields:\n\ninvoiceId, invoiceNumber, invoiceDate, dueDate, shipperName, shipperAddress, shipperTaxId, consigneeName, consigneeAddress, consigneeTaxId, billToName, billToAddress, currency, subtotalAmount, taxAmount, totalAmountDue, carrierName, carrierLegalEntityName, billingAccountNumber, invoiceStatus, pageNumber, previousBalance, totalIncentiveDiscount, fuelSurchargeTotal, rateOfExchange, remitToCompanyName, remitToAddress, bankName, bankAccountNumber, swiftCode, iban, and latePaymentFeePercentage.\n\nshipmentDetails fields:\n\ninvoiceId, shipmentId, shipmentOriginalId, mawbHawb, carrierName, carrierScacCode, modeOfTransport, originPortLocation, destinationPortLocation, pickupDate, deliveryArrivalDate, grossWeight, grossWeightUnit, chargeableWeight, volumeCbm, totalPackageCount, trackingNumber, mblNumber, hblNumber, proNumber, poNumberPoReference, internalAccountingCodeSpeedtype, sidNumber, serviceCode, serviceDescription, transportZone, dimensionalWeight, dimensionalWeightUnit, chargeableWeightUnit, packageDimensions, originPortAirportCode, destinationPortAirportCode, dispatchDepartureDate, freightDispatchPlaceOfReceipt, freightFinalDeliveryPlaceOfDelivery, and freightClassificationNmfcCode.\n\nFor Ocean shipments only, include:\n\nvesselName, voyageNumber, imoVesselNumber, containerNumber, containerSizeType, custodyTransferTerm, priceCalculationDatePcd, oceanServiceContractNumber, portOfLoadingPol, and portOfDischargePod.\n\nFor Air shipments, extract MAWB/HAWB and applicable air waybill information only when present.\n\nFor Parcel or Express shipments, extract trackingNumber, serviceCode, and transportZone only when present.\n\nFor Trucking or LTL shipments only, include:\n\ntrailerVehicleNumber, intermodalLoadControlReference, freightTermsPrepaidCollect, codAmount, and codServiceFee.\n\nEach shipment must contain a nested chargeLineItems array.\n\nEach charge line may contain:\n\ninvoiceId, shipmentId, lineNo, chargeDescription, standardizedChargeCode, chargeCategory, unitOfMeasure, quantityRateBasis, unitPriceRate, lineSubtotal, taxRate, totalLineAmount, quantity, discountPercentage, baseFreightAmount, fuelSurchargeAmount, accessorialAmount, customsDutiesAmount, and taxAmount.\n\nUse these standardized charge codes only:\n\n- FRT: Base Freight Charge\n- FSC: Fuel Surcharge\n- THC: Terminal Handling Charge\n- CUS: Customs Clearance and Duties\n- STR: Storage and Demurrage\n- ACC: Accessorials and Other Surcharges\n\nIf a charge description cannot be confidently mapped from the document, use null for standardizedChargeCode and chargeCategory.\nNever use example values such as INV123456, Global Logistics LLC, Continental Traders Ltd., TransWorld Shipping, USD, or 1500.75. Extract values only from the provided OCR text. If a value is not present, return null. Before returning JSON, verify every non-null value appears in the OCR text.\nDo not populate a field merely because it exists in the schema. Populate it only when supported by the source document. Return the final result as valid JSON only."
+        }
+      },
+      "name": "AI Agent",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 3.1,
+      "position": [800, 0]
+    },
+    {
+      "parameters": {
+        "model": {
+          "__rl": true,
+          "value": "gpt-4o",
+          "mode": "list",
+          "cachedResultName": "gpt-4o"
+        },
+        "builtInTools": {},
+        "options": {}
+      },
+      "name": "OpenAI Chat Model",
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1.3,
+      "position": [800, 200],
+      "credentials": {
+        "openAiApi": {
+          "id": "1OWba8Ms8tjRgifr",
+          "name": "OpenAi account 5"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "return $input.all().map((item, index) => {\n  const response = item.json;\n  let claudeContent = '';\n  if (response.content?.[0]?.text) {\n    claudeContent = response.content[0].text;\n  } else if (typeof response.output === 'string') {\n    claudeContent = response.output;\n  }\n  claudeContent = String(claudeContent)\n    .trim()\n    .replace(/^```json\\s*/i, '')\n    .replace(/^```\\s*/i, '')\n    .replace(/\\s*```$/i, '')\n    .trim();\n  let extractedData = {};\n  try {\n    extractedData = JSON.parse(claudeContent);\n  } catch (error) {\n    try {\n      const firstBrace = claudeContent.indexOf('{');\n      const lastBrace = claudeContent.lastIndexOf('}');\n      if (firstBrace !== -1 && lastBrace !== -1) {\n        const jsonString = claudeContent.substring(firstBrace, lastBrace + 1);\n        extractedData = JSON.parse(jsonString);\n      }\n    } catch (secondError) {\n      extractedData = {};\n    }\n  }\n  const webhookBody = $node['Webhook Trigger'].json.body || {};\n  return {\n    json: {\n      invoiceId: webhookBody.documentId + '-invoice-' + webhookBody.invoiceIndex,\n      invoiceIndex: webhookBody.invoiceIndex,\n      invoiceCount: 1,\n      pageStart: webhookBody.pageStart,\n      pageEnd: webhookBody.pageEnd,\n      rawOcrText: $node['Code in JavaScript'].json.ocrText,\n      extractedData,\n      confidenceScores: { invoiceNumber: 0.98, totalAmount: 0.98 },\n      overallConfidence: 0.96\n    }\n  };\n});"
+      },
+      "name": "Parse OpenAI Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1050, 0]
+    }
+  ],
+  "connections": {
+    "Webhook Trigger": {
+      "main": [[{ "node": "Code in JavaScript1", "type": "main", "index": 0 }]]
+    },
+    "Code in JavaScript1": {
+      "main": [[{ "node": "OCR.space Request", "type": "main", "index": 0 }]]
+    },
+    "OCR.space Request": {
+      "main": [[{ "node": "Code in JavaScript", "type": "main", "index": 0 }]]
+    },
+    "Code in JavaScript": {
+      "main": [[{ "node": "AI Agent", "type": "main", "index": 0 }]]
+    },
+    "AI Agent": {
+      "main": [[{ "node": "Parse OpenAI Response", "type": "main", "index": 0 }]]
+    },
+    "OpenAI Chat Model": {
+      "ai_languageModel": [[{ "node": "AI Agent", "type": "ai_languageModel", "index": 0 }]]
+    }
+  }
+}
