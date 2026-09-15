@@ -1020,7 +1020,7 @@ function App() {
       id: invoiceRecord?.id || `${doc.id}-extracted`,
       extractedData: getSingleInvoiceData(doc),
     };
-    const previewUrl = `${API}/documents/${docId}/file?ts=${Date.now()}`;
+    const previewUrl = `${API}/documents/${docId}/file`;
     const isPdfDocument = () => {
       const mimeType = (doc?.mimeType || '').toLowerCase();
       const fileName = (doc?.fileName || '').toLowerCase();
