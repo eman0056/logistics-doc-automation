@@ -1758,6 +1758,170 @@ async def upload_documents(request: Request):
     except Exception as e:
         return JSONResponse({"error": str(e)}, status_code=500)
 
+@app.post("/api/documents/upload-multi")
+async def upload_multi_document(request: Request):
+    form = await request.form()
+    files = form.getlist('file')
+    if not files:
+        return JSONResponse({"error": "No files uploaded"}, status_code=400)
+
+    results = []
+    dispatches = []
+    conn = get_db()
+    try:
+        for file_item in files:
+            file_bytes = await file_item.read()
+            file_b64 = base64.b64encode(file_bytes).decode('utf-8')
+            invoice_groups = detect_invoice_groups(file_bytes, file_item.filename or '')
+            invoice_count = len(invoice_groups)
+            
+            doc_id = str(uuid.uuid4())
+            page_count = count_pdf_pages(file_bytes) if (file_item.filename or '').lower().endswith('.pdf') else 1
+            storage_path = f"api/documents/{doc_id}/file"
+            
+            execute_query(conn, "INSERT INTO Document (id, fileName, fileSize, mimeType, storagePath, status, pageCount, processedPages, fileData) VALUES (?, ?, ?, ?, ?, 'PREPROCESSED', ?, 0, ?)", (doc_id, file_item.filename, len(file_bytes), file_item.content_type or 'application/octet-stream', storage_path, page_count, file_b64))
+            
+            if not os.getenv("VERCEL"):
+                disk_path = os.path.normpath(os.path.join(BASE_DIR, storage_path))
+                os.makedirs(os.path.dirname(disk_path), exist_ok=True)
+                with open(disk_path, 'wb') as fh:
+                    fh.write(file_bytes)
+            
+            results.append(doc_id)
+            dispatches.append({
+                "documentId": doc_id,
+                "invoiceCount": invoice_count,
+                "invoiceGroups": invoice_groups
+            })
+        conn.commit()
+        return {"success": True, "documentIds": results, "dispatches": dispatches}
+    except Exception as e:
+        if conn: conn.rollback()
+        return JSONResponse({"error": str(e)}, status_code=500)
+    finally:
+        if conn: conn.close()
+
+@app.get("/api/documents/{doc_id}/detect-invoices")
+def detect_invoices(doc_id: str):
+    conn = get_db()
+    cursor = execute_query(conn, "SELECT fileData, storagePath, fileName FROM Document WHERE id = ?", (doc_id,))
+    row = cursor.fetchone()
+    conn.close()
+
+    if not row:
+        return JSONResponse({"error": "Document not found"}, status_code=404)
+
+    file_data_b64, storage_path, file_name = row
+    file_bytes = None
+
+    if file_data_b64:
+        import base64
+        file_bytes = base64.b64decode(file_data_b64)
+    elif storage_path:
+        disk_path = os.path.normpath(os.path.join(BASE_DIR, storage_path))
+        if os.path.exists(disk_path):
+            with open(disk_path, "rb") as f:
+                file_bytes = f.read()
+
+    if not file_bytes:
+        return JSONResponse({"error": "File data unavailable"}, status_code=404)
+
+    try:
+        invoice_groups = detect_invoice_groups(file_bytes, file_name or "")
+        return {"success": True, "invoiceGroups": invoice_groups}
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+@app.post("/api/documents/{doc_id}/process-single-invoice/{index_str}")
+async def process_single_invoice(doc_id: str, index_str: str, request: Request):
+    try:
+        invoice_index = int(index_str)
+    except ValueError:
+        return JSONResponse({"error": "Invalid index"}, status_code=400)
+
+    body = await request.json()
+    page_start = body.get('pageStart')
+    page_end = body.get('pageEnd')
+    if not page_start or not page_end:
+        return JSONResponse({"error": "Missing page ranges"}, status_code=400)
+
+    conn = get_db()
+    cursor = execute_query(conn, "SELECT fileData, storagePath, fileName FROM Document WHERE id = ?", (doc_id,))
+    row = cursor.fetchone()
+    conn.close()
+
+    if not row:
+        return JSONResponse({"error": "Document not found"}, status_code=404)
+
+    file_data_b64, storage_path, file_name = row
+    file_bytes = None
+
+    if file_data_b64:
+        import base64
+        file_bytes = base64.b64decode(file_data_b64)
+    elif storage_path:
+        disk_path = os.path.normpath(os.path.join(BASE_DIR, storage_path))
+        if os.path.exists(disk_path):
+            with open(disk_path, "rb") as f:
+                file_bytes = f.read()
+
+    if not file_bytes:
+        return JSONResponse({"error": "File data unavailable"}, status_code=404)
+
+    ext = os.path.splitext(file_name or "")[1].lower()
+    extracted_file_bytes = b""
+
+    if ext == ".pdf" or not ext:
+        try:
+            from pypdf import PdfReader, PdfWriter
+            import io
+            reader = PdfReader(io.BytesIO(file_bytes))
+            writer = PdfWriter()
+            for i in range(page_start - 1, page_end):
+                if i < len(reader.pages):
+                    writer.add_page(reader.pages[i])
+            out_stream = io.BytesIO()
+            writer.write(out_stream)
+            extracted_file_bytes = out_stream.getvalue()
+        except Exception as e:
+            return JSONResponse({"error": f"PDF split failed: {e}"}, status_code=500)
+    else:
+        extracted_file_bytes = file_bytes
+
+    multi_webhook_url = os.getenv("MULTI_INVOICE_N8N_WEBHOOK_URL", MULTI_INVOICE_WEBHOOK_URL)
+    env_file = os.path.join(BASE_DIR, ".env.local")
+    if os.path.exists(env_file):
+        with open(env_file, "r") as ef:
+            for line in ef:
+                if line.startswith("MULTI_INVOICE_N8N_WEBHOOK_URL="):
+                    multi_webhook_url = line.split("=", 1)[1].strip().strip('"')
+
+    payload = {
+        "documentId": doc_id,
+        "invoiceIndex": invoice_index,
+        "fileName": f"invoice_{invoice_index}_{file_name}",
+        "fileBase64": base64.b64encode(extracted_file_bytes).decode('ascii'),
+        "pageStart": page_start,
+        "pageEnd": page_end
+    }
+
+    import urllib.request
+    req = urllib.request.Request(
+        multi_webhook_url,
+        data=json.dumps(payload).encode('utf-8'),
+        headers={'Content-Type': 'application/json'},
+        method='POST'
+    )
+    try:
+        def _call_webhook():
+            with urllib.request.urlopen(req, timeout=120) as response:
+                return response.read().decode('utf-8', errors='replace')
+        
+        response_body = await asyncio.to_thread(_call_webhook)
+        return json.loads(response_body)
+    except Exception as e:
+        return JSONResponse({"error": f"Webhook error: {e}"}, status_code=500)
+
 @app.get("/api/documents/{doc_id}/file")
 def get_document_file(doc_id: str):
     import base64
