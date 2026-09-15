@@ -1135,7 +1135,7 @@ function App() {
             {value.map((item, index) => (
               <div className="nested-record" key={`${path.join('.')}-${index}`}>
                 <div className="field-label">{label ? `${label} ${index + 1}` : `Record ${index + 1}`}</div>
-                {renderEditableNode(item, [...path, index], '')}
+                {renderEditableNode(item, [...path, index], '', options)}
               </div>
             ))}
           </div>
@@ -1232,7 +1232,7 @@ function App() {
                   </button>
                 ))}
               </div>
-              <div className="editor-scroll-content">
+              <div className={`editor-scroll-content ${activeSection.id === 'shipment' ? 'single-invoice-shipment-content' : ''}`}>
                 {renderFieldInputs()}
                 {processing && <div className="progress-box mt-4">The n8n workflow is extracting and validating document data automatically.</div>}
               </div>
