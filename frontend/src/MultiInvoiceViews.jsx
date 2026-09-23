@@ -711,12 +711,28 @@ export const MultiInvoiceWorkspace = () => {
           setErrorStates(prev => ({ ...prev, [index]: 'Unable to load extracted invoice data from backend.' }));
         }
       } else if (data && data.error) {
-        setErrorStates(prev => ({ ...prev, [index]: data.error }));
+        // Even if HTTP/n8n connection timed out, n8n may have finished in background and sent callback to backend DB
+        const backendData = await fetchBackendExtractedData(docId, index);
+        if (backendData) {
+          setExtractedData(prev => ({ ...prev, [index]: backendData }));
+        } else {
+          setErrorStates(prev => ({ ...prev, [index]: data.error }));
+        }
       } else {
-        setErrorStates(prev => ({ ...prev, [index]: 'Invalid response from invoice extraction pipeline.' }));
+        const backendData = await fetchBackendExtractedData(docId, index);
+        if (backendData) {
+          setExtractedData(prev => ({ ...prev, [index]: backendData }));
+        } else {
+          setErrorStates(prev => ({ ...prev, [index]: 'Invalid response from invoice extraction pipeline.' }));
+        }
       }
     } catch (e) {
-      setErrorStates(prev => ({ ...prev, [index]: e.message }));
+      const backendData = await fetchBackendExtractedData(docId, index);
+      if (backendData) {
+        setExtractedData(prev => ({ ...prev, [index]: backendData }));
+      } else {
+        setErrorStates(prev => ({ ...prev, [index]: e.message }));
+      }
     } finally {
       setProcessingStates(prev => ({ ...prev, [index]: false }));
     }
