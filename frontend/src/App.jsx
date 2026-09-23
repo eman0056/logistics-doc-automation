@@ -167,15 +167,16 @@ const RouteSkeleton = ({ label = 'Loading page...' }) => (
 );
 
 const invoiceSections = (data) => {
-  const shipmentKey = Array.isArray(data?.shipmentDetails) ? 'shipmentDetails' : 'shipments';
-  const shipments = Array.isArray(data?.[shipmentKey])
-    ? data[shipmentKey]
-    : (Array.isArray(data?.shipmentDetail) ? data.shipmentDetail : []);
+  // Mirror the same key detection used in MultiInvoiceDetailView:
+  // prefer 'shipmentDetails' (plural), fall back to 'shipmentDetail' (singular).
+  const shipmentKey = Array.isArray(data?.shipmentDetails) ? 'shipmentDetails' : 'shipmentDetail';
+  const shipments = Array.isArray(data?.[shipmentKey]) ? data[shipmentKey] : [];
   const nestedCharges = shipments.flatMap((shipment) => Array.isArray(shipment?.chargeLineItems) ? shipment.chargeLineItems : []);
   const charges = [...nestedCharges, ...(Array.isArray(data?.chargeLineItems) ? data.chargeLineItems : [])];
   return {
     header: data?.invoiceHeader && typeof data.invoiceHeader === 'object' ? data.invoiceHeader : {},
     shipments,
+    shipmentKey,
     charges,
   };
 };
@@ -190,7 +191,7 @@ const InvoiceExtractionCard = ({ invoice, isActive, onSelect }) => {
   const sections = useMemo(() => invoiceSections(draft), [draft]);
   const sheetDefinitions = [
     { id: 'header', label: 'Invoice Header', value: sections.header, path: ['invoiceHeader'] },
-    { id: 'shipments', label: 'Shipments', value: sections.shipments, path: [Array.isArray(draft.shipmentDetails) ? 'shipmentDetails' : 'shipments'] },
+    { id: 'shipments', label: 'Shipments', value: sections.shipments, path: [sections.shipmentKey] },
     { id: 'charges', label: 'Charge Line Items', value: sections.charges, path: ['chargeLineItems'] },
   ];
   const activeSheetDefinition = sheetDefinitions.find((sheet) => sheet.id === activeSheet) || sheetDefinitions[0];
@@ -1414,7 +1415,7 @@ function App() {
 
     const tabDefs = [
       { id: 'header', label: 'Invoice Header', value: sections.header, path: ['invoiceHeader'] },
-      { id: 'shipments', label: 'Shipments', value: sections.shipments, path: [Array.isArray(selectedDraft.shipmentDetails) ? 'shipmentDetails' : 'shipments'] },
+      { id: 'shipments', label: 'Shipments', value: sections.shipments, path: [sections.shipmentKey] },
       { id: 'charges', label: 'Charge Line Items', value: sections.charges, path: ['chargeLineItems'] },
     ];
     const activeTabDef = tabDefs.find((t) => t.id === activeTab) || tabDefs[0];
