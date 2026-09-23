@@ -467,18 +467,35 @@ export const InvoiceCard = ({ idx, group, data, isLoading, errorMsg, isSelected,
     );
   };
 
-  const shipmentKey = Array.isArray(draft.shipmentDetails) ? 'shipmentDetails' : 'shipmentDetail';
-  const shipmentRecords = Array.isArray(draft[shipmentKey]) ? draft[shipmentKey] : [];
-  const chargeRecords = [
-    ...shipmentRecords.flatMap((shipment, shipmentIndex) => (
-      Array.isArray(shipment?.chargeLineItems)
-        ? shipment.chargeLineItems.map((charge, chargeIndex) => ({ charge, path: [shipmentKey, shipmentIndex, 'chargeLineItems', chargeIndex], label: `Shipment ${shipmentIndex + 1} Charge ${chargeIndex + 1}` }))
-        : []
-    )),
-    ...(Array.isArray(draft.chargeLineItems)
-      ? draft.chargeLineItems.map((charge, chargeIndex) => ({ charge, path: ['chargeLineItems', chargeIndex], label: `Charge ${chargeIndex + 1}` }))
-      : []),
-  ];
+  // Determine correct shipment key (support multiple possible names)
+  const possibleShipmentKeys = ['shipmentDetails', 'shipmentDetail', 'shipments', 'shipment'];
+  const shipmentKey = possibleShipmentKeys.find(k => Array.isArray(draft[k]));
+  const shipmentRecords = shipmentKey && Array.isArray(draft[shipmentKey]) ? draft[shipmentKey] : [];
+
+  // Build charge line items list, preserving shipment association when present
+  const chargeRecords = [];
+  // First, collect any chargeLineItems nested under shipments
+  shipmentRecords.forEach((shipment, shipmentIdx) => {
+    if (Array.isArray(shipment?.chargeLineItems)) {
+      shipment.chargeLineItems.forEach((charge, chargeIdx) => {
+        chargeRecords.push({
+          charge,
+          path: [shipmentKey, shipmentIdx, 'chargeLineItems', chargeIdx],
+          label: `Shipment ${shipmentIdx + 1} Charge ${chargeIdx + 1}`
+        });
+      });
+    }
+  });
+  // Then, include any top-level chargeLineItems (or other line item aliases) using the helper
+  const topLevelItems = getLineItems(draft);
+  topLevelItems.forEach((item, idx) => {
+    chargeRecords.push({
+      charge: item,
+      path: ['chargeLineItems', idx],
+      label: `Charge ${idx + 1}`
+    });
+  });
+
   const sectionDefinitions = [
     { id: 'header', label: 'Invoice Header', value: draft.invoiceHeader && typeof draft.invoiceHeader === 'object' && !Array.isArray(draft.invoiceHeader) ? draft.invoiceHeader : {} },
     { id: 'shipment', label: 'Shipments', value: shipmentRecords },
