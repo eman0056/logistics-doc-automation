@@ -476,7 +476,10 @@ export const InvoiceCard = ({ idx, group, data, isLoading, errorMsg, isSelected,
 
   // Determine correct shipment key (support multiple possible names)
   const possibleShipmentKeys = ['shipmentDetails', 'shipmentDetail', 'shipments', 'shipment'];
-  const shipmentKey = possibleShipmentKeys.find(k => draft && (Array.isArray(draft[k]) || (draft[k] && typeof draft[k] === 'object')));
+  let shipmentKey = possibleShipmentKeys.find(k => draft && Array.isArray(draft[k]) && draft[k].length > 0);
+  if (!shipmentKey) shipmentKey = possibleShipmentKeys.find(k => draft && draft[k] && typeof draft[k] === 'object' && Object.keys(draft[k]).length > 0);
+  if (!shipmentKey) shipmentKey = possibleShipmentKeys.find(k => draft && draft[k] != null);
+  
   const rawShipmentData = shipmentKey ? draft[shipmentKey] : undefined;
   const shipmentRecords = normalizeToArray(rawShipmentData);
 
@@ -484,21 +487,28 @@ export const InvoiceCard = ({ idx, group, data, isLoading, errorMsg, isSelected,
   const chargeRecords = [];
   // First, collect any chargeLineItems nested under shipments
   shipmentRecords.forEach((shipment, shipmentIdx) => {
-    const nestedCharges = normalizeToArray(shipment?.chargeLineItems);
+    let nestedChargeKey = 'chargeLineItems';
+    if (shipment && !shipment.chargeLineItems && shipment.chargeLineItem) nestedChargeKey = 'chargeLineItem';
+    const nestedCharges = normalizeToArray(shipment?.[nestedChargeKey]);
     nestedCharges.forEach((charge, chargeIdx) => {
       chargeRecords.push({
         charge,
-        path: [shipmentKey, shipmentIdx, 'chargeLineItems', chargeIdx],
+        path: [shipmentKey, shipmentIdx, nestedChargeKey, chargeIdx],
         label: `Shipment ${shipmentIdx + 1} Charge ${chargeIdx + 1}`
       });
     });
   });
+  
   // Then, include any top-level chargeLineItems (or other line item aliases)
-  const topLevelItems = normalizeToArray(draft?.chargeLineItems || draft?.chargeLineItem);
+  let topChargeKey = 'chargeLineItems';
+  if (draft && Array.isArray(draft.chargeLineItem) && draft.chargeLineItem.length > 0 && (!draft.chargeLineItems || draft.chargeLineItems.length === 0)) {
+    topChargeKey = 'chargeLineItem';
+  }
+  const topLevelItems = normalizeToArray(draft?.[topChargeKey] || draft?.chargeLineItems || draft?.chargeLineItem);
   topLevelItems.forEach((item, idx) => {
     chargeRecords.push({
       charge: item,
-      path: ['chargeLineItems', idx],
+      path: [topChargeKey, idx],
       label: `Charge ${idx + 1}`
     });
   });
@@ -574,7 +584,7 @@ export const InvoiceCard = ({ idx, group, data, isLoading, errorMsg, isSelected,
           <div className={`editor-scroll-content ${activeSection.id === 'shipment' ? 'single-invoice-shipment-content' : ''}`}>
             <div className="invoice-sections">
               {activeSection.id === 'header' && renderEditableNode(activeSection.value, ['invoiceHeader'], activeSection.label)}
-              {activeSection.id === 'shipment' && renderEditableNode(activeSection.value, [shipmentKey || 'shipmentDetails'], activeSection.label, { excludeKeys: ['chargeLineItems'] })}
+              {activeSection.id === 'shipment' && renderEditableNode(activeSection.value, [shipmentKey || 'shipmentDetails'], activeSection.label, { excludeKeys: ['chargeLineItems', 'chargeLineItem'] })}
               {activeSection.id === 'charges' && (chargeRecords.length > 0
                 ? chargeRecords.map((record) => <div className="nested-record" key={record.path.join('.')}><div className="field-label">{record.label}</div>{renderEditableNode(record.charge, record.path, '')}</div>)
                 : <div className="subtle-copy">No records found</div>)}
