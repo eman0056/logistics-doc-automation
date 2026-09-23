@@ -98,35 +98,41 @@ export const extractRealInvoiceObject = (raw) => {
 
   if (!parsed || typeof parsed !== 'object') return null;
 
+  const isRealInvoice = (obj) => obj && (
+    obj.invoiceHeader || obj.shipmentDetails || obj.shipmentDetail || obj.shipment || obj.shippingDetails ||
+    obj.chargeLineItems || obj.lineItems || obj.items || obj.charges || obj.header ||
+    obj.invoiceNumber || obj.invoice_number || obj.vendorName || obj.totalAmount
+  );
+
   if (parsed.extractedData) {
     const inner = extractRealInvoiceObject(parsed.extractedData);
-    if (inner && (inner.invoiceHeader || inner.shipmentDetails || inner.shipmentDetail || inner.chargeLineItems || inner.header || inner.invoiceNumber)) {
+    if (inner && isRealInvoice(inner)) {
       return inner;
     }
   }
 
   if (parsed.canonicalJson) {
     const inner = extractRealInvoiceObject(parsed.canonicalJson);
-    if (inner && (inner.invoiceHeader || inner.shipmentDetails || inner.shipmentDetail || inner.chargeLineItems || inner.header || inner.invoiceNumber)) {
+    if (inner && isRealInvoice(inner)) {
       return inner;
     }
   }
 
   if (parsed.data) {
     const inner = extractRealInvoiceObject(parsed.data);
-    if (inner && (inner.invoiceHeader || inner.shipmentDetails || inner.shipmentDetail || inner.chargeLineItems || inner.header || inner.invoiceNumber)) {
+    if (inner && isRealInvoice(inner)) {
       return inner;
     }
   }
 
   if (parsed.json) {
     const inner = extractRealInvoiceObject(parsed.json);
-    if (inner && (inner.invoiceHeader || inner.shipmentDetails || inner.shipmentDetail || inner.chargeLineItems || inner.header || inner.invoiceNumber)) {
+    if (inner && isRealInvoice(inner)) {
       return inner;
     }
   }
 
-  if (parsed.invoiceHeader || parsed.shipmentDetails || parsed.shipmentDetail || parsed.chargeLineItems || parsed.header || parsed.invoiceNumber || parsed.invoice_number) {
+  if (isRealInvoice(parsed)) {
     return parsed;
   }
 
@@ -586,7 +592,86 @@ export const MultiInvoiceWorkspace = () => {
       })
       .catch(console.error)
       .finally(() => setLoading(false));
+
+    // Also check backend for any pre-extracted invoice data for this document
+    fetch(`${API}/documents/${docId}/invoices?refresh=${Date.now()}`)
+      .then(res => res.json())
+      .then(data => {
+        if (data.success && Array.isArray(data.invoices) && data.invoices.length > 0) {
+          const loaded = {};
+          data.invoices.forEach(inv => {
+            const index = inv.invoiceIndex;
+            const realObj = extractRealInvoiceObject(inv.extractedData || inv.canonicalJson || inv);
+            if (realObj) {
+              loaded[index] = realObj;
+            }
+          });
+          if (Object.keys(loaded).length > 0) {
+            setExtractedData(prev => ({ ...loaded, ...prev }));
+          }
+        }
+      })
+      .catch(console.error);
   }, [docId]);
+
+  const fetchBackendExtractedData = async (targetDocId, index, reviewUrl) => {
+    let targetEndpoint = `${API}/documents/${targetDocId}/invoices?refresh=${Date.now()}`;
+    if (reviewUrl && typeof reviewUrl === 'string') {
+      const rawPath = reviewUrl.replace(/^\/api/, '');
+      if (rawPath.includes('/invoices')) {
+        targetEndpoint = `${API}${rawPath.startsWith('/') ? '' : '/'}${rawPath}?refresh=${Date.now()}`;
+      }
+    }
+
+    for (let attempt = 0; attempt < 5; attempt++) {
+      try {
+        const invRes = await fetch(targetEndpoint, { cache: 'no-store' });
+        if (invRes.ok) {
+          const invJson = await invRes.json();
+          const invoiceList = invJson.invoices || [];
+          const matchingInvoice = invoiceList.find(inv => Number(inv.invoiceIndex) === Number(index)) || invoiceList[index];
+          if (matchingInvoice) {
+            const realObj = extractRealInvoiceObject(matchingInvoice.extractedData || matchingInvoice.canonicalJson || matchingInvoice);
+            if (realObj) {
+              return realObj;
+            }
+          }
+        }
+      } catch (err) {
+        console.warn('Attempt', attempt, 'fetching extracted invoice data failed:', err);
+      }
+
+      try {
+        const docsRes = await fetch(`${API}/documents?refresh=${Date.now()}`, { cache: 'no-store' });
+        if (docsRes.ok) {
+          const docsJson = await docsRes.json();
+          const foundDoc = (docsJson.documents || []).find(d => d.id === targetDocId);
+          if (foundDoc) {
+            const invoiceList = foundDoc.invoices || [];
+            const matchingInvoice = invoiceList.find(inv => Number(inv.invoiceIndex) === Number(index)) || invoiceList[index];
+            if (matchingInvoice) {
+              const realObj = extractRealInvoiceObject(matchingInvoice.extractedData || matchingInvoice.canonicalJson || matchingInvoice);
+              if (realObj) {
+                return realObj;
+              }
+            }
+            if (foundDoc.extraction) {
+              const realObj = extractRealInvoiceObject(foundDoc.extraction.canonicalJson || foundDoc.extraction.extractedData || foundDoc.extraction);
+              if (realObj) {
+                return realObj;
+              }
+            }
+          }
+        }
+      } catch (err) {
+        console.warn('Fallback docs fetch failed:', err);
+      }
+
+      await new Promise(r => setTimeout(r, 800));
+    }
+
+    return null;
+  };
 
   const processInvoice = async (index, group) => {
     if (processingStates[index] || extractedData[index]) return;
@@ -625,16 +710,24 @@ export const MultiInvoiceWorkspace = () => {
       }
 
       const data = await res.json();
-      if (data && data.success && data.extractedData) {
-        setExtractedData(prev => ({ ...prev, [index]: data.extractedData }));
-      } else if (data && !data.error && !data.success && !data.extractedData) {
-        setExtractedData(prev => ({ ...prev, [index]: data }));
-      } else if (data && data.extractedData) {
-        setExtractedData(prev => ({ ...prev, [index]: data.extractedData }));
+      
+      const directExtracted = extractRealInvoiceObject(data?.extractedData) || extractRealInvoiceObject(data);
+
+      if (directExtracted) {
+        setExtractedData(prev => ({ ...prev, [index]: directExtracted }));
+      } else if (data && (data.success || data.complete || data.reviewUrl)) {
+        // n8n workflow executed successfully returning success: true, complete: true, reviewUrl
+        // Load actual extracted invoice data from backend
+        const backendData = await fetchBackendExtractedData(docId, index, data.reviewUrl);
+        if (backendData) {
+          setExtractedData(prev => ({ ...prev, [index]: backendData }));
+        } else {
+          setErrorStates(prev => ({ ...prev, [index]: 'Unable to load extracted invoice data from backend.' }));
+        }
       } else if (data && data.error) {
         setErrorStates(prev => ({ ...prev, [index]: data.error }));
       } else {
-        setExtractedData(prev => ({ ...prev, [index]: data }));
+        setErrorStates(prev => ({ ...prev, [index]: 'Invalid response from invoice extraction pipeline.' }));
       }
     } catch (e) {
       setErrorStates(prev => ({ ...prev, [index]: e.message }));
