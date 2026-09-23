@@ -399,8 +399,18 @@ export const ExtractionProcessingPanel = ({ invoiceIndex, pageStart, pageEnd, is
   );
 };
 
-/* Component 3: InvoiceCard (Single Card in Right Panel) */
-export const InvoiceCard = ({ idx, group, data, isLoading, errorMsg, isSelected, onRetry }) => {
+/* Component 3: InvoiceCard (Tabbed Editable Extracted Fields UI in Right Panel) */
+export const InvoiceCard = ({ idx, group, data, isLoading, errorMsg, isSelected, onRetry, onSave }) => {
+  const [draft, setDraft] = useState(data || {});
+  const [selectedSection, setSelectedSection] = useState('header');
+  const [saving, setSaving] = useState(false);
+  const [saveSuccess, setSaveSuccess] = useState(false);
+  const [saveErr, setSaveErr] = useState('');
+
+  useEffect(() => {
+    setDraft(data || {});
+  }, [data]);
+
   if (isLoading) {
     return (
       <ExtractionProcessingPanel 
@@ -411,170 +421,147 @@ export const InvoiceCard = ({ idx, group, data, isLoading, errorMsg, isSelected,
     );
   }
 
-  const headerFields = getInvoiceHeaderFields(data);
-  const shipmentFields = getShipmentDetailsFields(data);
-  const lineItems = getLineItems(data);
+  const updatePath = (path, value) => {
+    setDraft((current) => {
+      const next = JSON.parse(JSON.stringify(current || {}));
+      let target = next;
+      path.slice(0, -1).forEach((part) => { target = target[part]; });
+      target[path[path.length - 1]] = value;
+      return next;
+    });
+  };
+
+  const renderEditableNode = (value, path, label, options = {}) => {
+    if (Array.isArray(value)) {
+      return (
+        <div className="section-block" key={path.join('.') || label}>
+          {label && <div className="section-title">{label}</div>}
+          {value.length === 0 && <div className="subtle-copy">No records found</div>}
+          {value.map((item, index) => (
+            <div className="nested-record" key={`${path.join('.')}-${index}`}>
+              <div className="field-label">{label ? `${label} ${index + 1}` : `Record ${index + 1}`}</div>
+              {renderEditableNode(item, [...path, index], '', options)}
+            </div>
+          ))}
+        </div>
+      );
+    }
+    if (value && typeof value === 'object') {
+      return (
+        <div className="field-grid" key={path.join('.') || label}>
+          {Object.entries(value)
+            .filter(([key]) => !options.excludeKeys?.includes(key))
+            .map(([key, child]) => renderEditableNode(child, [...path, key], key, options))}
+        </div>
+      );
+    }
+    return (
+      <div className="field-group" key={path.join('.')}>
+        <label className="field-label">{label || path[path.length - 1]}</label>
+        <input
+          className="field-input"
+          value={value === null || value === undefined ? '' : String(value)}
+          onChange={(event) => updatePath(path, event.target.value)}
+        />
+      </div>
+    );
+  };
+
+  const shipmentKey = Array.isArray(draft.shipmentDetails) ? 'shipmentDetails' : 'shipmentDetail';
+  const shipmentRecords = Array.isArray(draft[shipmentKey]) ? draft[shipmentKey] : [];
+  const chargeRecords = [
+    ...shipmentRecords.flatMap((shipment, shipmentIndex) => (
+      Array.isArray(shipment?.chargeLineItems)
+        ? shipment.chargeLineItems.map((charge, chargeIndex) => ({ charge, path: [shipmentKey, shipmentIndex, 'chargeLineItems', chargeIndex], label: `Shipment ${shipmentIndex + 1} Charge ${chargeIndex + 1}` }))
+        : []
+    )),
+    ...(Array.isArray(draft.chargeLineItems)
+      ? draft.chargeLineItems.map((charge, chargeIndex) => ({ charge, path: ['chargeLineItems', chargeIndex], label: `Charge ${chargeIndex + 1}` }))
+      : []),
+  ];
+  const sectionDefinitions = [
+    { id: 'header', label: 'Invoice Header', value: draft.invoiceHeader && typeof draft.invoiceHeader === 'object' && !Array.isArray(draft.invoiceHeader) ? draft.invoiceHeader : {} },
+    { id: 'shipment', label: 'Shipments', value: shipmentRecords },
+    { id: 'charges', label: 'Charge Line Items', value: chargeRecords },
+  ];
+  const activeSection = sectionDefinitions.find((section) => section.id === selectedSection) || sectionDefinitions[0];
+  const isEmpty = Object.keys(draft).length === 0;
+
+  const handleSave = async () => {
+    if (!onSave) return;
+    setSaving(true);
+    setSaveErr('');
+    setSaveSuccess(false);
+    try {
+      await onSave(idx, draft);
+      setSaveSuccess(true);
+      setTimeout(() => setSaveSuccess(false), 2500);
+    } catch (err) {
+      setSaveErr(err.message || 'Save failed');
+    } finally {
+      setSaving(false);
+    }
+  };
 
   return (
     <div 
       id={`invoice-card-${idx}`}
-      className={`invoice-card ${isSelected ? 'selected-card' : ''} ${errorMsg ? 'error' : ''}`}
+      className={`card editor-panel ${isSelected ? 'selected-card' : ''} ${errorMsg ? 'error' : ''}`}
       data-invoice-index={idx}
+      style={{ margin: 0 }}
     >
-      <div className="card-header">
-        <h3>
-          Invoice {idx + 1} (Pages {group?.pageStart}-{group?.pageEnd})
-          {isSelected && <span style={{ fontSize: '11px', background: 'var(--primary, #6366f1)', color: '#fff', padding: '2px 6px', borderRadius: '4px' }}>Active</span>}
-        </h3>
-        {data && !isLoading && <span className="card-status">✓ Extracted</span>}
-        {errorMsg && !isLoading && <span className="card-status error">⚠️ Error</span>}
-      </div>
-
-      <div className="card-content">
-        {/* Error Message & Retry */}
-        {errorMsg && !isLoading && (
-          <div className="error-message">
-            <p>Failed to process invoice: {errorMsg}</p>
-            <button className="retry-button" onClick={onRetry}>Retry</button>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap', marginBottom: '0.75rem' }}>
+        <h3 className="section-title" style={{ color: '#fff', letterSpacing: '0.1em', margin: 0 }}>EXTRACTED FIELDS</h3>
+        {onSave && (
+          <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+            {saveSuccess && <span style={{ color: 'var(--success, #1FC991)', fontSize: '0.8rem', fontWeight: 600 }}>✓ Saved</span>}
+            {saveErr && <span style={{ color: 'var(--danger, #EA6A6A)', fontSize: '0.8rem' }}>{saveErr}</span>}
+            <button type="button" className="primary-btn" onClick={handleSave} disabled={saving || isEmpty} style={{ padding: '0.4rem 0.8rem', fontSize: '0.8rem' }}>
+              {saving ? 'Saving...' : 'Save'}
+            </button>
           </div>
         )}
-
-        {/* Extracted Data Sections */}
-        {data && !isLoading && (
-          <>
-            {/* Header Section */}
-            <div className="card-section">
-              <h4>Invoice Header</h4>
-              <div className="section-grid">
-                <div className="grid-row-item">
-                  <span className="label">Invoice #:</span>
-                  <span className="value">{headerFields.invoiceNumber || '—'}</span>
-                </div>
-                <div className="grid-row-item">
-                  <span className="label">Invoice Date:</span>
-                  <span className="value">{headerFields.invoiceDate || '—'}</span>
-                </div>
-                {headerFields.dueDate && (
-                  <div className="grid-row-item">
-                    <span className="label">Due Date:</span>
-                    <span className="value">{headerFields.dueDate}</span>
-                  </div>
-                )}
-                <div className="grid-row-item">
-                  <span className="label">Total Amount:</span>
-                  <span className="value" style={{ color: '#1FC991', fontWeight: '700' }}>
-                    {headerFields.totalAmount ? `${headerFields.currency !== '$' ? headerFields.currency + ' ' : '$'}${headerFields.totalAmount}` : '—'}
-                  </span>
-                </div>
-                <div className="grid-row-item">
-                  <span className="label">Vendor Name:</span>
-                  <span className="value">{headerFields.vendorName || '—'}</span>
-                </div>
-                {headerFields.customerName && (
-                  <div className="grid-row-item">
-                    <span className="label">Customer Name:</span>
-                    <span className="value">{headerFields.customerName}</span>
-                  </div>
-                )}
-                {headerFields.paymentTerms && (
-                  <div className="grid-row-item">
-                    <span className="label">Payment Terms:</span>
-                    <span className="value">{headerFields.paymentTerms}</span>
-                  </div>
-                )}
-              </div>
-            </div>
-
-            {/* Shipment Section */}
-            {shipmentFields && (
-              <div className="card-section">
-                <h4>Shipment Details</h4>
-                <div className="section-grid">
-                  {shipmentFields.trackingNumber && (
-                    <div className="grid-row-item">
-                      <span className="label">Tracking / PRO #:</span>
-                      <span className="value">{shipmentFields.trackingNumber}</span>
-                    </div>
-                  )}
-                  {shipmentFields.carrier && (
-                    <div className="grid-row-item">
-                      <span className="label">Carrier:</span>
-                      <span className="value">{shipmentFields.carrier}</span>
-                    </div>
-                  )}
-                  {shipmentFields.shipDate && (
-                    <div className="grid-row-item">
-                      <span className="label">Ship Date:</span>
-                      <span className="value">{shipmentFields.shipDate}</span>
-                    </div>
-                  )}
-                  {shipmentFields.deliveryDate && (
-                    <div className="grid-row-item">
-                      <span className="label">Delivery Date:</span>
-                      <span className="value">{shipmentFields.deliveryDate}</span>
-                    </div>
-                  )}
-                  {shipmentFields.origin && (
-                    <div className="grid-row-item">
-                      <span className="label">Origin:</span>
-                      <span className="value">{shipmentFields.origin}</span>
-                    </div>
-                  )}
-                  {shipmentFields.destination && (
-                    <div className="grid-row-item">
-                      <span className="label">Destination:</span>
-                      <span className="value">{shipmentFields.destination}</span>
-                    </div>
-                  )}
-                </div>
-              </div>
-            )}
-
-            {/* Line Items Table */}
-            {lineItems.length > 0 && (
-              <div className="card-section">
-                <h4>Charge Line Items ({lineItems.length})</h4>
-                <table className="line-items-table">
-                  <thead>
-                    <tr>
-                      <th>#</th>
-                      <th>Description</th>
-                      <th>Qty</th>
-                      <th>Unit Price</th>
-                      <th>Total</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {lineItems.map((item, iIdx) => (
-                      <tr key={iIdx}>
-                        <td>{iIdx + 1}</td>
-                        <td>{item.description || item.itemDescription || item.chargeDescription || item.name || 'Line Item'}</td>
-                        <td>{item.quantity || item.qty || 1}</td>
-                        <td>{item.unitPrice || item.price || item.rate || '—'}</td>
-                        <td style={{ fontWeight: '600', color: '#1FC991' }}>{item.totalPrice || item.amount || item.total || '—'}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
-
-            {/* Confidence Scores if present */}
-            {data.confidenceScores && typeof data.confidenceScores === 'object' && (
-              <div className="card-section" style={{ fontSize: '12px', background: 'rgba(255,255,255,0.03)', padding: '8px 12px', borderRadius: '6px' }}>
-                <strong style={{ color: 'var(--text-muted, #94a3b8)' }}>Confidence Scores:</strong>{' '}
-                {Object.entries(data.confidenceScores).map(([k, v]) => `${k}: ${typeof v === 'number' ? Math.round(v * 100) + '%' : v}`).join(' · ')}
-              </div>
-            )}
-
-            {/* Collapsible Raw JSON Data */}
-            <details style={{ marginTop: '12px' }}>
-              <summary style={{ cursor: 'pointer', fontSize: '12px', color: 'var(--text-muted, #94a3b8)' }}>📄 View Raw Extracted JSON</summary>
-              <pre className="json-content" style={{ fontSize: '11px', marginTop: '6px' }}>{JSON.stringify(data, null, 2)}</pre>
-            </details>
-          </>
-        )}
       </div>
+
+      {errorMsg && !isLoading && (
+        <div className="error-message" style={{ marginBottom: '1rem' }}>
+          <p>Failed to process invoice: {errorMsg}</p>
+          <button className="retry-button" onClick={onRetry}>Retry</button>
+        </div>
+      )}
+
+      {!isEmpty && (
+        <>
+          <div className="invoice-section-tabs" role="tablist" aria-label="Extracted invoice sections">
+            {sectionDefinitions.map((section) => (
+              <button 
+                key={section.id} 
+                type="button" 
+                role="tab" 
+                aria-selected={activeSection.id === section.id} 
+                className={activeSection.id === section.id ? 'primary-btn' : 'secondary-btn'} 
+                onClick={() => setSelectedSection(section.id)}
+              >
+                {section.label}
+              </button>
+            ))}
+          </div>
+
+          <div className={`editor-scroll-content ${activeSection.id === 'shipment' ? 'single-invoice-shipment-content' : ''}`}>
+            <div className="invoice-sections">
+              {activeSection.id === 'header' && renderEditableNode(activeSection.value, ['invoiceHeader'], activeSection.label)}
+              {activeSection.id === 'shipment' && renderEditableNode(activeSection.value, [shipmentKey], activeSection.label, { excludeKeys: ['chargeLineItems'] })}
+              {activeSection.id === 'charges' && (chargeRecords.length > 0
+                ? chargeRecords.map((record) => <div className="nested-record" key={record.path.join('.')}><div className="field-label">{record.label}</div>{renderEditableNode(record.charge, record.path, '')}</div>)
+                : <div className="subtle-copy">No records found</div>)}
+            </div>
+          </div>
+        </>
+      )}
+
+      {isEmpty && !errorMsg && (
+        <div className="subtle-copy" style={{ padding: '1rem' }}>Extraction data unavailable for this invoice.</div>
+      )}
     </div>
   );
 };

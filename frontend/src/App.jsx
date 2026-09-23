@@ -1617,42 +1617,10 @@ function App() {
                     </div>
 
                     <div className="mir-fields-body">
-                      {invoices.length > 1 ? (
-                        <div className="mir-field-cards">
-                          {invoices.map((inv, idx) => {
-                            const idxDraft = drafts[idx] || parseStoredInvoiceData(inv);
-                            const idxSections = invoiceSections(idxDraft);
-                            return (
-                              <article className="mir-field-card" key={inv.id || inv.invoiceId || idx}>
-                                <div className="mir-field-card-heading">
-                                  <div>
-                                    <span className="eyebrow">Invoice {idx + 1}</span>
-                                    <div className="mir-panel-title">{getInvoiceLabel(inv)}</div>
-                                  </div>
-                                  <span className="status-pill success">{inv.status || inv.extractionStatus || 'EXTRACTED'}</span>
-                                </div>
-                                <div className="mir-field-card-sections">
-                                  <section className="mir-field-card-section">
-                                    <div className="mir-field-card-section-title">Invoice Header</div>
-                                    {renderEditable(idxSections.header, 'Invoice Header', ['invoiceHeader'], idx)}
-                                  </section>
-                                  <section className="mir-field-card-section">
-                                    <div className="mir-field-card-section-title">Shipment Details</div>
-                                    {renderEditable(idxSections.shipments, 'Shipment Details', [Array.isArray(idxDraft.shipmentDetails) ? 'shipmentDetails' : 'shipments'], idx)}
-                                  </section>
-                                  <section className="mir-field-card-section">
-                                    <div className="mir-field-card-section-title">Charge Line Items</div>
-                                    {renderEditable(idxSections.charges, 'Charge Line Items', ['chargeLineItems'], idx)}
-                                  </section>
-                                </div>
-                              </article>
-                            );
-                          })}
-                        </div>
+                      {isEmpty ? (
+                        <div className="empty-state">Extraction data unavailable for this invoice.</div>
                       ) : (
-                        isEmpty
-                          ? <div className="empty-state">Extraction data unavailable for this invoice.</div>
-                          : renderEditable(activeTabDef.value, activeTabDef.label, activeTabDef.path)
+                        renderEditable(activeTabDef.value, activeTabDef.label, activeTabDef.path, selectedInvoiceIndex)
                       )}
                     </div>
 
