@@ -451,17 +451,37 @@ export const InvoiceCard = ({ idx, group, data, isLoading, errorMsg, isSelected,
                   <span className="value">{headerFields.invoiceNumber || '—'}</span>
                 </div>
                 <div className="grid-row-item">
-                  <span className="label">Date:</span>
+                  <span className="label">Invoice Date:</span>
                   <span className="value">{headerFields.invoiceDate || '—'}</span>
                 </div>
+                {headerFields.dueDate && (
+                  <div className="grid-row-item">
+                    <span className="label">Due Date:</span>
+                    <span className="value">{headerFields.dueDate}</span>
+                  </div>
+                )}
                 <div className="grid-row-item">
                   <span className="label">Total Amount:</span>
-                  <span className="value" style={{ color: '#1FC991' }}>{headerFields.totalAmount ? `${headerFields.currency} ${headerFields.totalAmount}` : '—'}</span>
+                  <span className="value" style={{ color: '#1FC991', fontWeight: '700' }}>
+                    {headerFields.totalAmount ? `${headerFields.currency !== '$' ? headerFields.currency + ' ' : '$'}${headerFields.totalAmount}` : '—'}
+                  </span>
                 </div>
                 <div className="grid-row-item">
-                  <span className="label">Vendor:</span>
+                  <span className="label">Vendor Name:</span>
                   <span className="value">{headerFields.vendorName || '—'}</span>
                 </div>
+                {headerFields.customerName && (
+                  <div className="grid-row-item">
+                    <span className="label">Customer Name:</span>
+                    <span className="value">{headerFields.customerName}</span>
+                  </div>
+                )}
+                {headerFields.paymentTerms && (
+                  <div className="grid-row-item">
+                    <span className="label">Payment Terms:</span>
+                    <span className="value">{headerFields.paymentTerms}</span>
+                  </div>
+                )}
               </div>
             </div>
 
@@ -470,18 +490,42 @@ export const InvoiceCard = ({ idx, group, data, isLoading, errorMsg, isSelected,
               <div className="card-section">
                 <h4>Shipment Details</h4>
                 <div className="section-grid">
-                  <div className="grid-row-item">
-                    <span className="label">Tracking #:</span>
-                    <span className="value">{shipmentFields.trackingNumber || '—'}</span>
-                  </div>
-                  <div className="grid-row-item">
-                    <span className="label">Carrier:</span>
-                    <span className="value">{shipmentFields.carrier || '—'}</span>
-                  </div>
-                  <div className="grid-row-item">
-                    <span className="label">Ship Date:</span>
-                    <span className="value">{shipmentFields.shipDate || '—'}</span>
-                  </div>
+                  {shipmentFields.trackingNumber && (
+                    <div className="grid-row-item">
+                      <span className="label">Tracking / PRO #:</span>
+                      <span className="value">{shipmentFields.trackingNumber}</span>
+                    </div>
+                  )}
+                  {shipmentFields.carrier && (
+                    <div className="grid-row-item">
+                      <span className="label">Carrier:</span>
+                      <span className="value">{shipmentFields.carrier}</span>
+                    </div>
+                  )}
+                  {shipmentFields.shipDate && (
+                    <div className="grid-row-item">
+                      <span className="label">Ship Date:</span>
+                      <span className="value">{shipmentFields.shipDate}</span>
+                    </div>
+                  )}
+                  {shipmentFields.deliveryDate && (
+                    <div className="grid-row-item">
+                      <span className="label">Delivery Date:</span>
+                      <span className="value">{shipmentFields.deliveryDate}</span>
+                    </div>
+                  )}
+                  {shipmentFields.origin && (
+                    <div className="grid-row-item">
+                      <span className="label">Origin:</span>
+                      <span className="value">{shipmentFields.origin}</span>
+                    </div>
+                  )}
+                  {shipmentFields.destination && (
+                    <div className="grid-row-item">
+                      <span className="label">Destination:</span>
+                      <span className="value">{shipmentFields.destination}</span>
+                    </div>
+                  )}
                 </div>
               </div>
             )}
@@ -496,7 +540,7 @@ export const InvoiceCard = ({ idx, group, data, isLoading, errorMsg, isSelected,
                       <th>#</th>
                       <th>Description</th>
                       <th>Qty</th>
-                      <th>Price</th>
+                      <th>Unit Price</th>
                       <th>Total</th>
                     </tr>
                   </thead>
@@ -504,10 +548,10 @@ export const InvoiceCard = ({ idx, group, data, isLoading, errorMsg, isSelected,
                     {lineItems.map((item, iIdx) => (
                       <tr key={iIdx}>
                         <td>{iIdx + 1}</td>
-                        <td>{item.description || item.itemDescription || item.name || 'Line Item'}</td>
+                        <td>{item.description || item.itemDescription || item.chargeDescription || item.name || 'Line Item'}</td>
                         <td>{item.quantity || item.qty || 1}</td>
                         <td>{item.unitPrice || item.price || item.rate || '—'}</td>
-                        <td style={{ fontWeight: '600' }}>{item.totalPrice || item.amount || item.total || '—'}</td>
+                        <td style={{ fontWeight: '600', color: '#1FC991' }}>{item.totalPrice || item.amount || item.total || '—'}</td>
                       </tr>
                     ))}
                   </tbody>
@@ -515,10 +559,18 @@ export const InvoiceCard = ({ idx, group, data, isLoading, errorMsg, isSelected,
               </div>
             )}
 
-            {/* Collapsible JSON */}
-            <details>
-              <summary>📄 View Full JSON Data</summary>
-              <pre className="json-content">{JSON.stringify(data, null, 2)}</pre>
+            {/* Confidence Scores if present */}
+            {data.confidenceScores && typeof data.confidenceScores === 'object' && (
+              <div className="card-section" style={{ fontSize: '12px', background: 'rgba(255,255,255,0.03)', padding: '8px 12px', borderRadius: '6px' }}>
+                <strong style={{ color: 'var(--text-muted, #94a3b8)' }}>Confidence Scores:</strong>{' '}
+                {Object.entries(data.confidenceScores).map(([k, v]) => `${k}: ${typeof v === 'number' ? Math.round(v * 100) + '%' : v}`).join(' · ')}
+              </div>
+            )}
+
+            {/* Collapsible Raw JSON Data */}
+            <details style={{ marginTop: '12px' }}>
+              <summary style={{ cursor: 'pointer', fontSize: '12px', color: 'var(--text-muted, #94a3b8)' }}>📄 View Raw Extracted JSON</summary>
+              <pre className="json-content" style={{ fontSize: '11px', marginTop: '6px' }}>{JSON.stringify(data, null, 2)}</pre>
             </details>
           </>
         )}
