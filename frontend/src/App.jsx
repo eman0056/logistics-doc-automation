@@ -1238,10 +1238,12 @@ function App() {
                 ))}
               </div>
               <div className={`editor-scroll-content ${activeSection.id === 'shipment' ? 'single-invoice-shipment-content' : ''}`}>
-                {processing && (
-                  <div className="mt-4">
-                    <ExtractionProcessingPanel invoiceIndex={0} pageStart={1} pageEnd={1} />
+                {(processing || (isEmpty && doc?.status !== 'FAILED')) ? (
+                  <div className="mt-2">
+                    <ExtractionProcessingPanel isSingleInvoice={true} />
                   </div>
+                ) : (
+                  renderFieldInputs()
                 )}
               </div>
             </div>

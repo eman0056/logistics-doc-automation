@@ -273,7 +273,7 @@ export const DocumentViewer = ({ docId }) => {
 };
 
 /* Component: ExtractionProcessingPanel (Production-Grade AI Document Processing waiting state) */
-export const ExtractionProcessingPanel = ({ invoiceIndex, pageStart, pageEnd }) => {
+export const ExtractionProcessingPanel = ({ invoiceIndex, pageStart, pageEnd, isSingleInvoice = false }) => {
   const [currentStep, setCurrentStep] = useState(1);
   const [progress, setProgress] = useState(25);
 
@@ -302,7 +302,12 @@ export const ExtractionProcessingPanel = ({ invoiceIndex, pageStart, pageEnd }) 
     };
   }, [invoiceIndex]);
 
-  const steps = [
+  const steps = isSingleInvoice ? [
+    { id: 1, label: 'Document uploaded', detail: 'Document received & queued for AI extraction' },
+    { id: 2, label: 'Reading invoice content', detail: 'Optical character recognition (OCR)' },
+    { id: 3, label: 'Extracting invoice data', detail: 'Analyzing fields, headers & line items' },
+    { id: 4, label: 'Preparing results', detail: 'Structuring JSON payload & schema validation' }
+  ] : [
     { id: 1, label: 'Document received', detail: 'Page isolated & sent to AI engine' },
     { id: 2, label: 'Reading invoice content', detail: 'Optical character recognition (OCR)' },
     { id: 3, label: 'Extracting invoice data', detail: 'Analyzing fields, headers & line items' },
@@ -326,7 +331,9 @@ export const ExtractionProcessingPanel = ({ invoiceIndex, pageStart, pageEnd }) 
         <div className="processing-title-section">
           <h3 className="processing-title">Extracting Invoice Data</h3>
           <p className="processing-subtitle">
-            AI is analyzing your document and preparing the extracted information.
+            {isSingleInvoice
+              ? 'AI is analyzing your invoice and preparing the extracted information.'
+              : 'AI is analyzing your document and preparing the extracted information.'}
           </p>
         </div>
 
@@ -341,7 +348,7 @@ export const ExtractionProcessingPanel = ({ invoiceIndex, pageStart, pageEnd }) 
             </div>
           </div>
           <div className="processing-bar-info">
-            <span>Invoice #{invoiceIndex !== undefined ? invoiceIndex + 1 : '1'} (Pages {pageStart || 1}{pageEnd && pageEnd !== pageStart ? `–${pageEnd}` : ''})</span>
+            <span>{isSingleInvoice ? 'Single Document Extraction' : `Invoice #${invoiceIndex !== undefined ? invoiceIndex + 1 : '1'} (Pages ${pageStart || 1}${pageEnd && pageEnd !== pageStart ? `–${pageEnd}` : ''})`}</span>
             <span className="processing-percent-text">{progress}%</span>
           </div>
         </div>
