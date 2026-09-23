@@ -52,39 +52,81 @@ const fetchJson = async (url, options = {}) => {
   return response;
 };
 
+const isRealInvoicePayload = (obj) => {
+  if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return false;
+  return Boolean(
+    obj.invoiceHeader ||
+    obj.shipmentDetails ||
+    obj.shipmentDetail ||
+    obj.chargeLineItems ||
+    obj.header ||
+    obj.invoiceNumber ||
+    obj.invoice_number ||
+    obj.invoiceNo ||
+    obj.invoiceId ||
+    obj.documentNumber ||
+    obj.shipperName ||
+    obj.vendorName ||
+    obj.consigneeName ||
+    obj.billToName ||
+    obj.totalAmountDue ||
+    obj.totalAmount
+  );
+};
+
 const parseStoredInvoiceData = (invoice) => {
   const unwrap = (value) => {
     let current = value;
     if (typeof current === 'string') {
       try { current = JSON.parse(current); } catch (error) { return {}; }
     }
-    if (current && typeof current === 'object' && !Array.isArray(current) && current.extractedData && typeof current.extractedData === 'object') {
-      return unwrap(current.extractedData);
+    if (!current || typeof current !== 'object' || Array.isArray(current)) return {};
+
+    if (current.extractedData) {
+      const inner = unwrap(current.extractedData);
+      if (isRealInvoicePayload(inner)) return inner;
     }
-    return current && typeof current === 'object' && !Array.isArray(current) ? current : {};
+    if (current.canonicalJson) {
+      const inner = unwrap(current.canonicalJson);
+      if (isRealInvoicePayload(inner)) return inner;
+    }
+    if (current.data) {
+      const inner = unwrap(current.data);
+      if (isRealInvoicePayload(inner)) return inner;
+    }
+    if (current.json) {
+      const inner = unwrap(current.json);
+      if (isRealInvoicePayload(inner)) return inner;
+    }
+
+    if (isRealInvoicePayload(current)) return current;
+    return {};
   };
 
-  const extractedData = unwrap(invoice?.extractedData);
-  if (Object.keys(extractedData).length > 0) return extractedData;
-  try {
-    const stored = invoice?.canonicalJson || invoice?.finalSubmittedData;
-    return unwrap(stored);
-  } catch (error) {
-    return {};
-  }
+  const fromExtracted = unwrap(invoice?.extractedData);
+  if (isRealInvoicePayload(fromExtracted)) return fromExtracted;
+
+  const fromCanonical = unwrap(invoice?.canonicalJson);
+  if (isRealInvoicePayload(fromCanonical)) return fromCanonical;
+
+  const fromFinal = unwrap(invoice?.finalSubmittedData);
+  if (isRealInvoicePayload(fromFinal)) return fromFinal;
+
+  return {};
 };
 
-const hasStoredInvoiceData = (invoice) => Object.keys(parseStoredInvoiceData(invoice)).length > 0;
+const hasStoredInvoiceData = (invoice) => isRealInvoicePayload(parseStoredInvoiceData(invoice));
 
 const getSingleInvoiceData = (document) => {
-  const invoice = document?.invoices?.[0];
+  if (!document) return {};
   const candidates = [
-    invoice,
+    document?.invoices?.[0],
     document?.extraction,
+    document,
   ];
   for (const candidate of candidates) {
     const data = parseStoredInvoiceData(candidate);
-    if (Object.keys(data).length > 0) return data;
+    if (isRealInvoicePayload(data)) return data;
   }
   return {};
 };

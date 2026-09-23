@@ -683,7 +683,7 @@ export const MultiInvoiceWorkspace = () => {
       const pageStart = group?.pageStart || (group?.pages ? group.pages[0] : 1);
       const pageEnd = group?.pageEnd || (group?.pages ? group.pages[1] : 1);
 
-      let res = await fetch(`${API}/process-invoice`, {
+      const res = await fetch(`${API}/process-invoice`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -694,20 +694,6 @@ export const MultiInvoiceWorkspace = () => {
           pageEnd
         })
       });
-
-      if (!res.ok) {
-        res = await fetch(`${API}/documents/${docId}/process-single-invoice/${index}`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            docId,
-            invoiceIndex: index,
-            pageStart,
-            pageEnd,
-            pages: [pageStart, pageEnd]
-          })
-        });
-      }
 
       const data = await res.json();
       

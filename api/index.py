@@ -204,7 +204,7 @@ def send_to_n8n_webhook(invoice_index, pages, base64_pdf, doc_id=None, raw_ocr_t
             headers={'Content-Type': 'application/json'},
             method='POST'
         )
-        with urllib.request.urlopen(req, timeout=60) as response:
+        with urllib.request.urlopen(req, timeout=120) as response:
             resp_body = response.read().decode('utf-8', errors='replace')
             if response.status != 200:
                 print(f"[n8n] ❌ Error: Status {response.status}")
