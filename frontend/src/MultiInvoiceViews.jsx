@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { apiGetJson, normalizeApiCacheUrl } from './dataCache.js';
 
 const API = '/api';
@@ -26,11 +26,14 @@ export const UploadMultiView = () => {
     selectedFiles.forEach((file) => formData.append('file', file));
 
     try {
-      const res = await fetch(`${API}/documents/upload-multi`, { method: 'POST', body: formData });
+      let res = await fetch(`${API}/upload-multi-invoice`, { method: 'POST', body: formData });
+      if (!res.ok) {
+        res = await fetch(`${API}/documents/upload-multi`, { method: 'POST', body: formData });
+      }
       const data = await res.json();
-      if (data.success && data.documentIds && data.documentIds.length > 0) {
-        setStatusText('Upload complete! Redirecting...');
-        const docId = data.documentIds[0];
+      const docId = data.docId || (data.documentIds && data.documentIds[0]);
+      if (data.success && docId) {
+        setStatusText('Upload complete! Displaying workspace...');
         window.location.assign(`/documents/${docId}/multi-workspace`);
       } else {
         alert(data.error || 'Upload failed');
@@ -48,7 +51,7 @@ export const UploadMultiView = () => {
         <div>
           <div className="eyebrow">Workflow</div>
           <h1 className="page-title">Multiple Invoices Upload</h1>
-          <p className="subtle-copy mt-2">Upload a single PDF containing multiple invoices. You will review and process each individually.</p>
+          <p className="subtle-copy mt-2">Upload a single PDF containing multiple invoices. You can select and process each invoice independently.</p>
         </div>
       </div>
       <div className="card upload-panel">
@@ -68,7 +71,7 @@ export const UploadMultiView = () => {
           />
           <div className="dropzone-icon">📥</div>
           <div className="dropzone-title">Select Multiple Invoice PDF</div>
-          <div className="dropzone-subtext">Must be a single PDF file containing multiple invoices</div>
+          <div className="dropzone-subtext">Must be a PDF file containing multiple invoices</div>
           {selectedFiles.length > 0 && <div className="file-chip">Selected: {selectedFiles[0].name}</div>}
         </div>
         <button className="primary-btn w-full mt-4" onClick={handleUpload} disabled={uploading}>
@@ -80,15 +83,490 @@ export const UploadMultiView = () => {
   );
 };
 
+// Helper to unwraps nested JSON strings or containers to extract real invoice object
+export const extractRealInvoiceObject = (raw) => {
+  if (!raw) return null;
+  let parsed = raw;
+
+  if (typeof parsed === 'string') {
+    try {
+      parsed = JSON.parse(parsed);
+    } catch (e) {
+      return null;
+    }
+  }
+
+  if (!parsed || typeof parsed !== 'object') return null;
+
+  if (parsed.extractedData) {
+    const inner = extractRealInvoiceObject(parsed.extractedData);
+    if (inner && (inner.invoiceHeader || inner.shipmentDetails || inner.shipmentDetail || inner.chargeLineItems || inner.header || inner.invoiceNumber)) {
+      return inner;
+    }
+  }
+
+  if (parsed.canonicalJson) {
+    const inner = extractRealInvoiceObject(parsed.canonicalJson);
+    if (inner && (inner.invoiceHeader || inner.shipmentDetails || inner.shipmentDetail || inner.chargeLineItems || inner.header || inner.invoiceNumber)) {
+      return inner;
+    }
+  }
+
+  if (parsed.data) {
+    const inner = extractRealInvoiceObject(parsed.data);
+    if (inner && (inner.invoiceHeader || inner.shipmentDetails || inner.shipmentDetail || inner.chargeLineItems || inner.header || inner.invoiceNumber)) {
+      return inner;
+    }
+  }
+
+  if (parsed.json) {
+    const inner = extractRealInvoiceObject(parsed.json);
+    if (inner && (inner.invoiceHeader || inner.shipmentDetails || inner.shipmentDetail || inner.chargeLineItems || inner.header || inner.invoiceNumber)) {
+      return inner;
+    }
+  }
+
+  if (parsed.invoiceHeader || parsed.shipmentDetails || parsed.shipmentDetail || parsed.chargeLineItems || parsed.header || parsed.invoiceNumber || parsed.invoice_number) {
+    return parsed;
+  }
+
+  return null;
+};
+
+// Data extractor helpers
+const getInvoiceHeaderFields = (data) => {
+  if (!data) return {};
+  const header = data.invoiceHeader || data.header || data;
+  return {
+    invoiceNumber: header.invoiceNumber || header.invoice_number || header.invoiceNo || header.invoice_no || header.invoiceId || header.documentNumber || null,
+    invoiceDate: header.invoiceDate || header.invoice_date || header.date || null,
+    dueDate: header.dueDate || header.due_date || null,
+    vendorName: header.vendorName || header.vendor_name || header.vendor || header.supplier || header.seller || header.shipperName || header.remitToCompanyName || null,
+    customerName: header.customerName || header.customer_name || header.billTo || header.buyer || header.consigneeName || header.billToName || null,
+    totalAmount: header.totalAmountDue || header.totalAmount || header.total_amount || header.total || header.amount || header.subtotalAmount || null,
+    currency: header.currency || header.currencyCode || '$',
+    paymentTerms: header.paymentTerms || header.payment_terms || null
+  };
+};
+
+const getShipmentDetailsFields = (data) => {
+  if (!data) return null;
+  let ship = data.shipmentDetails || data.shipmentDetail || data.shipment || data.shippingDetails;
+  if (Array.isArray(ship) && ship.length > 0) {
+    ship = ship[0];
+  }
+  if (!ship || typeof ship !== 'object') return null;
+  return {
+    trackingNumber: ship.trackingNumber || ship.tracking_number || ship.tracking || ship.proNumber || ship.mawbHawb || ship.mblNumber || ship.hblNumber || null,
+    carrier: ship.carrierName || ship.carrier || ship.carrierScacCode || ship.scac || null,
+    shipDate: ship.pickupDate || ship.shipDate || ship.ship_date || ship.departureDate || ship.dispatchDepartureDate || null,
+    deliveryDate: ship.deliveryArrivalDate || ship.deliveryDate || ship.delivery_date || ship.arrivalDate || null,
+    origin: ship.originPortLocation || ship.origin || ship.shipperAddress || ship.originCity || ship.freightDispatchPlaceOfReceipt || null,
+    destination: ship.destinationPortLocation || ship.destination || ship.consigneeAddress || ship.destCity || ship.freightFinalDeliveryPlaceOfDelivery || null
+  };
+};
+
+const getLineItems = (data) => {
+  if (!data) return [];
+  const direct = data.chargeLineItems || data.lineItems || data.line_items || data.items || data.charges;
+  if (Array.isArray(direct) && direct.length > 0) return direct;
+
+  const ship = data.shipmentDetails || data.shipmentDetail || data.shipment;
+  if (Array.isArray(ship)) {
+    const all = [];
+    ship.forEach(s => {
+      if (s && Array.isArray(s.chargeLineItems)) {
+        all.push(...s.chargeLineItems);
+      }
+    });
+    if (all.length > 0) return all;
+  } else if (ship && Array.isArray(ship.chargeLineItems)) {
+    return ship.chargeLineItems;
+  }
+  return [];
+};
+
+/* Component 1: InvoiceList (Left Sidebar Column 1) */
+export const InvoiceList = ({ invoiceGroups, selectedIndex, extractedData, processingStates, errorStates, onInvoiceClick }) => {
+  return (
+    <div className="multi-sidebar">
+      <div className="invoice-list-header">
+        <h2>Invoices</h2>
+        <span className="invoice-count">({invoiceGroups.length})</span>
+      </div>
+
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+        {invoiceGroups.length === 0 ? (
+          <div style={{ color: 'var(--text-muted, #94a3b8)', fontSize: '13px' }}>No invoices detected.</div>
+        ) : (
+          invoiceGroups.map((group, idx) => {
+            const isSelected = selectedIndex === idx;
+            const isDone = Boolean(extractedData[idx]);
+            const isLoading = Boolean(processingStates[idx]);
+            const isError = Boolean(errorStates[idx]);
+
+            let stateClass = 'ready';
+            let badgeSymbol = '☐';
+            let statusText = 'Not Processed';
+
+            if (isLoading) {
+              stateClass = 'loading';
+              badgeSymbol = '↻';
+              statusText = 'Processing';
+            } else if (isDone) {
+              stateClass = 'extracted';
+              badgeSymbol = '✓';
+              statusText = 'Completed';
+            } else if (isError) {
+              stateClass = 'error';
+              badgeSymbol = '⚠️';
+              statusText = 'Error';
+            }
+
+            return (
+              <div 
+                key={idx}
+                className={`invoice-item ${stateClass} ${isSelected ? 'selected' : ''}`}
+                onClick={() => onInvoiceClick(idx, group)}
+                data-index={idx}
+              >
+                <div className="invoice-item-content">
+                  <span className={`invoice-badge ${isLoading ? 'rotating' : ''}`}>{badgeSymbol}</span>
+                  <span className="invoice-name">
+                    Invoice {idx + 1}
+                    {group && (
+                      <span style={{ fontSize: '11px', color: 'var(--text-muted, #94a3b8)', marginLeft: '4px' }}>
+                        (Pages {group.pageStart}{group.pageEnd !== group.pageStart ? `\u2013${group.pageEnd}` : ''})
+                      </span>
+                    )}
+                  </span>
+                </div>
+                <span className="invoice-status-badge">{statusText}</span>
+              </div>
+            );
+          })
+        )}
+      </div>
+    </div>
+  );
+};
+
+/* Component 2: DocumentViewer (Center Panel Column 2) */
+export const DocumentViewer = ({ docId }) => {
+  return (
+    <div className="multi-viewer-panel">
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <div>
+          <h3 style={{ margin: 0, fontSize: '15px', fontWeight: '600', color: 'var(--text-primary, #f8fafc)' }}>Original Document</h3>
+          <p style={{ margin: '2px 0 0 0', fontSize: '12px', color: 'var(--text-muted, #94a3b8)' }}>Complete PDF (All pages visible)</p>
+        </div>
+      </div>
+      <div className="document-viewer-container">
+        <iframe 
+          className="pdf-viewer-iframe"
+          src={`${API}/documents/${docId}/file`}
+          title="Original Document"
+        />
+      </div>
+    </div>
+  );
+};
+
+/* Component: ExtractionProcessingPanel (Production-Grade AI Document Processing waiting state) */
+export const ExtractionProcessingPanel = ({ invoiceIndex, pageStart, pageEnd }) => {
+  const [currentStep, setCurrentStep] = useState(1);
+  const [progress, setProgress] = useState(25);
+
+  useEffect(() => {
+    setCurrentStep(1);
+    setProgress(25);
+
+    const t1 = setTimeout(() => {
+      setCurrentStep(2);
+      setProgress(52);
+    }, 1100);
+
+    const t2 = setTimeout(() => {
+      setCurrentStep(3);
+      setProgress(82);
+    }, 2600);
+
+    const t3 = setTimeout(() => {
+      setProgress(94);
+    }, 5500);
+
+    return () => {
+      clearTimeout(t1);
+      clearTimeout(t2);
+      clearTimeout(t3);
+    };
+  }, [invoiceIndex]);
+
+  const steps = [
+    { id: 1, label: 'Document received', detail: 'Page isolated & sent to AI engine' },
+    { id: 2, label: 'Reading invoice content', detail: 'Optical character recognition (OCR)' },
+    { id: 3, label: 'Extracting invoice data', detail: 'Analyzing fields, headers & line items' },
+    { id: 4, label: 'Preparing results', detail: 'Structuring JSON payload & schema validation' }
+  ];
+
+  return (
+    <div className="extraction-processing-card">
+      <div className="processing-card-header">
+        <div className="processing-badge">
+          <span className="processing-spark-icon">✨</span>
+          <span className="processing-badge-text">DOCUMENT AI</span>
+        </div>
+        <div className="processing-status-tag">
+          <span className="processing-live-dot" />
+          <span>Processing</span>
+        </div>
+      </div>
+
+      <div className="processing-card-body">
+        <div className="processing-title-section">
+          <h3 className="processing-title">Extracting Invoice Data</h3>
+          <p className="processing-subtitle">
+            AI is analyzing your document and preparing the extracted information.
+          </p>
+        </div>
+
+        {/* Subtle Animated Progress Bar */}
+        <div className="processing-bar-wrapper">
+          <div className="processing-bar-background">
+            <div 
+              className="processing-bar-fill"
+              style={{ width: `${progress}%` }}
+            >
+              <div className="processing-bar-shimmer" />
+            </div>
+          </div>
+          <div className="processing-bar-info">
+            <span>Invoice #{invoiceIndex !== undefined ? invoiceIndex + 1 : '1'} (Pages {pageStart || 1}{pageEnd && pageEnd !== pageStart ? `–${pageEnd}` : ''})</span>
+            <span className="processing-percent-text">{progress}%</span>
+          </div>
+        </div>
+
+        {/* Processing Steps */}
+        <div className="processing-steps-container">
+          {steps.map((step) => {
+            const isDone = step.id < currentStep;
+            const isActive = step.id === currentStep;
+            const isPending = step.id > currentStep;
+
+            return (
+              <div 
+                key={step.id}
+                className={`proc-step-row ${isDone ? 'is-done' : ''} ${isActive ? 'is-active' : ''} ${isPending ? 'is-pending' : ''}`}
+              >
+                <div className="proc-step-indicator">
+                  {isDone && (
+                    <span className="proc-icon proc-icon-check">✓</span>
+                  )}
+                  {isActive && (
+                    <span className="proc-icon proc-icon-dot">
+                      <span className="proc-dot-pulse" />
+                      ●
+                    </span>
+                  )}
+                  {isPending && (
+                    <span className="proc-icon proc-icon-circle">○</span>
+                  )}
+                </div>
+
+                <div className="proc-step-text">
+                  <div className="proc-step-title">{step.label}</div>
+                  <div className="proc-step-desc">{step.detail}</div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    </div>
+  );
+};
+
+/* Component 3: InvoiceCard (Single Card in Right Panel) */
+export const InvoiceCard = ({ idx, group, data, isLoading, errorMsg, isSelected, onRetry }) => {
+  if (isLoading) {
+    return (
+      <ExtractionProcessingPanel 
+        invoiceIndex={idx}
+        pageStart={group?.pageStart || (group?.pages ? group.pages[0] : 1)}
+        pageEnd={group?.pageEnd || (group?.pages ? group.pages[1] : 1)}
+      />
+    );
+  }
+
+  const headerFields = getInvoiceHeaderFields(data);
+  const shipmentFields = getShipmentDetailsFields(data);
+  const lineItems = getLineItems(data);
+
+  return (
+    <div 
+      id={`invoice-card-${idx}`}
+      className={`invoice-card ${isSelected ? 'selected-card' : ''} ${errorMsg ? 'error' : ''}`}
+      data-invoice-index={idx}
+    >
+      <div className="card-header">
+        <h3>
+          Invoice {idx + 1} (Pages {group?.pageStart}-{group?.pageEnd})
+          {isSelected && <span style={{ fontSize: '11px', background: 'var(--primary, #6366f1)', color: '#fff', padding: '2px 6px', borderRadius: '4px' }}>Active</span>}
+        </h3>
+        {data && !isLoading && <span className="card-status">✓ Extracted</span>}
+        {errorMsg && !isLoading && <span className="card-status error">⚠️ Error</span>}
+      </div>
+
+      <div className="card-content">
+        {/* Error Message & Retry */}
+        {errorMsg && !isLoading && (
+          <div className="error-message">
+            <p>Failed to process invoice: {errorMsg}</p>
+            <button className="retry-button" onClick={onRetry}>Retry</button>
+          </div>
+        )}
+
+        {/* Extracted Data Sections */}
+        {data && !isLoading && (
+          <>
+            {/* Header Section */}
+            <div className="card-section">
+              <h4>Invoice Header</h4>
+              <div className="section-grid">
+                <div className="grid-row-item">
+                  <span className="label">Invoice #:</span>
+                  <span className="value">{headerFields.invoiceNumber || '—'}</span>
+                </div>
+                <div className="grid-row-item">
+                  <span className="label">Date:</span>
+                  <span className="value">{headerFields.invoiceDate || '—'}</span>
+                </div>
+                <div className="grid-row-item">
+                  <span className="label">Total Amount:</span>
+                  <span className="value" style={{ color: '#1FC991' }}>{headerFields.totalAmount ? `${headerFields.currency} ${headerFields.totalAmount}` : '—'}</span>
+                </div>
+                <div className="grid-row-item">
+                  <span className="label">Vendor:</span>
+                  <span className="value">{headerFields.vendorName || '—'}</span>
+                </div>
+              </div>
+            </div>
+
+            {/* Shipment Section */}
+            {shipmentFields && (
+              <div className="card-section">
+                <h4>Shipment Details</h4>
+                <div className="section-grid">
+                  <div className="grid-row-item">
+                    <span className="label">Tracking #:</span>
+                    <span className="value">{shipmentFields.trackingNumber || '—'}</span>
+                  </div>
+                  <div className="grid-row-item">
+                    <span className="label">Carrier:</span>
+                    <span className="value">{shipmentFields.carrier || '—'}</span>
+                  </div>
+                  <div className="grid-row-item">
+                    <span className="label">Ship Date:</span>
+                    <span className="value">{shipmentFields.shipDate || '—'}</span>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* Line Items Table */}
+            {lineItems.length > 0 && (
+              <div className="card-section">
+                <h4>Charge Line Items ({lineItems.length})</h4>
+                <table className="line-items-table">
+                  <thead>
+                    <tr>
+                      <th>#</th>
+                      <th>Description</th>
+                      <th>Qty</th>
+                      <th>Price</th>
+                      <th>Total</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {lineItems.map((item, iIdx) => (
+                      <tr key={iIdx}>
+                        <td>{iIdx + 1}</td>
+                        <td>{item.description || item.itemDescription || item.name || 'Line Item'}</td>
+                        <td>{item.quantity || item.qty || 1}</td>
+                        <td>{item.unitPrice || item.price || item.rate || '—'}</td>
+                        <td style={{ fontWeight: '600' }}>{item.totalPrice || item.amount || item.total || '—'}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+
+            {/* Collapsible JSON */}
+            <details>
+              <summary>📄 View Full JSON Data</summary>
+              <pre className="json-content">{JSON.stringify(data, null, 2)}</pre>
+            </details>
+          </>
+        )}
+      </div>
+    </div>
+  );
+};
+
+/* Component 4: ExtractedDataPanel (Accumulative Right Panel Column 3) */
+export const ExtractedDataPanel = ({ selectedIndex, invoiceGroups, extractedData, processingStates, errorStates, onRetry }) => {
+  const hasData = selectedIndex !== null && extractedData[selectedIndex];
+  const isLoading = selectedIndex !== null && Boolean(processingStates[selectedIndex]);
+  const errorMsg = selectedIndex !== null ? errorStates[selectedIndex] : null;
+  const selectedGroup = selectedIndex !== null ? invoiceGroups[selectedIndex] : null;
+
+  return (
+    <div className="multi-extracted-panel">
+      {/* Empty Placeholder */}
+      {(selectedIndex === null || (!hasData && !isLoading && !errorMsg)) && (
+        <div className="extracted-data-empty">
+          <div className="empty-icon">📋</div>
+          <h3>Select an invoice to extract its data.</h3>
+        </div>
+      )}
+
+      {/* Production-Grade AI Processing Panel */}
+      {selectedIndex !== null && isLoading && (
+        <ExtractionProcessingPanel 
+          invoiceIndex={selectedIndex}
+          pageStart={selectedGroup?.pageStart || (selectedGroup?.pages ? selectedGroup.pages[0] : 1)}
+          pageEnd={selectedGroup?.pageEnd || (selectedGroup?.pages ? selectedGroup.pages[1] : 1)}
+        />
+      )}
+
+      {/* Extracted Invoice Card */}
+      {selectedIndex !== null && !isLoading && (hasData || errorMsg) && (
+        <InvoiceCard
+          idx={selectedIndex}
+          group={selectedGroup}
+          data={extractedData[selectedIndex]}
+          isLoading={false}
+          errorMsg={errorMsg}
+          isSelected={true}
+          onRetry={() => onRetry(selectedIndex, selectedGroup)}
+        />
+      )}
+    </div>
+  );
+};
+
+/* Main Layout Component: MultiInvoiceWorkspace */
 export const MultiInvoiceWorkspace = () => {
   const path = window.location.pathname;
   const docId = path.split('/')[2];
   
   const [invoiceGroups, setInvoiceGroups] = useState([]);
   const [selectedInvoiceIndex, setSelectedInvoiceIndex] = useState(null);
-  const [processing, setProcessing] = useState(false);
-  const [processingIndex, setProcessingIndex] = useState(null);
+
   const [extractedData, setExtractedData] = useState({});
+  const [processingStates, setProcessingStates] = useState({});
+  const [errorStates, setErrorStates] = useState({});
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -104,138 +582,108 @@ export const MultiInvoiceWorkspace = () => {
   }, [docId]);
 
   const processInvoice = async (index, group) => {
-    if (processing || extractedData[index]) return;
-    setProcessing(true);
-    setProcessingIndex(index);
+    if (processingStates[index] || extractedData[index]) return;
+
+    setProcessingStates(prev => ({ ...prev, [index]: true }));
+    setErrorStates(prev => ({ ...prev, [index]: null }));
+
     try {
-      const res = await fetch(`${API}/documents/${docId}/process-single-invoice/${index}`, {
+      const pageStart = group?.pageStart || (group?.pages ? group.pages[0] : 1);
+      const pageEnd = group?.pageEnd || (group?.pages ? group.pages[1] : 1);
+
+      let res = await fetch(`${API}/process-invoice`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          pageStart: group.pageStart,
-          pageEnd: group.pageEnd
+          docId,
+          invoiceIndex: index,
+          pages: [pageStart, pageEnd],
+          pageStart,
+          pageEnd
         })
       });
+
+      if (!res.ok) {
+        res = await fetch(`${API}/documents/${docId}/process-single-invoice/${index}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            docId,
+            invoiceIndex: index,
+            pageStart,
+            pageEnd,
+            pages: [pageStart, pageEnd]
+          })
+        });
+      }
+
       const data = await res.json();
-      if (data && !data.error) {
-        setExtractedData(prev => ({...prev, [index]: data}));
+      if (data && data.success && data.extractedData) {
+        setExtractedData(prev => ({ ...prev, [index]: data.extractedData }));
+      } else if (data && !data.error && !data.success && !data.extractedData) {
+        setExtractedData(prev => ({ ...prev, [index]: data }));
+      } else if (data && data.extractedData) {
+        setExtractedData(prev => ({ ...prev, [index]: data.extractedData }));
       } else if (data && data.error) {
-        alert("Processing error: " + data.error);
+        setErrorStates(prev => ({ ...prev, [index]: data.error }));
       } else {
-        setExtractedData(prev => ({...prev, [index]: data}));
+        setExtractedData(prev => ({ ...prev, [index]: data }));
       }
     } catch (e) {
-      alert("Error processing invoice: " + e.message);
+      setErrorStates(prev => ({ ...prev, [index]: e.message }));
     } finally {
-      setProcessing(false);
-      setProcessingIndex(null);
+      setProcessingStates(prev => ({ ...prev, [index]: false }));
     }
   };
 
   const handleInvoiceClick = (index, group) => {
     setSelectedInvoiceIndex(index);
-    if (!extractedData[index] && !processing) {
+
+    if (extractedData[index]) {
+      // Data already extracted, just scroll to its card
+      setTimeout(() => {
+        const cardElem = document.getElementById(`invoice-card-${index}`);
+        if (cardElem) {
+          cardElem.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        }
+      }, 50);
+    } else {
       processInvoice(index, group);
+      setTimeout(() => {
+        const cardElem = document.getElementById(`invoice-card-${index}`);
+        if (cardElem) {
+          cardElem.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        }
+      }, 100);
     }
   };
 
-  if (loading) return <main className="page"><div>Loading detected invoices...</div></main>;
-
-  const selectedGroup = selectedInvoiceIndex !== null ? invoiceGroups[selectedInvoiceIndex] : null;
+  if (loading) return <main className="page"><div style={{ padding: '2rem' }}>Loading detected invoices...</div></main>;
 
   return (
-    <main className="page" style={{ display: 'flex', gap: '1rem', height: 'calc(100vh - 80px)' }}>
-      {/* Sidebar */}
-      <div style={{ width: '300px', flexShrink: 0, overflowY: 'auto' }}>
-        <h2 style={{ fontSize: '1.25rem', marginBottom: '1rem' }}>Detected Invoices ({invoiceGroups.length})</h2>
-        {invoiceGroups.length === 0 ? (
-          <div style={{ color: '#6b7280', fontSize: '0.9rem' }}>No invoice groups detected.</div>
-        ) : (
-          invoiceGroups.map((group, idx) => {
-            const isSelected = selectedInvoiceIndex === idx;
-            const isDone = Boolean(extractedData[idx]);
-            const isProcessingThis = processing && processingIndex === idx;
+    <main className="page" style={{ padding: '0', height: 'calc(100vh - 80px)', overflow: 'hidden' }}>
+      <div className="multi-workspace-shell">
+        <InvoiceList 
+          invoiceGroups={invoiceGroups}
+          selectedIndex={selectedInvoiceIndex}
+          extractedData={extractedData}
+          processingStates={processingStates}
+          errorStates={errorStates}
+          onInvoiceClick={handleInvoiceClick}
+        />
+        <DocumentViewer docId={docId} />
+        <ExtractedDataPanel 
 
-            return (
-              <div 
-                key={idx}
-                onClick={() => handleInvoiceClick(idx, group)}
-                style={{ 
-                  padding: '1rem', 
-                  marginBottom: '0.5rem',
-                  borderRadius: '8px',
-                  cursor: 'pointer',
-                  border: isSelected ? '2px solid #0B8FD3' : '1px solid #dfe7f0',
-                  backgroundColor: isSelected ? '#f0f9ff' : '#fff',
-                  transition: 'all 0.2s ease'
-                }}
-              >
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                  <strong>Invoice {idx + 1}</strong>
-                  {isDone && <span style={{ color: 'green', fontSize: '0.8rem', fontWeight: 'bold' }}>✓ Processed</span>}
-                  {isProcessingThis && <span style={{ color: '#d97706', fontSize: '0.8rem', fontWeight: 'bold' }}>⏳ Processing...</span>}
-                </div>
-                <div style={{ fontSize: '0.85rem', color: '#6b7280', marginTop: '4px' }}>
-                  Pages {group.pageStart} - {group.pageEnd}
-                </div>
-              </div>
-            );
-          })
-        )}
-      </div>
-
-      {/* Main Content */}
-      <div style={{ flexGrow: 1, display: 'flex', flexDirection: 'column', gap: '1rem', overflowY: 'auto' }}>
-        {selectedGroup ? (
-          <>
-            <div className="card" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <div>
-                <h3 style={{ margin: 0 }}>Invoice {selectedInvoiceIndex + 1} Details</h3>
-                <div style={{ fontSize: '0.85rem', color: '#6b7280' }}>Pages {selectedGroup.pageStart} - {selectedGroup.pageEnd}</div>
-              </div>
-              <button 
-                className="primary-btn" 
-                onClick={() => processInvoice(selectedInvoiceIndex, selectedGroup)}
-                disabled={processing || Boolean(extractedData[selectedInvoiceIndex])}
-              >
-                {processing && processingIndex === selectedInvoiceIndex 
-                  ? 'Processing...' 
-                  : extractedData[selectedInvoiceIndex] 
-                  ? 'Processed' 
-                  : 'Run OCR & AI Extraction'}
-              </button>
-            </div>
-
-            {/* Extracted Data Display */}
-            {extractedData[selectedInvoiceIndex] && (
-              <div className="card" style={{ background: '#f8fafc' }}>
-                <h4>Extracted JSON for Invoice {selectedInvoiceIndex + 1}</h4>
-                <pre style={{ fontSize: '0.8rem', overflowX: 'auto', background: '#1e293b', color: '#f8fafc', padding: '1rem', borderRadius: '6px' }}>
-                  {JSON.stringify(extractedData[selectedInvoiceIndex], null, 2)}
-                </pre>
-              </div>
-            )}
-          </>
-        ) : (
-          <div className="card" style={{ background: '#f9fafb', padding: '1rem', borderLeft: '4px solid #0B8FD3' }}>
-            <h4 style={{ margin: 0 }}>Select an Invoice</h4>
-            <p style={{ margin: '0.5rem 0 0 0', fontSize: '0.85rem', color: '#6b7280' }}>
-              Click an invoice from the sidebar to trigger OCR and OpenAI extraction for that specific invoice.
-            </p>
-          </div>
-        )}
-
-        {/* Original Document PDF (Always visible) */}
-        <div className="card" style={{ flexGrow: 1, display: 'flex', flexDirection: 'column', minHeight: '500px' }}>
-          <h4>Original Document</h4>
-          <p style={{ fontSize: '0.8rem', color: '#6b7280', margin: '0 0 0.5rem 0' }}>The complete original PDF remains unmodified and displays all pages.</p>
-          <iframe 
-            src={`${API}/documents/${docId}/file`}
-            style={{ width: '100%', height: '100%', minHeight: '500px', border: 'none', borderRadius: '4px' }}
-            title="Original Document"
-          />
-        </div>
+          invoiceGroups={invoiceGroups}
+          extractedData={extractedData}
+          processingStates={processingStates}
+          errorStates={errorStates}
+          selectedIndex={selectedInvoiceIndex}
+          onRetry={processInvoice}
+        />
       </div>
     </main>
   );
 };
+
+

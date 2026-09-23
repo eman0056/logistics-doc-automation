@@ -56,6 +56,21 @@ def detect_invoice_groups(file_bytes, file_name=""):
     if not pages:
         return [{"invoiceIndex": 0, "invoiceCount": 1, "pageStart": 1, "pageEnd": 1, "rawOcrText": ""}]
 
+    # If ALL pages are empty (image/scanned PDF — pypdf extracts no text),
+    # fall back to 1 invoice per page so the sidebar shows the correct count.
+    if all(not page_text.strip() for page_text in pages):
+        invoice_count = len(pages)
+        return [
+            {
+                "invoiceIndex": index,
+                "invoiceCount": invoice_count,
+                "pageStart": index + 1,
+                "pageEnd": index + 1,
+                "rawOcrText": "",
+            }
+            for index in range(invoice_count)
+        ]
+
     groups = []
     for page_index, page_text in enumerate(pages):
         boundaries = list(INVOICE_BOUNDARY.finditer(page_text))

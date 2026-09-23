@@ -5,7 +5,7 @@
     {
       "parameters": {
         "httpMethod": "POST",
-        "path": "multi-invoice-processing-v2",
+        "path": "cfc18821-b562-4b0f-8d34-457f83e03f2e",
         "responseMode": "lastNode",
         "options": {}
       },
@@ -16,12 +16,21 @@
     },
     {
       "parameters": {
-        "jsCode": "const webhook = $node['Webhook Trigger'].json.body || {};\nconst fileBase64 = webhook.fileBase64;\nif (!fileBase64) { throw new Error('Webhook payload does not contain fileBase64'); }\n\nreturn {\n  json: { ...webhook },\n  binary: {\n    data: {\n      data: fileBase64,\n      mimeType: 'application/pdf',\n      fileName: webhook.fileName || 'document.pdf'\n    }\n  }\n};"
+        "jsCode": "const webhook = $node['Webhook Trigger'].json.body || $node['Webhook Trigger'].json || {};\nconst fileBase64 = webhook.fileBase64 || webhook.pdfBase64;\nif (!fileBase64) { throw new Error('Webhook payload does not contain fileBase64/pdfBase64'); }\n\nreturn {\n  json: { ...webhook },\n  binary: {\n    data: {\n      data: fileBase64,\n      mimeType: 'application/pdf',\n      fileName: webhook.fileName || ('invoice-' + (webhook.invoiceIndex || 0) + '.pdf')\n    }\n  }\n};"
       },
-      "name": "Code in JavaScript1",
+      "name": "Prepare PDF Binary",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [200, 0]
+      "position": [220, 0]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Use rawOcrText from backend payload if available, otherwise fall back to OCR.space response\nconst webhookData = $node['Webhook Trigger'].json.body || $node['Webhook Trigger'].json || {};\nconst preExtractedText = webhookData.rawOcrText || '';\n\nif (preExtractedText && preExtractedText.trim().length > 20) {\n  // Backend already extracted text - skip OCR.space call\n  return [{ json: { ocrText: preExtractedText.trim(), usedBackendOcr: true } }];\n}\n\n// Try to get OCR.space response\nlet ocrText = '';\ntry {\n  const ocrResponse = $input.first().json;\n  ocrText = (ocrResponse.ParsedResults && ocrResponse.ParsedResults[0]) ? ocrResponse.ParsedResults[0].ParsedText : '';\n} catch(e) {}\n\nreturn [{ json: { ocrText: ocrText || preExtractedText, usedBackendOcr: false } }];"
+      },
+      "name": "Merge OCR Text",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [640, 0]
     },
     {
       "parameters": {
@@ -30,7 +39,7 @@
         "sendHeaders": true,
         "headerParameters": {
           "parameters": [
-            { "name": "apikey", "value": "={{ $env.OCR_SPACE_API_KEY }}" }
+            { "name": "apikey", "value": "={{ $env.OCR_SPACE_API_KEY || 'helloworld' }}" }
           ]
         },
         "sendBody": true,
@@ -51,16 +60,7 @@
       "name": "OCR.space Request",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.3,
-      "position": [400, 0]
-    },
-    {
-      "parameters": {
-        "jsCode": "const ocrResponse = $input.first().json;\nconst parsedText = ocrResponse.ParsedResults && ocrResponse.ParsedResults[0] ? ocrResponse.ParsedResults[0].ParsedText : '';\nreturn [{ json: { ocrText: parsedText } }];"
-      },
-      "name": "Code in JavaScript",
-      "type": "n8n-nodes-base.code",
-      "typeVersion": 2,
-      "position": [600, 0]
+      "position": [440, 0]
     },
     {
       "parameters": {
@@ -73,7 +73,7 @@
       "name": "AI Agent",
       "type": "@n8n/n8n-nodes-langchain.agent",
       "typeVersion": 3.1,
-      "position": [800, 0]
+      "position": [860, 0]
     },
     {
       "parameters": {
@@ -89,7 +89,7 @@
       "name": "OpenAI Chat Model",
       "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
       "typeVersion": 1.3,
-      "position": [800, 200],
+      "position": [860, 200],
       "credentials": {
         "openAiApi": {
           "id": "1OWba8Ms8tjRgifr",
@@ -99,32 +99,70 @@
     },
     {
       "parameters": {
-        "jsCode": "return $input.all().map((item, index) => {\n  const response = item.json;\n  let claudeContent = '';\n  if (response.content?.[0]?.text) {\n    claudeContent = response.content[0].text;\n  } else if (typeof response.output === 'string') {\n    claudeContent = response.output;\n  }\n  claudeContent = String(claudeContent)\n    .trim()\n    .replace(/^```json\\s*/i, '')\n    .replace(/^```\\s*/i, '')\n    .replace(/\\s*```$/i, '')\n    .trim();\n  let extractedData = {};\n  try {\n    extractedData = JSON.parse(claudeContent);\n  } catch (error) {\n    try {\n      const firstBrace = claudeContent.indexOf('{');\n      const lastBrace = claudeContent.lastIndexOf('}');\n      if (firstBrace !== -1 && lastBrace !== -1) {\n        const jsonString = claudeContent.substring(firstBrace, lastBrace + 1);\n        extractedData = JSON.parse(jsonString);\n      }\n    } catch (secondError) {\n      extractedData = {};\n    }\n  }\n  const webhookBody = $node['Webhook Trigger'].json.body || {};\n  return {\n    json: {\n      invoiceId: webhookBody.documentId + '-invoice-' + webhookBody.invoiceIndex,\n      invoiceIndex: webhookBody.invoiceIndex,\n      invoiceCount: 1,\n      pageStart: webhookBody.pageStart,\n      pageEnd: webhookBody.pageEnd,\n      rawOcrText: $node['Code in JavaScript'].json.ocrText,\n      extractedData,\n      confidenceScores: { invoiceNumber: 0.98, totalAmount: 0.98 },\n      overallConfidence: 0.96\n    }\n  };\n});"
+        "jsCode": "return $input.all().map((item, index) => {\n  const response = item.json;\n  let aiContent = '';\n  if (response.content?.[0]?.text) {\n    aiContent = response.content[0].text;\n  } else if (typeof response.output === 'string') {\n    aiContent = response.output;\n  } else if (typeof response.text === 'string') {\n    aiContent = response.text;\n  }\n  aiContent = String(aiContent)\n    .trim()\n    .replace(/^```json\\s*/i, '')\n    .replace(/^```\\s*/i, '')\n    .replace(/\\s*```$/i, '')\n    .trim();\n  let extractedData = {};\n  try {\n    extractedData = JSON.parse(aiContent);\n  } catch (error) {\n    try {\n      const firstBrace = aiContent.indexOf('{');\n      const lastBrace = aiContent.lastIndexOf('}');\n      if (firstBrace !== -1 && lastBrace !== -1) {\n        extractedData = JSON.parse(aiContent.substring(firstBrace, lastBrace + 1));\n      }\n    } catch (secondError) {\n      extractedData = {};\n    }\n  }\n  const webhookBody = $node['Webhook Trigger'].json.body || $node['Webhook Trigger'].json || {};\n  const ocrNode = $node['Merge OCR Text']?.json || {};\n  const documentId = webhookBody.documentId || webhookBody.docId || 'unknown';\n  const invoiceIndex = Number(webhookBody.invoiceIndex ?? item.json?.invoiceIndex ?? index);\n  const invoiceCount = Number(webhookBody.invoiceCount ?? item.json?.invoiceCount ?? 1);\n  const pageStart = webhookBody.pageStart ?? item.json?.pageStart ?? 1;\n  const pageEnd = webhookBody.pageEnd ?? item.json?.pageEnd ?? 1;\n  const invoiceId = webhookBody.invoiceId || (documentId + '-invoice-' + (invoiceIndex + 1));\n\n  let publicApiBase = 'https://logistics-doc-automation.vercel.app';\n  if (typeof process !== 'undefined' && process.env && process.env.APP_BASE_URL) {\n    publicApiBase = process.env.APP_BASE_URL.replace(/\\/+$/, '');\n  } else if (webhookBody.callbackUrl && !webhookBody.callbackUrl.includes('localhost') && !webhookBody.callbackUrl.includes('127.0.0.1')) {\n    const match = webhookBody.callbackUrl.match(/^(https?:\\/\\/[^\\/]+)/);\n    if (match) {\n      publicApiBase = match[1];\n    }\n  }\n  const dynamicCallbackUrl = publicApiBase + '/api/documents/' + documentId + '/extraction/callback';\n\n  return {\n    json: {\n      invoiceId,\n      invoiceIndex,\n      invoiceCount,\n      pageStart,\n      pageEnd,\n      documentId,\n      rawOcrText: ocrNode.ocrText || webhookBody.rawOcrText || '',\n      extractedData,\n      callbackUrl: dynamicCallbackUrl,\n      confidenceScores: { invoiceNumber: 0.95, totalAmount: 0.95 },\n      overallConfidence: 0.95\n    }\n  };\n});"
       },
-      "name": "Parse OpenAI Response",
+      "name": "Parse AI Response",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [1050, 0]
+      "position": [1100, 0]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $json.callbackUrl }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "json",
+        "body": "={{ JSON.stringify({ invoiceId: $json.invoiceId, invoiceIndex: $json.invoiceIndex, invoiceCount: $json.invoiceCount, pageStart: $json.pageStart, pageEnd: $json.pageEnd, rawOcrText: $json.rawOcrText, extractedData: $json.extractedData, canonicalJson: $json.extractedData, confidenceScores: $json.confidenceScores, overallConfidence: $json.overallConfidence }) }}",
+        "options": {
+          "timeout": 30000,
+          "ignore4xxErrors": true
+        }
+      },
+      "name": "Store Invoice via Callback",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [1320, 0]
+    },
+    {
+      "parameters": {
+        "jsCode": "const parsed = $node['Parse AI Response'].json;\nreturn [{\n  json: {\n    success: true,\n    invoiceIndex: parsed.invoiceIndex,\n    invoiceCount: parsed.invoiceCount,\n    invoiceId: parsed.invoiceId,\n    pageStart: parsed.pageStart,\n    pageEnd: parsed.pageEnd,\n    extractedData: parsed.extractedData,\n    rawOcrText: parsed.rawOcrText,\n    confidenceScores: parsed.confidenceScores,\n    overallConfidence: parsed.overallConfidence\n  }\n}];"
+      },
+      "name": "Final Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1540, 0]
     }
   ],
   "connections": {
     "Webhook Trigger": {
-      "main": [[{ "node": "Code in JavaScript1", "type": "main", "index": 0 }]]
+      "main": [[{ "node": "Prepare PDF Binary", "type": "main", "index": 0 }]]
     },
-    "Code in JavaScript1": {
+    "Prepare PDF Binary": {
       "main": [[{ "node": "OCR.space Request", "type": "main", "index": 0 }]]
     },
     "OCR.space Request": {
-      "main": [[{ "node": "Code in JavaScript", "type": "main", "index": 0 }]]
+      "main": [[{ "node": "Merge OCR Text", "type": "main", "index": 0 }]]
     },
-    "Code in JavaScript": {
+    "Merge OCR Text": {
       "main": [[{ "node": "AI Agent", "type": "main", "index": 0 }]]
     },
     "AI Agent": {
-      "main": [[{ "node": "Parse OpenAI Response", "type": "main", "index": 0 }]]
+      "main": [[{ "node": "Parse AI Response", "type": "main", "index": 0 }]]
     },
     "OpenAI Chat Model": {
       "ai_languageModel": [[{ "node": "AI Agent", "type": "ai_languageModel", "index": 0 }]]
+    },
+    "Parse AI Response": {
+      "main": [[{ "node": "Store Invoice via Callback", "type": "main", "index": 0 }]]
+    },
+    "Store Invoice via Callback": {
+      "main": [[{ "node": "Final Response", "type": "main", "index": 0 }]]
     }
   }
 }

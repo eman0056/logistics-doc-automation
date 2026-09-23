@@ -41,6 +41,194 @@ async def global_exception_handler(request: Request, exc: Exception):
 SAVE_APPROVED_WEBHOOK_URL = "https://n8n.provelopers.net/webhook/e7761187-ad68-4fa4-a8e8-87f6eee47314"
 SINGLE_INVOICE_WEBHOOK_URL = "https://n8n.provelopers.net/webhook/726784a2-239a-4a6d-a837-85828f4b2ca2"
 MULTI_INVOICE_WEBHOOK_URL = "https://n8n.provelopers.net/webhook/cfc18821-b562-4b0f-8d34-457f83e03f2e"
+
+def load_environment():
+    """Load environment variables from .env and .env.local into os.environ"""
+    for env_name in [".env", ".env.local"]:
+        env_file = os.path.join(BASE_DIR, env_name)
+        if os.path.exists(env_file):
+            with open(env_file, "r", encoding="utf-8") as ef:
+                for line in ef:
+                    line = line.strip()
+                    if line and not line.startswith("#") and "=" in line:
+                        k, v = line.split("=", 1)
+                        k = k.strip()
+                        v = v.strip().strip('"').strip("'")
+                        if k:
+                            os.environ[k] = v
+
+load_environment()
+
+def extract_invoice_pages(pdf_source, start_page, end_page):
+    """
+    Extract ONLY specific pages from PDF (1-indexed start_page and end_page)
+    """
+    try:
+        try:
+            from pypdf import PdfReader, PdfWriter
+        except ImportError:
+            from PyPDF2 import PdfReader, PdfWriter
+        from io import BytesIO
+
+        if isinstance(pdf_source, (bytes, bytearray)):
+            pdf_reader = PdfReader(BytesIO(pdf_source))
+        elif isinstance(pdf_source, BytesIO):
+            pdf_reader = PdfReader(pdf_source)
+        else:
+            pdf_reader = PdfReader(pdf_source)
+
+        total_pages = len(pdf_reader.pages)
+        start_page = int(start_page)
+        end_page = int(end_page)
+
+        if start_page < 1 or end_page > total_pages or start_page > end_page:
+            return {
+                "success": False,
+                "error": f"Invalid page range: [{start_page}, {end_page}]. Total pages: {total_pages}"
+            }
+
+        pdf_writer = PdfWriter()
+        for page_num in range(start_page - 1, end_page):
+            pdf_writer.add_page(pdf_reader.pages[page_num])
+
+        output = BytesIO()
+        pdf_writer.write(output)
+        output.seek(0)
+        pdf_bytes = output.getvalue()
+        base64_encoded = base64.b64encode(pdf_bytes).decode('utf-8')
+
+        return {
+            "success": True,
+            "base64": base64_encoded,
+            "pages_extracted": end_page - start_page + 1,
+            "file_size": len(pdf_bytes)
+        }
+    except Exception as e:
+        return {
+            "success": False,
+            "error": str(e)
+        }
+
+def extract_text_from_pdf_pages(pdf_source, start_page, end_page):
+    """
+    Extract plain text from specific pages of a PDF (1-indexed).
+    Returns the concatenated text string, or empty string on failure.
+    """
+    try:
+        try:
+            from pypdf import PdfReader
+        except ImportError:
+            from PyPDF2 import PdfReader
+        from io import BytesIO
+
+        if isinstance(pdf_source, (bytes, bytearray)):
+            pdf_reader = PdfReader(BytesIO(pdf_source))
+        elif isinstance(pdf_source, BytesIO):
+            pdf_reader = PdfReader(pdf_source)
+        else:
+            pdf_reader = PdfReader(pdf_source)
+
+        start_page = max(1, int(start_page))
+        end_page = min(len(pdf_reader.pages), int(end_page))
+        texts = []
+        for page_num in range(start_page - 1, end_page):
+            try:
+                text = pdf_reader.pages[page_num].extract_text() or ""
+                texts.append(text)
+            except Exception:
+                pass
+        return "\n".join(texts).strip()
+    except Exception:
+        return ""
+
+def send_to_n8n_webhook(invoice_index, pages, base64_pdf, doc_id=None, raw_ocr_text=None, file_bytes=None, page_start_for_ocr=None, page_end_for_ocr=None):
+    """
+    Send isolated invoice payload to n8n webhook
+    """
+    webhook_url = os.getenv('MULTI_INVOICE_N8N_WEBHOOK_URL') or os.getenv('N8N_WEBHOOK_URL') or MULTI_INVOICE_WEBHOOK_URL
+    if not webhook_url:
+        return {
+            "success": False,
+            "error": "MULTI_INVOICE_N8N_WEBHOOK_URL not set in environment"
+        }
+
+    page_start = pages[0] if isinstance(pages, (list, tuple)) and len(pages) > 0 else 1
+    page_end = pages[1] if isinstance(pages, (list, tuple)) and len(pages) > 1 else page_start
+
+    # Extract text from the isolated PDF pages for n8n LLM processing
+    if raw_ocr_text is None:
+        if file_bytes:
+            raw_ocr_text = extract_text_from_pdf_pages(
+                file_bytes,
+                page_start_for_ocr if page_start_for_ocr is not None else page_start,
+                page_end_for_ocr if page_end_for_ocr is not None else page_end
+            )
+        else:
+            try:
+                import base64 as _b64
+                raw_ocr_text = extract_text_from_pdf_pages(
+                    _b64.b64decode(base64_pdf),
+                    1,
+                    page_end - page_start + 1
+                )
+            except Exception:
+                raw_ocr_text = ""
+
+    # Build callback URL so n8n can POST extracted data back to us
+    app_base_url = os.getenv('APP_BASE_URL', 'https://logistics-doc-automation.vercel.app').rstrip('/')
+    callback_url = f"{app_base_url}/api/documents/{doc_id}/extraction/callback"
+
+    payload = {
+        "invoiceIndex": invoice_index,
+        "invoiceId": f"{doc_id}-invoice-{invoice_index}",
+        "pages": [page_start, page_end],
+        "pageStart": page_start,
+        "pageEnd": page_end,
+        "pdfBase64": base64_pdf,
+        "fileBase64": base64_pdf,
+        "documentId": doc_id,
+        "docId": doc_id,
+        "rawOcrText": raw_ocr_text,
+        "callbackUrl": callback_url,
+        "timestamp": datetime.now().isoformat()
+    }
+
+    print(f"[n8n] Sending Invoice {invoice_index} (pages {page_start}-{page_end}) to webhook: {webhook_url}")
+
+    try:
+        import urllib.request
+        req = urllib.request.Request(
+            webhook_url,
+            data=json.dumps(payload).encode('utf-8'),
+            headers={'Content-Type': 'application/json'},
+            method='POST'
+        )
+        with urllib.request.urlopen(req, timeout=60) as response:
+            resp_body = response.read().decode('utf-8', errors='replace')
+            if response.status != 200:
+                print(f"[n8n] ❌ Error: Status {response.status}")
+                return {
+                    "success": False,
+                    "error": f"n8n returned status {response.status}",
+                    "response": resp_body
+                }
+            try:
+                extracted_data = json.loads(resp_body)
+            except Exception:
+                extracted_data = {"rawResponse": resp_body}
+
+            print(f"[n8n] ✅ Invoice {invoice_index} processed successfully")
+            return {
+                "success": True,
+                "extractedData": extracted_data
+            }
+    except Exception as e:
+        print(f"[n8n] ❌ Connection error: {e}")
+        return {
+            "success": False,
+            "error": f"Cannot connect to n8n webhook: {e}"
+        }
+
 # On Vercel, filesystem is read-only except /tmp
 if os.getenv("VERCEL"):
     DB_PATH = "/tmp/dev.db"
@@ -1832,26 +2020,41 @@ def detect_invoices(doc_id: str):
     except Exception as e:
         return JSONResponse({"error": str(e)}, status_code=500)
 
-@app.post("/api/documents/{doc_id}/process-single-invoice/{index_str}")
-async def process_single_invoice(doc_id: str, index_str: str, request: Request):
+@app.get("/api/config-check")
+@app.get("/api/config")
+def config_check():
+    webhook_url = os.getenv('MULTI_INVOICE_N8N_WEBHOOK_URL') or os.getenv('N8N_WEBHOOK_URL') or MULTI_INVOICE_WEBHOOK_URL
+    pypdf_ok = False
     try:
-        invoice_index = int(index_str)
-    except ValueError:
-        return JSONResponse({"error": "Invalid index"}, status_code=400)
+        from pypdf import PdfReader
+        pypdf_ok = True
+    except ImportError:
+        try:
+            from PyPDF2 import PdfReader
+            pypdf_ok = True
+        except ImportError:
+            pypdf_ok = False
 
-    body = await request.json()
-    page_start = body.get('pageStart')
-    page_end = body.get('pageEnd')
-    if not page_start or not page_end:
-        return JSONResponse({"error": "Missing page ranges"}, status_code=400)
+    return {
+        "n8nWebhookConfigured": bool(webhook_url),
+        "n8nWebhookUrl": webhook_url if webhook_url else "NOT SET ❌",
+        "pythonVersion": sys.version.split()[0],
+        "requiredLibraries": {
+            "PyPDF2": "✅" if pypdf_ok else "❌",
+            "pypdf": "✅" if pypdf_ok else "❌",
+            "requests": "✅",
+            "flask": "✅"
+        }
+    }
 
+def _internal_process_invoice(doc_id: str, invoice_index: int, page_start: int, page_end: int):
     conn = get_db()
     cursor = execute_query(conn, "SELECT fileData, storagePath, fileName FROM Document WHERE id = ?", (doc_id,))
     row = cursor.fetchone()
     conn.close()
 
     if not row:
-        return JSONResponse({"error": "Document not found"}, status_code=404)
+        return JSONResponse({"success": False, "error": f"PDF file not found: {doc_id}"}, status_code=404)
 
     file_data_b64, storage_path, file_name = row
     file_bytes = None
@@ -1866,61 +2069,77 @@ async def process_single_invoice(doc_id: str, index_str: str, request: Request):
                 file_bytes = f.read()
 
     if not file_bytes:
-        return JSONResponse({"error": "File data unavailable"}, status_code=404)
+        return JSONResponse({"success": False, "error": f"PDF file not found: {doc_id}"}, status_code=404)
+
+    print(f"[Backend] Processing Invoice {invoice_index} (pages {page_start}-{page_end})")
 
     ext = os.path.splitext(file_name or "")[1].lower()
-    extracted_file_bytes = b""
-
     if ext == ".pdf" or not ext:
-        try:
-            from pypdf import PdfReader, PdfWriter
-            import io
-            reader = PdfReader(io.BytesIO(file_bytes))
-            writer = PdfWriter()
-            for i in range(page_start - 1, page_end):
-                if i < len(reader.pages):
-                    writer.add_page(reader.pages[i])
-            out_stream = io.BytesIO()
-            writer.write(out_stream)
-            extracted_file_bytes = out_stream.getvalue()
-        except Exception as e:
-            return JSONResponse({"error": f"PDF split failed: {e}"}, status_code=500)
+        extraction = extract_invoice_pages(file_bytes, page_start, page_end)
+        if not extraction["success"]:
+            return JSONResponse({"success": False, "error": extraction["error"]}, status_code=400)
+        base64_pdf = extraction["base64"]
+        print(f"[Backend] ✅ Extracted pages, size: {extraction['file_size']} bytes")
     else:
-        extracted_file_bytes = file_bytes
+        import base64
+        base64_pdf = base64.b64encode(file_bytes).decode('utf-8')
 
-    multi_webhook_url = os.getenv("MULTI_INVOICE_N8N_WEBHOOK_URL", MULTI_INVOICE_WEBHOOK_URL)
-    env_file = os.path.join(BASE_DIR, ".env.local")
-    if os.path.exists(env_file):
-        with open(env_file, "r") as ef:
-            for line in ef:
-                if line.startswith("MULTI_INVOICE_N8N_WEBHOOK_URL="):
-                    multi_webhook_url = line.split("=", 1)[1].strip().strip('"')
+    webhook_result = send_to_n8n_webhook(
+        invoice_index, [page_start, page_end], base64_pdf, doc_id=doc_id,
+        file_bytes=file_bytes, page_start_for_ocr=page_start, page_end_for_ocr=page_end
+    )
+    if not webhook_result["success"]:
+        return JSONResponse({"success": False, "error": webhook_result["error"]}, status_code=500)
 
-    payload = {
-        "documentId": doc_id,
+    extracted_data = webhook_result["extractedData"]
+    return {
+        "success": True,
         "invoiceIndex": invoice_index,
-        "fileName": f"invoice_{invoice_index}_{file_name}",
-        "fileBase64": base64.b64encode(extracted_file_bytes).decode('ascii'),
-        "pageStart": page_start,
-        "pageEnd": page_end
+        "extractedData": extracted_data
     }
 
-    import urllib.request
-    req = urllib.request.Request(
-        multi_webhook_url,
-        data=json.dumps(payload).encode('utf-8'),
-        headers={'Content-Type': 'application/json'},
-        method='POST'
-    )
+@app.post("/api/process-invoice")
+async def process_invoice_endpoint(request: Request):
     try:
-        def _call_webhook():
-            with urllib.request.urlopen(req, timeout=120) as response:
-                return response.read().decode('utf-8', errors='replace')
-        
-        response_body = await asyncio.to_thread(_call_webhook)
-        return json.loads(response_body)
+        body = await request.json()
     except Exception as e:
-        return JSONResponse({"error": f"Webhook error: {e}"}, status_code=500)
+        return JSONResponse({"success": False, "error": f"Invalid JSON payload: {e}"}, status_code=400)
+
+    doc_id = body.get('docId') or body.get('documentId')
+    invoice_index = body.get('invoiceIndex', 0)
+    pages = body.get('pages')
+    if pages and isinstance(pages, list) and len(pages) >= 2:
+        page_start = pages[0]
+        page_end = pages[1]
+    else:
+        page_start = body.get('pageStart', 1)
+        page_end = body.get('pageEnd', 1)
+
+    if not doc_id:
+        return JSONResponse({"success": False, "error": "Missing docId parameter"}, status_code=400)
+
+    return _internal_process_invoice(doc_id, invoice_index, page_start, page_end)
+
+@app.post("/api/documents/{doc_id}/process-single-invoice/{index_str}")
+async def process_single_invoice(doc_id: str, index_str: str, request: Request):
+    try:
+        invoice_index = int(index_str)
+    except ValueError:
+        return JSONResponse({"success": False, "error": "Invalid invoice index"}, status_code=400)
+
+    try:
+        body = await request.json()
+        pages = body.get('pages')
+        if pages and isinstance(pages, list) and len(pages) >= 2:
+            page_start = pages[0]
+            page_end = pages[1]
+        else:
+            page_start = body.get('pageStart', 1)
+            page_end = body.get('pageEnd', 1)
+    except Exception:
+        page_start, page_end = 1, 1
+
+    return _internal_process_invoice(doc_id, invoice_index, page_start, page_end)
 
 @app.get("/api/documents/{doc_id}/file")
 def get_document_file(doc_id: str):

@@ -1,6 +1,6 @@
 import React, { Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { apiGetJson, normalizeApiCacheUrl } from './dataCache.js';
-import { UploadMultiView, MultiInvoiceWorkspace } from './MultiInvoiceViews.jsx';
+import { UploadMultiView, MultiInvoiceWorkspace, ExtractionProcessingPanel } from './MultiInvoiceViews.jsx';
 
 const API = '/api';
 
@@ -708,6 +708,7 @@ function App() {
         const data = await res.json();
         if (data.success && data.documentIds && data.documentIds.length > 0) {
           const failedDispatch = (data.dispatches || []).find((dispatch) => {
+            if (!dispatch.webhookResponse) return false;
             const status = Number(dispatch.webhookResponse?.status);
             return !Number.isFinite(status) || status < 200 || status >= 300;
           });
@@ -1237,8 +1238,11 @@ function App() {
                 ))}
               </div>
               <div className={`editor-scroll-content ${activeSection.id === 'shipment' ? 'single-invoice-shipment-content' : ''}`}>
-                {renderFieldInputs()}
-                {processing && <div className="progress-box mt-4">The n8n workflow is extracting and validating document data automatically.</div>}
+                {processing && (
+                  <div className="mt-4">
+                    <ExtractionProcessingPanel invoiceIndex={0} pageStart={1} pageEnd={1} />
+                  </div>
+                )}
               </div>
             </div>
           </div>
@@ -1465,8 +1469,12 @@ function App() {
 
           {error && <div className="card empty-state" style={{ marginBottom: '1rem' }}>{error}</div>}
           {!error && processing && (
-            <div className="progress-box multi-invoice-progress">
-              ⏳ The document is still being processed. This view will update automatically.
+            <div style={{ marginBottom: '1.5rem' }}>
+              <ExtractionProcessingPanel
+                invoiceIndex={selectedInvoiceIndex}
+                pageStart={selectedInvoice?.pageStart || 1}
+                pageEnd={selectedInvoice?.pageEnd || 1}
+              />
             </div>
           )}
           {!error && !processing && invoices.length === 0 && (
