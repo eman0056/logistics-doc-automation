@@ -7,6 +7,7 @@ import json
 import uuid
 import time
 import os
+import base64
 import urllib.request
 import threading
 from datetime import datetime
