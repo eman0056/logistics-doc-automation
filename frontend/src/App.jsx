@@ -1386,6 +1386,7 @@ function App() {
     const [savingIndex, setSavingIndex] = useState(null);
     const [saveError, setSaveError] = useState('');
     const [saveSuccess, setSaveSuccess] = useState(false);
+    const [discarding, setDiscarding] = useState(false);
     const rightPanelRef = useRef(null);
 
     // Seed new invoices into drafts when the invoices array changes (polling updates)
@@ -1493,6 +1494,31 @@ function App() {
       }
     };
 
+    const discardDocument = async () => {
+      if (discarding) return;
+      setDiscarding(true);
+
+      try {
+        const response = await fetch(`${API}/documents/${docId}`, { method: 'DELETE', cache: 'no-store' });
+        const result = await response.json();
+        if (!response.ok || !result.success) throw new Error(result.error || 'Unable to discard document.');
+
+        setDocuments((current) => current.filter((item) => item.id !== docId));
+        window.history.pushState({}, '', '/documents');
+        setPath('/documents');
+        try {
+          const latestDocuments = await fetchJson(`${API}/documents?refresh=${Date.now()}`);
+          const latestJson = await latestDocuments.json();
+          if (latestDocuments.ok) setDocuments(latestJson.documents || []);
+        } catch (refreshError) {
+          console.error('Document list refresh failed after discard', refreshError);
+        }
+      } catch (err) {
+        alert(err.message || 'Unable to discard document.');
+        setDiscarding(false);
+      }
+    };
+
     const isSaving = savingIndex === selectedInvoiceIndex;
     const isEmpty = Object.keys(selectedDraft).length === 0;
 
@@ -1509,7 +1535,13 @@ function App() {
                   : 'Invoices detected in this document will appear here.'}
               </p>
             </div>
-            <a href="/documents" className="secondary-btn">← Back to Documents</a>
+            <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap' }}>
+              <button type="button" className="secondary-btn" onClick={discardDocument} disabled={discarding}>
+                {discarding ? 'Discarding...' : 'Discard'}
+              </button>
+              {!isEmpty && <button className="primary-btn" onClick={saveCurrentInvoice} disabled={isSaving}>{isSaving ? 'Saving...' : 'Save & Approve'}</button>}
+              {!isEmpty && <button className="secondary-btn">Generate Invoice</button>}
+            </div>
           </div>
 
           {error && <div className="card empty-state" style={{ marginBottom: '1rem' }}>{error}</div>}
@@ -1589,15 +1621,6 @@ function App() {
                       <div style={{ display: 'flex', gap: '0.6rem', alignItems: 'center', flexWrap: 'wrap' }}>
                         {saveSuccess && <span className="mir-save-success" role="status">✓ Saved</span>}
                         {saveError && <span className="mir-save-error" role="alert">{saveError}</span>}
-                        <button
-                          id={`save-invoice-${selectedInvoiceIndex}`}
-                          type="button"
-                          className="primary-btn"
-                          onClick={saveCurrentInvoice}
-                          disabled={isSaving || isEmpty}
-                        >
-                          {isSaving ? 'Saving…' : 'Save Invoice'}
-                        </button>
                       </div>
                     </div>
 
