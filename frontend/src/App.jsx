@@ -2,6 +2,7 @@ import React, { Suspense, useCallback, useEffect, useMemo, useRef, useState } fr
 import { apiGetJson, normalizeApiCacheUrl } from './dataCache.js';
 import { UploadMultiView, MultiInvoiceWorkspace, ExtractionProcessingPanel } from './MultiInvoiceViews.jsx';
 import { Escalations } from './Escalations.jsx';
+import { FlaggedImagesCard } from './FlaggedImagesCard.jsx';
 import { PreviewRange } from './PreviewRange.jsx';
 
 const API = '/api';
@@ -313,6 +314,7 @@ function App() {
   const [deleteTarget, setDeleteTarget] = useState(null);
   const [deletingId, setDeletingId] = useState(null);
   const [toast, setToast] = useState(null);
+
   const cancelDeleteRef = useRef(null);
 
   useEffect(() => {
@@ -653,6 +655,7 @@ function App() {
               <p className="subtle-copy mt-2">View and manage ingested logistics paperwork.</p>
             </div>
             <a href="/documents/upload" className="primary-btn">+ Upload New Document</a>
+        <FlaggedImagesCard />
           </div>
 
           <div className="card table-card">
