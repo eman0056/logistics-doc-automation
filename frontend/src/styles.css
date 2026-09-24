@@ -711,21 +711,21 @@ img {
 
 .detail-fields {
   display: grid;
-  gap: 1rem;
+  gap: 0.5rem;
 }
 
 .detail-field-grid {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 0.75rem;
+  gap: 4px 6px;
 }
 
 .detail-field,
 .detail-record {
   min-width: 0;
-  padding: 0.9rem;
+  padding: 6px 8px;
   border: 1px solid var(--border);
-  border-radius: 0.8rem;
+  border-radius: 0.4rem;
   background: rgba(15, 32, 51, 0.72);
 }
 
@@ -772,7 +772,7 @@ img {
 
 .preview-panel,
 .editor-panel {
-  padding: 1.5rem;
+  padding: 10px 12px;
   min-width: 0;
 }
 
@@ -825,9 +825,9 @@ img {
 
 .invoice-section-tabs {
   display: flex;
-  gap: 0.5rem;
+  gap: 6px;
   overflow-x: auto;
-  padding: 1rem 0;
+  padding: 4px 0 8px 0;
 }
 
 .invoice-section-tabs .primary-btn,
@@ -878,13 +878,16 @@ img {
 .field-grid {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 1rem;
+  gap: 4px 6px;
+  width: 100%;
+  box-sizing: border-box;
 }
 
 .editor-scroll-content {
-  max-height: min(820px, 70vh);
-  overflow: auto;
-  padding-right: 0.35rem;
+  max-height: calc(100vh - 200px);
+  overflow-y: auto;
+  padding-right: 0.25rem;
+  width: 100%;
 }
 
 .single-invoice-shipment-content {
@@ -894,32 +897,43 @@ img {
 }
 
 .editor-scroll-content .field-grid {
-  width: max-content;
-  min-width: 100%;
+  width: 100%;
+  min-width: 0;
 }
 
 .field-group {
   display: flex;
   flex-direction: column;
-  gap: 0.45rem;
+  gap: 2px;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
 }
 
 .field-label {
-  font-size: 0.68rem;
+  font-size: 0.65rem;
   text-transform: uppercase;
-  letter-spacing: 0.12em;
+  letter-spacing: 0.08em;
   color: var(--text-secondary);
   font-weight: 700;
+  margin: 0;
+  line-height: 1.2;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .field-input {
   width: 100%;
-  border-radius: 0.85rem;
-  padding: 0.8rem 0.9rem;
+  border-radius: 0.4rem;
+  padding: 4px 8px;
   border: 1px solid var(--border);
   background: rgba(15, 32, 51, 0.72);
   color: #fff;
-  min-width: 16rem;
+  min-width: 0;
+  font-size: 0.8rem;
+  height: 28px;
+  box-sizing: border-box;
 }
 
 .field-input:focus {
@@ -928,22 +942,41 @@ img {
 }
 
 .section-block {
-  padding: 1rem;
+  padding: 8px;
   border: 1px solid var(--border);
   background: rgba(15, 32, 51, 0.72);
-  border-radius: 1rem;
+  border-radius: 0.5rem;
+  margin-bottom: 6px;
 }
 
 .section-title {
   display: flex;
   align-items: center;
-  gap: 0.5rem;
-  margin-bottom: 1rem;
+  gap: 0.35rem;
+  margin-bottom: 6px;
   color: var(--primary);
-  font-size: 0.76rem;
-  letter-spacing: 0.2em;
+  font-size: 0.72rem;
+  letter-spacing: 0.12em;
   text-transform: uppercase;
   font-weight: 800;
+}
+
+.nested-record {
+  border: 1px solid var(--border, #334155);
+  border-radius: 6px;
+  padding: 6px 8px;
+  margin-bottom: 6px;
+  background: rgba(15, 23, 42, 0.4);
+}
+
+.nested-record:last-child {
+  margin-bottom: 0;
+}
+
+.invoice-sections {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
 }
 
 @media (max-width: 980px) {
@@ -1269,35 +1302,39 @@ img {
 
 .mir-field-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
-  gap: 1rem;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 4px 6px;
 }
 
 .mir-field {
   display: flex;
   flex-direction: column;
-  gap: 0.4rem;
+  gap: 2px;
   min-width: 0;
 }
 
 .mir-field-label {
   font-size: 0.65rem;
   font-weight: 800;
-  letter-spacing: 0.12em;
+  letter-spacing: 0.08em;
   text-transform: uppercase;
   color: var(--text-secondary);
-  overflow-wrap: anywhere;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .mir-field-input {
   width: 100%;
-  padding: 0.7rem 0.9rem;
+  padding: 4px 8px;
   border: 1px solid var(--border);
-  border-radius: 0.8rem;
+  border-radius: 0.4rem;
   background: rgba(15, 32, 51, 0.72);
   color: var(--text-primary);
   font: inherit;
-  font-size: 0.9rem;
+  font-size: 0.8rem;
+  height: 28px;
+  box-sizing: border-box;
   transition: border-color 0.18s ease, outline 0.18s ease;
 }
 
@@ -1578,7 +1615,9 @@ img {
   overflow-y: auto;
   background: var(--card-bg, #1e293b);
   border-left: 1px solid var(--border, #334155);
-  padding: 20px 24px;
+  padding: 10px 12px;
+  box-sizing: border-box;
+  height: 100%;
 }
 
 .extracted-data-empty {
