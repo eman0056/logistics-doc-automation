@@ -359,7 +359,7 @@ export const ExtractionProcessingPanel = ({ invoiceIndex, pageStart, pageEnd, is
 
 export const InvoiceCard = ({ idx, group, data, isLoading, errorMsg, isSelected, onRetry, onSave }) => {
   const [draft, setDraft] = useState(data || {});
-  const [selectedSection, setSelectedSection] = useState('header');
+  const [selectedSection, setSelectedSection] = useState('all');
   const [saving, setSaving] = useState(false);
   const [saveSuccess, setSaveSuccess] = useState(false);
   const [saveErr, setSaveErr] = useState('');
@@ -465,10 +465,19 @@ export const InvoiceCard = ({ idx, group, data, isLoading, errorMsg, isSelected,
     });
   });
 
+  const knownKeys = ['invoiceHeader', 'shipmentDetails', 'shipmentDetail', 'shipments', 'shipment', 'chargeLineItems', 'chargeLineItem', 'status', 'poorImageQuality', 'error', 'invoiceIndex', 'documentId'];
+  const headerObj = draft.invoiceHeader && typeof draft.invoiceHeader === 'object' && !Array.isArray(draft.invoiceHeader) ? draft.invoiceHeader : {};
+  const extraTopKeys = Object.keys(draft || {}).filter(k => !knownKeys.includes(k));
+  const extraTopObj = {};
+  extraTopKeys.forEach(k => {
+    if (typeof draft[k] !== 'object' || draft[k] === null) extraTopObj[k] = draft[k];
+  });
+
   const sectionDefinitions = [
-    { id: 'header', label: 'Invoice Header', value: draft.invoiceHeader && typeof draft.invoiceHeader === 'object' && !Array.isArray(draft.invoiceHeader) ? draft.invoiceHeader : {} },
-    { id: 'shipment', label: 'Shipments', value: shipmentRecords },
-    { id: 'charges', label: 'Charge Line Items', value: chargeRecords },
+    { id: 'all', label: 'All Fields' },
+    { id: 'header', label: 'Invoice Header' },
+    { id: 'shipment', label: 'Shipments' },
+    { id: 'charges', label: 'Charge Line Items' },
   ];
   const activeSection = sectionDefinitions.find((section) => section.id === selectedSection) || sectionDefinitions[0];
   const isEmpty = Object.keys(draft).length === 0;
@@ -500,7 +509,7 @@ export const InvoiceCard = ({ idx, group, data, isLoading, errorMsg, isSelected,
       data-invoice-index={idx}
       style={{ margin: 0 }}
     >
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap', marginBottom: '0.75rem' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap', marginBottom: '0.4rem' }}>
         <h3 className="section-title" style={{ color: '#fff', letterSpacing: '0.1em', margin: 0 }}>EXTRACTED FIELDS</h3>
         
         {/* Status indicator */}
@@ -522,14 +531,14 @@ export const InvoiceCard = ({ idx, group, data, isLoading, errorMsg, isSelected,
       </div>
 
       {hasPoorQuality && (
-          <div className="error-message" style={{ marginBottom: '1rem', background: 'rgba(234, 106, 106, 0.2)', padding: '10px', borderRadius: '4px' }}>
-            <p><strong>⚠ Poor Image Quality</strong> - The source image is unclear and requires manual review.</p>
+          <div className="error-message" style={{ marginBottom: '0.5rem', background: 'rgba(234, 106, 106, 0.2)', padding: '8px', borderRadius: '4px' }}>
+            <p style={{ margin: 0, fontSize: '0.8rem' }}><strong>⚠ Poor Image Quality</strong> - The source image is unclear and requires manual review.</p>
           </div>
       )}
 
       {errorMsg && !isLoading && !hasPoorQuality && (
-        <div className="error-message" style={{ marginBottom: '1rem' }}>
-          <p>Failed to process invoice: {errorMsg}</p>
+        <div className="error-message" style={{ marginBottom: '0.5rem' }}>
+          <p style={{ margin: 0, fontSize: '0.8rem' }}>Failed to process invoice: {errorMsg}</p>
           <button className="retry-button" onClick={onRetry}>Retry</button>
         </div>
       )}
@@ -545,19 +554,69 @@ export const InvoiceCard = ({ idx, group, data, isLoading, errorMsg, isSelected,
                 aria-selected={activeSection.id === section.id} 
                 className={activeSection.id === section.id ? 'primary-btn' : 'secondary-btn'} 
                 onClick={() => setSelectedSection(section.id)}
+                style={{ padding: '4px 10px', fontSize: '0.75rem' }}
               >
                 {section.label}
               </button>
             ))}
           </div>
 
-          <div className={`editor-scroll-content ${activeSection.id === 'shipment' ? 'single-invoice-shipment-content' : ''}`}>
-            <div className="invoice-sections">
-              {activeSection.id === 'header' && renderEditableNode(activeSection.value, ['invoiceHeader'], activeSection.label)}
-              {activeSection.id === 'shipment' && renderEditableNode(activeSection.value, [shipmentKey || 'shipmentDetails'], activeSection.label, { excludeKeys: ['chargeLineItems', 'chargeLineItem'] })}
-              {activeSection.id === 'charges' && (chargeRecords.length > 0
-                ? chargeRecords.map((record) => <div className="nested-record" key={record.path.join('.')}><div className="field-label">{record.label}</div>{renderEditableNode(record.charge, record.path, '')}</div>)
-                : <div className="subtle-copy">No records found</div>)}
+          <div className="editor-scroll-content">
+            <div className="invoice-sections" style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+              {/* 1. INVOICE HEADER */}
+              {(selectedSection === 'all' || selectedSection === 'header') && (
+                <div className="section-block" style={{ margin: 0 }}>
+                  <div className="section-title" style={{ fontSize: '0.72rem', color: 'var(--primary, #6366f1)', marginBottom: '6px' }}>📄 INVOICE HEADER</div>
+                  {Object.keys(headerObj).length > 0 ? (
+                    renderEditableNode(headerObj, ['invoiceHeader'], '')
+                  ) : Object.keys(extraTopObj).length > 0 ? (
+                    renderEditableNode(extraTopObj, [], '')
+                  ) : (
+                    <div className="subtle-copy">No header fields found</div>
+                  )}
+                </div>
+              )}
+
+              {/* 2. GENERAL / EXTRA FIELDS */}
+              {(selectedSection === 'all' || selectedSection === 'header') && Object.keys(headerObj).length > 0 && Object.keys(extraTopObj).length > 0 && (
+                <div className="section-block" style={{ margin: 0 }}>
+                  <div className="section-title" style={{ fontSize: '0.72rem', color: 'var(--primary, #6366f1)', marginBottom: '6px' }}>⚙️ GENERAL DETAILS</div>
+                  {renderEditableNode(extraTopObj, [], '')}
+                </div>
+              )}
+
+              {/* 3. SHIPMENT DETAILS */}
+              {(selectedSection === 'all' || selectedSection === 'shipment') && (
+                <div className="section-block" style={{ margin: 0 }}>
+                  <div className="section-title" style={{ fontSize: '0.72rem', color: 'var(--primary, #6366f1)', marginBottom: '6px' }}>
+                    🚚 SHIPMENT DETAILS {shipmentRecords.length > 0 ? `(${shipmentRecords.length})` : ''}
+                  </div>
+                  {shipmentRecords.length > 0 ? (
+                    renderEditableNode(shipmentRecords, [shipmentKey || 'shipmentDetails'], '', { excludeKeys: ['chargeLineItems', 'chargeLineItem'] })
+                  ) : (
+                    <div className="subtle-copy">No shipment records found</div>
+                  )}
+                </div>
+              )}
+
+              {/* 4. CHARGE LINE ITEMS */}
+              {(selectedSection === 'all' || selectedSection === 'charges') && (
+                <div className="section-block" style={{ margin: 0 }}>
+                  <div className="section-title" style={{ fontSize: '0.72rem', color: 'var(--primary, #6366f1)', marginBottom: '6px' }}>
+                    💳 CHARGE LINE ITEMS {chargeRecords.length > 0 ? `(${chargeRecords.length})` : ''}
+                  </div>
+                  {chargeRecords.length > 0 ? (
+                    chargeRecords.map((record) => (
+                      <div className="nested-record" key={record.path.join('.')} style={{ marginBottom: '4px' }}>
+                        <div className="field-label" style={{ color: 'var(--primary, #6366f1)', fontSize: '0.68rem', marginBottom: '2px' }}>{record.label}</div>
+                        {renderEditableNode(record.charge, record.path, '')}
+                      </div>
+                    ))
+                  ) : (
+                    <div className="subtle-copy">No line items found</div>
+                  )}
+                </div>
+              )}
             </div>
           </div>
         </>

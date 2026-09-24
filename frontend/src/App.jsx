@@ -940,7 +940,7 @@ function App() {
     const [doc, setDoc] = useState(null);
     const [loadingDoc, setLoadingDoc] = useState(true);
     const [processing, setProcessing] = useState(false);
-    const [selectedSection, setSelectedSection] = useState('header');
+    const [selectedSection, setSelectedSection] = useState('all');
     const [invoiceDrafts, setInvoiceDrafts] = useState({});
     const [savingInvoice, setSavingInvoice] = useState(false);
     const [discarding, setDiscarding] = useState(false);
@@ -1107,10 +1107,19 @@ function App() {
         ? canonical.chargeLineItems.map((charge, chargeIndex) => ({ charge, path: ['chargeLineItems', chargeIndex], label: `Charge ${chargeIndex + 1}` }))
         : []),
     ];
+    const knownKeys = ['invoiceHeader', 'shipmentDetails', 'shipmentDetail', 'shipments', 'shipment', 'chargeLineItems', 'chargeLineItem', 'status', 'poorImageQuality', 'error', 'invoiceIndex', 'documentId'];
+    const headerObj = canonical.invoiceHeader && typeof canonical.invoiceHeader === 'object' && !Array.isArray(canonical.invoiceHeader) ? canonical.invoiceHeader : {};
+    const extraTopKeys = Object.keys(canonical || {}).filter(k => !knownKeys.includes(k));
+    const extraTopObj = {};
+    extraTopKeys.forEach(k => {
+      if (typeof canonical[k] !== 'object' || canonical[k] === null) extraTopObj[k] = canonical[k];
+    });
+
     const sectionDefinitions = [
-      { id: 'header', label: 'Invoice Header', value: canonical.invoiceHeader && typeof canonical.invoiceHeader === 'object' && !Array.isArray(canonical.invoiceHeader) ? canonical.invoiceHeader : {} },
-      { id: 'shipment', label: 'Shipments', value: shipmentRecords },
-      { id: 'charges', label: 'Charge Line Items', value: chargeRecords },
+      { id: 'all', label: 'All Fields' },
+      { id: 'header', label: 'Invoice Header' },
+      { id: 'shipment', label: 'Shipment Details' },
+      { id: 'charges', label: 'Charge Line Items' },
     ];
     const activeSection = sectionDefinitions.find((section) => section.id === selectedSection) || sectionDefinitions[0];
     const isEmpty = Object.keys(canonical).length === 0;
@@ -1225,13 +1234,64 @@ function App() {
           </div>
         );
       }
-      return <div className="invoice-sections">
-        {activeSection.id === 'header' && renderEditableNode(activeSection.value, ['invoiceHeader'], activeSection.label)}
-        {activeSection.id === 'shipment' && renderEditableNode(activeSection.value, [shipmentKey], activeSection.label, { excludeKeys: ['chargeLineItems'] })}
-        {activeSection.id === 'charges' && (chargeRecords.length > 0
-          ? chargeRecords.map((record) => <div className="nested-record" key={record.path.join('.')}><div className="field-label">{record.label}</div>{renderEditableNode(record.charge, record.path, '')}</div>)
-          : <div className="subtle-copy">No records found</div>)}
-      </div>;
+      return (
+        <div className="invoice-sections" style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+          {/* 1. INVOICE HEADER */}
+          {(selectedSection === 'all' || selectedSection === 'header') && (
+            <div className="section-block" style={{ margin: 0 }}>
+              <div className="section-title" style={{ fontSize: '0.72rem', color: 'var(--primary, #6366f1)', marginBottom: '6px' }}>📄 INVOICE HEADER</div>
+              {Object.keys(headerObj).length > 0 ? (
+                renderEditableNode(headerObj, ['invoiceHeader'], '')
+              ) : Object.keys(extraTopObj).length > 0 ? (
+                renderEditableNode(extraTopObj, [], '')
+              ) : (
+                <div className="subtle-copy">No header fields found</div>
+              )}
+            </div>
+          )}
+
+          {/* 2. GENERAL DETAILS */}
+          {(selectedSection === 'all' || selectedSection === 'header') && Object.keys(headerObj).length > 0 && Object.keys(extraTopObj).length > 0 && (
+            <div className="section-block" style={{ margin: 0 }}>
+              <div className="section-title" style={{ fontSize: '0.72rem', color: 'var(--primary, #6366f1)', marginBottom: '6px' }}>⚙️ GENERAL DETAILS</div>
+              {renderEditableNode(extraTopObj, [], '')}
+            </div>
+          )}
+
+          {/* 3. SHIPMENT DETAILS */}
+          {(selectedSection === 'all' || selectedSection === 'shipment') && (
+            <div className="section-block" style={{ margin: 0 }}>
+              <div className="section-title" style={{ fontSize: '0.72rem', color: 'var(--primary, #6366f1)', marginBottom: '6px' }}>
+                🚚 SHIPMENT DETAILS {shipmentRecords.length > 0 ? `(${shipmentRecords.length})` : ''}
+              </div>
+              {shipmentRecords.length > 0 ? (
+                renderEditableNode(shipmentRecords, [shipmentKey || 'shipmentDetails'], '', { excludeKeys: ['chargeLineItems', 'chargeLineItem'] })
+              ) : (
+                <div className="subtle-copy">No shipment records found</div>
+              )}
+            </div>
+          )}
+
+          {/* 4. CHARGE LINE ITEMS */}
+          {(selectedSection === 'all' || selectedSection === 'charges') && (
+            <div className="section-block" style={{ margin: 0 }}>
+              <div className="section-title" style={{ fontSize: '0.72rem', color: 'var(--primary, #6366f1)', marginBottom: '6px' }}>
+                💳 CHARGE LINE ITEMS {chargeRecords.length > 0 ? `(${chargeRecords.length})` : ''}
+              </div>
+              {chargeRecords.length > 0 ? (
+                chargeRecords.map((record) => (
+                  <div className="nested-record" key={record.path.join('.')} style={{ marginBottom: '4px' }}>
+                    <div className="field-label" style={{ color: 'var(--primary, #6366f1)', fontSize: '0.68rem', marginBottom: '2px' }}>{record.label}</div>
+                    {renderEditableNode(record.charge, record.path, '')}
+                  </div>
+                ))
+              ) : (
+                <div className="subtle-copy">No line items found</div>
+              )}
+            </div>
+          )}
+        </div>
+      );
     };
 
     return (
