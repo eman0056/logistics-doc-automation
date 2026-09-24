@@ -1,7 +1,7 @@
 import React, { Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { apiGetJson, normalizeApiCacheUrl } from './dataCache.js';
 import { UploadMultiView, MultiInvoiceWorkspace, ExtractionProcessingPanel } from './MultiInvoiceViews.jsx';
-import { Escalations } from './Escalations.jsx';
+import { Escalations, DEFAULT_DEMO_ESCALATIONS, getResolvedEscalationIds } from './Escalations.jsx';
 import { PreviewRange } from './PreviewRange.jsx';
 
 const API = '/api';
@@ -487,6 +487,39 @@ function App() {
   };
 
   const renderDocumentsView = () => {
+    const resolvedIds = getResolvedEscalationIds();
+    const resolvedSet = new Set(resolvedIds);
+
+    let flaggedCount = 0;
+    const seenIds = new Set();
+
+    documents.forEach((doc) => {
+      const docStatus = doc.status || 'PENDING';
+      const isDocFlagged = docStatus === 'Poor Image Quality' || docStatus === 'Escalation Required';
+      if (isDocFlagged && !resolvedSet.has(doc.id)) {
+        seenIds.add(doc.id);
+        flaggedCount++;
+      }
+      (doc.invoices || []).forEach((inv, idx) => {
+        const invStatus = inv.status || inv.extractionStatus;
+        const isInvFlagged = invStatus === 'Poor Image Quality' || invStatus === 'Escalation Required' || inv.poorImageQuality;
+        const invKey = `${doc.id}-${idx}`;
+        if (isInvFlagged && !resolvedSet.has(invKey) && !resolvedSet.has(doc.id)) {
+          seenIds.add(invKey);
+          flaggedCount++;
+        }
+      });
+    });
+
+    DEFAULT_DEMO_ESCALATIONS.forEach((demoItem) => {
+      if (!resolvedSet.has(demoItem.id) && !seenIds.has(demoItem.id)) {
+        flaggedCount++;
+      }
+    });
+
+    const pendingCount = documents.filter((doc) => ['PENDING', 'PREPROCESSED', 'IN_REVIEW'].includes(doc.status)).length;
+    const completedCount = documents.filter((doc) => ['APPROVED', 'INVOICE_GENERATED', 'EXTRACTED'].includes(doc.status)).length;
+
     const rows = documents.map((doc) => {
       const status = doc.status || 'PENDING';
       return (
@@ -653,6 +686,50 @@ function App() {
               <p className="subtle-copy mt-2">View and manage ingested logistics paperwork.</p>
             </div>
             <a href="/documents/upload" className="primary-btn">+ Upload New Document</a>
+          </div>
+
+          <div className="dashboard-kpi-grid">
+            <div className="kpi-card">
+              <div className="kpi-card-header">
+                <span className="kpi-card-title">Total Documents</span>
+                <span className="kpi-icon">📁</span>
+              </div>
+              <div className="kpi-card-value">{documents.length}</div>
+              <div className="kpi-card-sub">Ingested logistics paperwork</div>
+            </div>
+
+            <div 
+              className="kpi-card kpi-card-warning" 
+              onClick={() => { window.history.pushState({}, '', '/escalations'); setPath('/escalations'); }}
+              role="button"
+              tabIndex={0}
+              title="Click to view escalations page"
+            >
+              <div className="kpi-card-header">
+                <span className="kpi-card-title">Poor Image Quality</span>
+                <span className="kpi-icon">📸⚠️</span>
+              </div>
+              <div className="kpi-card-value warning-text">{flaggedCount}</div>
+              <div className="kpi-card-sub warning-sub">Click to review escalations →</div>
+            </div>
+
+            <div className="kpi-card">
+              <div className="kpi-card-header">
+                <span className="kpi-card-title">Ready for Review</span>
+                <span className="kpi-icon">⏳</span>
+              </div>
+              <div className="kpi-card-value">{pendingCount}</div>
+              <div className="kpi-card-sub">Awaiting verification</div>
+            </div>
+
+            <div className="kpi-card">
+              <div className="kpi-card-header">
+                <span className="kpi-card-title">Completed</span>
+                <span className="kpi-icon">✅</span>
+              </div>
+              <div className="kpi-card-value success-text">{completedCount}</div>
+              <div className="kpi-card-sub">Approved & processed</div>
+            </div>
           </div>
 
           <div className="card table-card">

@@ -2343,3 +2343,108 @@ img {
     grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
   }
 }
+
+/* ── Dashboard Executive KPI Grid ───────────────────────────────────────── */
+.dashboard-kpi-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 1.25rem;
+  margin-bottom: 1.75rem;
+}
+
+@media (max-width: 1024px) {
+  .dashboard-kpi-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 640px) {
+  .dashboard-kpi-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.kpi-card {
+  background: var(--card-bg, #1e293b);
+  border: 1px solid var(--border, #334155);
+  border-radius: 1rem;
+  padding: 1.25rem 1.4rem;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  box-shadow: var(--shadow);
+  transition: transform 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease;
+  position: relative;
+  overflow: hidden;
+}
+
+.kpi-card:hover {
+  transform: translateY(-2px);
+  border-color: var(--primary, #6366f1);
+  box-shadow: 0 12px 28px rgba(15, 32, 51, 0.2);
+}
+
+.kpi-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 0.75rem;
+}
+
+.kpi-card-title {
+  font-size: 0.78rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-secondary, #cbd5e1);
+}
+
+.kpi-icon {
+  font-size: 1.35rem;
+  line-height: 1;
+}
+
+.kpi-card-value {
+  font-size: 2rem;
+  font-weight: 800;
+  color: var(--text-primary, #f8fafc);
+  line-height: 1.1;
+  margin-bottom: 0.4rem;
+}
+
+.kpi-card-sub {
+  font-size: 0.75rem;
+  color: var(--text-muted, #94a3b8);
+  font-weight: 500;
+}
+
+/* Orange/Red Warning Card Style for Poor Image Quality */
+.kpi-card.kpi-card-warning {
+  background: linear-gradient(135deg, rgba(234, 106, 106, 0.14) 0%, rgba(217, 163, 91, 0.1) 100%);
+  border: 1.5px solid rgba(234, 106, 106, 0.5);
+  cursor: pointer;
+}
+
+.kpi-card.kpi-card-warning:hover {
+  background: linear-gradient(135deg, rgba(234, 106, 106, 0.24) 0%, rgba(217, 163, 91, 0.2) 100%);
+  border-color: #EA6A6A;
+  box-shadow: 0 0 18px rgba(234, 106, 106, 0.3);
+}
+
+.kpi-card-value.warning-text {
+  color: #fca5a5;
+  text-shadow: 0 0 12px rgba(234, 106, 106, 0.35);
+}
+
+.kpi-card-sub.warning-sub {
+  color: #f87171;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.kpi-card-value.success-text {
+  color: #7ae7ac;
+}
+
