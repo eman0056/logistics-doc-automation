@@ -1399,14 +1399,14 @@ img {
   }
 }
 
-/* ── Multi-Invoice 3-Column Post-Upload Layout CSS ── */
+/* ── Multi-Invoice Two-Panel Layout (30% / 70%) ── */
 .multi-workspace-shell {
   display: flex;
-  gap: 1rem;
-  height: calc(100vh - 80px);
+  flex-direction: row;
+  gap: 0;
+  height: calc(100vh - 72px);
   width: 100%;
   overflow: hidden;
-  padding: 1rem;
   box-sizing: border-box;
 }
 
@@ -1540,16 +1540,15 @@ img {
   color: #EA6A6A;
 }
 
-/* Center Document Viewer Column 2 (~40%) */
+/* Left Panel — PDF Viewer Area (inside multi-left-column) */
 .multi-viewer-panel {
-  flex: 1 1 40%;
-  min-width: 320px;
+  flex: 1 1 auto;
+  min-width: 0;
   display: flex;
   flex-direction: column;
-  background: var(--card-bg, #1e293b);
-  border-radius: 8px;
-  padding: 16px;
-  border: 1px solid var(--border, #334155);
+  background: transparent;
+  padding: 0;
+  border: none;
 }
 
 .document-viewer-container {
@@ -1569,15 +1568,17 @@ img {
   border: none;
 }
 
-/* Right Extracted Data Panel Column 3 (~40%) */
+/* Right Panel — Extracted Data (70%) */
 .multi-extracted-panel {
-  flex: 1 1 40%;
-  min-width: 350px;
+  flex: 0 0 70%;
+  max-width: 70%;
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: 0;
   overflow-y: auto;
-  padding-right: 4px;
+  background: var(--card-bg, #1e293b);
+  border-left: 1px solid var(--border, #334155);
+  padding: 20px 24px;
 }
 
 .extracted-data-empty {
@@ -2110,40 +2111,56 @@ img {
 
 
 
-/* Horizontal Invoice Selector */
+/* ── Horizontal Invoice Selector (below PDF) ── */
 .invoice-selector-container {
   display: flex;
-  gap: 8px;
+  gap: 6px;
   overflow-x: auto;
-  padding: 10px 0;
-  margin-top: 10px;
+  padding: 10px 0 6px 0;
+  margin-top: auto;
+  flex-shrink: 0;
+  scrollbar-width: thin;
+  scrollbar-color: var(--border, #334155) transparent;
+}
+
+.invoice-selector-container::-webkit-scrollbar {
+  height: 4px;
+}
+.invoice-selector-container::-webkit-scrollbar-thumb {
+  background: var(--border, #334155);
+  border-radius: 4px;
 }
 
 .invoice-selector-tab {
   flex: 0 0 auto;
-  padding: 8px 12px;
-  background: var(--panel-bg, #273449);
+  padding: 9px 16px;
+  background: var(--panel-alt, #273449);
   border: 1px solid var(--border, #334155);
   border-radius: 6px;
-  color: var(--text-primary, #f8fafc);
+  color: var(--text-secondary, #cbd5e1);
   cursor: pointer;
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 7px;
   font-size: 13px;
   font-weight: 500;
   transition: all 0.2s ease;
+  white-space: nowrap;
+  user-select: none;
 }
 
 .invoice-selector-tab:hover {
-  background: var(--panel-alt, #334155);
+  background: rgba(99, 102, 241, 0.12);
   border-color: var(--primary, #6366f1);
+  color: var(--text-primary, #f8fafc);
 }
 
 .invoice-selector-tab.selected {
-  background: rgba(99, 102, 241, 0.18);
+  background: rgba(99, 102, 241, 0.22);
   border-color: var(--primary, #6366f1);
   color: #fff;
+  font-weight: 600;
+  box-shadow: 0 0 10px rgba(99, 102, 241, 0.15);
 }
 
 .invoice-selector-tab.has-warning {
@@ -2153,16 +2170,69 @@ img {
 .invoice-selector-tab .warning-icon {
   color: #EA6A6A;
   font-size: 14px;
+  line-height: 1;
 }
 
-/* Two-Panel Layout */
+/* ── Left Panel (30% — PDF + Invoice Tabs) ── */
 .multi-left-column {
-  flex: 1 1 50%;
+  flex: 0 0 30%;
+  max-width: 30%;
   min-width: 0;
   display: flex;
   flex-direction: column;
-  background: var(--card-bg, #1e293b);
-  border-radius: 8px;
+  background: var(--panel-bg, #1a2332);
   padding: 16px;
-  border: 1px solid var(--border, #334155);
+  overflow: hidden;
+}
+
+.multi-left-column .document-viewer-container {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.multi-left-column .pdf-viewer-iframe {
+  min-height: 0;
+  height: 100%;
+}
+
+/* ── Responsive: Tablet (768–1199px) → 40/60 ── */
+@media (max-width: 1199px) and (min-width: 768px) {
+  .multi-left-column {
+    flex: 0 0 40%;
+    max-width: 40%;
+  }
+  .multi-extracted-panel {
+    flex: 0 0 60%;
+    max-width: 60%;
+  }
+}
+
+/* ── Responsive: Mobile (<768px) → Stacked vertical ── */
+@media (max-width: 767px) {
+  .multi-workspace-shell {
+    flex-direction: column;
+    height: auto;
+    min-height: 100vh;
+    overflow-y: auto;
+  }
+  .multi-left-column {
+    flex: 0 0 auto;
+    max-width: 100%;
+    width: 100%;
+    min-height: 55vh;
+  }
+  .multi-extracted-panel {
+    flex: 0 0 auto;
+    max-width: 100%;
+    width: 100%;
+    min-height: 55vh;
+    border-left: none;
+    border-top: 1px solid var(--border, #334155);
+  }
+  .invoice-selector-container {
+    padding: 8px 0;
+  }
+  .field-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+  }
 }

@@ -807,8 +807,9 @@ export const MultiInvoiceWorkspace = () => {
   if (loading) return <main className="page"><div style={{ padding: '2rem' }}>Loading detected invoices...</div></main>;
 
   return (
-    <main className="page" style={{ padding: '0', height: 'calc(100vh - 80px)', overflow: 'hidden' }}>
+    <main className="page" style={{ padding: 0, overflow: 'hidden' }}>
       <div className="multi-workspace-shell">
+        {/* Left Panel — 30% — PDF Preview + Invoice Tabs */}
         <div className="multi-left-column">
           <DocumentViewer docId={docId} selectedGroup={invoiceGroups[selectedInvoiceIndex]} />
           <InvoiceList 
@@ -820,15 +821,17 @@ export const MultiInvoiceWorkspace = () => {
             onInvoiceClick={handleInvoiceClick}
           />
         </div>
+
+        {/* Right Panel — 70% — Extracted Fields */}
         <div className="multi-extracted-panel">
-            <ExtractedDataPanel 
+          <ExtractedDataPanel 
             selectedIndex={selectedInvoiceIndex}
             invoiceGroups={invoiceGroups}
             extractedData={extractedData}
             processingStates={processingStates}
             errorStates={errorStates}
             onRetry={processInvoice}
-            />
+          />
         </div>
       </div>
     </main>
