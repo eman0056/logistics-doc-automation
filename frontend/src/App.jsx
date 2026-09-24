@@ -1,6 +1,8 @@
 import React, { Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { apiGetJson, normalizeApiCacheUrl } from './dataCache.js';
 import { UploadMultiView, MultiInvoiceWorkspace, ExtractionProcessingPanel } from './MultiInvoiceViews.jsx';
+import { Escalations } from './Escalations.jsx';
+import { PreviewRange } from './PreviewRange.jsx';
 
 const API = '/api';
 
@@ -368,6 +370,8 @@ function App() {
   }, []);
 
   const route = useMemo(() => {
+        if (path === '/escalations') return 'escalations';
+    if (path === '/preview') return 'preview';
     if (path === '/documents/upload') return 'upload';
     if (path === '/documents/upload-multi') return 'upload-multi';
     if (path.startsWith('/documents/') && path.endsWith('/multi-workspace')) return 'multi-workspace';
@@ -403,6 +407,8 @@ function App() {
         <nav className="main-nav">
           <a href="/" className="nav-link">Dashboard</a>
           <a href="/documents" className="nav-link">Documents</a>
+          <a href="/escalations" className="nav-link">Escalations</a>
+          <a href="/preview" className="nav-link">Preview</a>
           <a href="/documents/upload" className="nav-link">Upload Single</a>
           <a href="/documents/upload-multi" className="nav-link">Upload Multiple</a>
           <a href="/review-queue" className="nav-link">Review Queue</a>
@@ -1942,6 +1948,8 @@ function App() {
 
   let renderedRoute;
   switch (route) {
+        case 'escalations': renderedRoute = <Escalations />; break;
+    case 'preview': renderedRoute = <PreviewRange />; break;
     case 'upload': renderedRoute = <UploadView />; break;
     case 'upload-multi': renderedRoute = <UploadMultiView />; break;
     case 'multi-workspace': renderedRoute = <MultiInvoiceWorkspace />; break;

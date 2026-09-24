@@ -192,85 +192,46 @@ const getLineItems = (data) => {
   return [];
 };
 
-/* Component 1: InvoiceList (Left Sidebar Column 1) */
 export const InvoiceList = ({ invoiceGroups, selectedIndex, extractedData, processingStates, errorStates, onInvoiceClick }) => {
   return (
-    <div className="multi-sidebar">
-      <div className="invoice-list-header">
-        <h2>Invoices</h2>
-        <span className="invoice-count">({invoiceGroups.length})</span>
-      </div>
-
-      <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-        {invoiceGroups.length === 0 ? (
-          <div style={{ color: 'var(--text-muted, #94a3b8)', fontSize: '13px' }}>No invoices detected.</div>
-        ) : (
-          invoiceGroups.map((group, idx) => {
-            const isSelected = selectedIndex === idx;
-            const isDone = Boolean(extractedData[idx]);
-            const isLoading = Boolean(processingStates[idx]);
-            const isError = Boolean(errorStates[idx]);
-
-            let stateClass = 'ready';
-            let badgeSymbol = '☐';
-            let statusText = 'Not Processed';
-
-            if (isLoading) {
-              stateClass = 'loading';
-              badgeSymbol = '↻';
-              statusText = 'Processing';
-            } else if (isDone) {
-              stateClass = 'extracted';
-              badgeSymbol = '✓';
-              statusText = 'Completed';
-            } else if (isError) {
-              stateClass = 'error';
-              badgeSymbol = '⚠️';
-              statusText = 'Error';
-            }
-
-            return (
-              <div 
-                key={idx}
-                className={`invoice-item ${stateClass} ${isSelected ? 'selected' : ''}`}
-                onClick={() => onInvoiceClick(idx, group)}
-                data-index={idx}
-              >
-                <div className="invoice-item-content">
-                  <span className={`invoice-badge ${isLoading ? 'rotating' : ''}`}>{badgeSymbol}</span>
-                  <span className="invoice-name">
-                    Invoice {idx + 1}
-                    {group && (
-                      <span style={{ fontSize: '11px', color: 'var(--text-muted, #94a3b8)', marginLeft: '4px' }}>
-                        (Pages {group.pageStart}{group.pageEnd !== group.pageStart ? `\u2013${group.pageEnd}` : ''})
-                      </span>
-                    )}
-                  </span>
-                </div>
-                <span className="invoice-status-badge">{statusText}</span>
-              </div>
-            );
-          })
-        )}
-      </div>
+    <div className="invoice-selector-container">
+      {invoiceGroups.length === 0 ? (
+        <div style={{ color: 'var(--text-muted, #94a3b8)', fontSize: '13px' }}>No invoices detected.</div>
+      ) : (
+        invoiceGroups.map((group, idx) => {
+          const isSelected = selectedIndex === idx;
+          const isError = Boolean(errorStates[idx]) || (extractedData[idx] && extractedData[idx].status === 'Poor Image Quality') || (extractedData[idx] && extractedData[idx].status === 'Escalation Required');
+          
+          return (
+            <div 
+              key={idx}
+              className={`invoice-selector-tab ${isSelected ? 'selected' : ''} ${isError ? 'has-warning' : ''}`}
+              onClick={() => onInvoiceClick(idx, group)}
+            >
+              Invoice {idx + 1}
+              {isError && <span className="warning-icon">⚠</span>}
+            </div>
+          );
+        })
+      )}
     </div>
   );
 };
 
-/* Component 2: DocumentViewer (Center Panel Column 2) */
-export const DocumentViewer = ({ docId }) => {
+export const DocumentViewer = ({ docId, selectedGroup }) => {
+  const pageStart = selectedGroup?.pageStart || (selectedGroup?.pages ? selectedGroup.pages[0] : 1);
   return (
-    <div className="multi-viewer-panel">
+    <div className="multi-viewer-panel" style={{ flex: 1, padding: 0, border: 'none', background: 'transparent' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
         <div>
           <h3 style={{ margin: 0, fontSize: '15px', fontWeight: '600', color: 'var(--text-primary, #f8fafc)' }}>Original Document</h3>
-          <p style={{ margin: '2px 0 0 0', fontSize: '12px', color: 'var(--text-muted, #94a3b8)' }}>Complete PDF (All pages visible)</p>
+          <p style={{ margin: '2px 0 0 0', fontSize: '12px', color: 'var(--text-muted, #94a3b8)' }}>{selectedGroup ? `Invoice Pages ${pageStart}${selectedGroup?.pageEnd !== pageStart ? `–${selectedGroup?.pageEnd}` : ''}` : 'Complete PDF'}</p>
         </div>
       </div>
       <div className="document-viewer-container">
         <iframe 
           className="pdf-viewer-iframe"
-          src={`${API}/documents/${docId}/file`}
+          src={`${API}/documents/${docId}/file#page=${pageStart}`}
           title="Original Document"
         />
       </div>
@@ -278,7 +239,6 @@ export const DocumentViewer = ({ docId }) => {
   );
 };
 
-/* Component: ExtractionProcessingPanel (Production-Grade AI Document Processing waiting state) */
 export const ExtractionProcessingPanel = ({ invoiceIndex, pageStart, pageEnd, isSingleInvoice = false }) => {
   const [currentStep, setCurrentStep] = useState(1);
   const [progress, setProgress] = useState(25);
@@ -343,7 +303,6 @@ export const ExtractionProcessingPanel = ({ invoiceIndex, pageStart, pageEnd, is
           </p>
         </div>
 
-        {/* Subtle Animated Progress Bar */}
         <div className="processing-bar-wrapper">
           <div className="processing-bar-background">
             <div 
@@ -359,7 +318,6 @@ export const ExtractionProcessingPanel = ({ invoiceIndex, pageStart, pageEnd, is
           </div>
         </div>
 
-        {/* Processing Steps */}
         <div className="processing-steps-container">
           {steps.map((step) => {
             const isDone = step.id < currentStep;
@@ -399,7 +357,6 @@ export const ExtractionProcessingPanel = ({ invoiceIndex, pageStart, pageEnd, is
   );
 };
 
-/* Component 3: InvoiceCard (Tabbed Editable Extracted Fields UI in Right Panel) */
 export const InvoiceCard = ({ idx, group, data, isLoading, errorMsg, isSelected, onRetry, onSave }) => {
   const [draft, setDraft] = useState(data || {});
   const [selectedSection, setSelectedSection] = useState('header');
@@ -467,14 +424,12 @@ export const InvoiceCard = ({ idx, group, data, isLoading, errorMsg, isSelected,
     );
   };
 
-  // Helper to ensure a value is always treated as an array
   const normalizeToArray = (val) => {
     if (Array.isArray(val)) return val;
     if (val && typeof val === 'object') return [val];
     return [];
   };
 
-  // Determine correct shipment key (support multiple possible names)
   const possibleShipmentKeys = ['shipmentDetails', 'shipmentDetail', 'shipments', 'shipment'];
   let shipmentKey = possibleShipmentKeys.find(k => draft && Array.isArray(draft[k]) && draft[k].length > 0);
   if (!shipmentKey) shipmentKey = possibleShipmentKeys.find(k => draft && draft[k] && typeof draft[k] === 'object' && Object.keys(draft[k]).length > 0);
@@ -483,9 +438,7 @@ export const InvoiceCard = ({ idx, group, data, isLoading, errorMsg, isSelected,
   const rawShipmentData = shipmentKey ? draft[shipmentKey] : undefined;
   const shipmentRecords = normalizeToArray(rawShipmentData);
 
-  // Build charge line items list, preserving shipment association when present
   const chargeRecords = [];
-  // First, collect any chargeLineItems nested under shipments
   shipmentRecords.forEach((shipment, shipmentIdx) => {
     let nestedChargeKey = 'chargeLineItems';
     if (shipment && !shipment.chargeLineItems && shipment.chargeLineItem) nestedChargeKey = 'chargeLineItem';
@@ -499,7 +452,6 @@ export const InvoiceCard = ({ idx, group, data, isLoading, errorMsg, isSelected,
     });
   });
   
-  // Then, include any top-level chargeLineItems (or other line item aliases)
   let topChargeKey = 'chargeLineItems';
   if (draft && Array.isArray(draft.chargeLineItem) && draft.chargeLineItem.length > 0 && (!draft.chargeLineItems || draft.chargeLineItems.length === 0)) {
     topChargeKey = 'chargeLineItem';
@@ -537,15 +489,27 @@ export const InvoiceCard = ({ idx, group, data, isLoading, errorMsg, isSelected,
     }
   };
 
+  // NEW REQUIREMENTS: STATUS DISPLAY
+  const status = draft.status || 'Ready for Review';
+  const hasPoorQuality = draft.status === 'Poor Image Quality' || draft.poorImageQuality;
+
   return (
     <div 
       id={`invoice-card-${idx}`}
-      className={`card editor-panel ${isSelected ? 'selected-card' : ''} ${errorMsg ? 'error' : ''}`}
+      className={`card editor-panel ${isSelected ? 'selected-card' : ''} ${errorMsg || hasPoorQuality ? 'error' : ''}`}
       data-invoice-index={idx}
       style={{ margin: 0 }}
     >
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap', marginBottom: '0.75rem' }}>
         <h3 className="section-title" style={{ color: '#fff', letterSpacing: '0.1em', margin: 0 }}>EXTRACTED FIELDS</h3>
+        
+        {/* Status indicator */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+            <span className={`status-pill ${hasPoorQuality || errorMsg ? 'danger' : 'success'}`}>
+                {hasPoorQuality ? 'Poor Image Quality' : status}
+            </span>
+        </div>
+
         {onSave && (
           <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
             {saveSuccess && <span style={{ color: 'var(--success, #1FC991)', fontSize: '0.8rem', fontWeight: 600 }}>✓ Saved</span>}
@@ -557,7 +521,13 @@ export const InvoiceCard = ({ idx, group, data, isLoading, errorMsg, isSelected,
         )}
       </div>
 
-      {errorMsg && !isLoading && (
+      {hasPoorQuality && (
+          <div className="error-message" style={{ marginBottom: '1rem', background: 'rgba(234, 106, 106, 0.2)', padding: '10px', borderRadius: '4px' }}>
+            <p><strong>⚠ Poor Image Quality</strong> - The source image is unclear and requires manual review.</p>
+          </div>
+      )}
+
+      {errorMsg && !isLoading && !hasPoorQuality && (
         <div className="error-message" style={{ marginBottom: '1rem' }}>
           <p>Failed to process invoice: {errorMsg}</p>
           <button className="retry-button" onClick={onRetry}>Retry</button>
@@ -593,14 +563,13 @@ export const InvoiceCard = ({ idx, group, data, isLoading, errorMsg, isSelected,
         </>
       )}
 
-      {isEmpty && !errorMsg && (
-        <div className="subtle-copy" style={{ padding: '1rem' }}>Extraction data unavailable for this invoice.</div>
+      {isEmpty && !errorMsg && !hasPoorQuality && (
+        <div className="subtle-copy" style={{ padding: '1rem' }}>No extraction result found for this invoice.</div>
       )}
     </div>
   );
 };
 
-/* Component 4: ExtractedDataPanel (Accumulative Right Panel Column 3) */
 export const ExtractedDataPanel = ({ selectedIndex, invoiceGroups, extractedData, processingStates, errorStates, onRetry }) => {
   const hasData = selectedIndex !== null && extractedData[selectedIndex];
   const isLoading = selectedIndex !== null && Boolean(processingStates[selectedIndex]);
@@ -609,7 +578,6 @@ export const ExtractedDataPanel = ({ selectedIndex, invoiceGroups, extractedData
 
   return (
     <div className="multi-extracted-panel">
-      {/* Empty Placeholder */}
       {(selectedIndex === null || (!hasData && !isLoading && !errorMsg)) && (
         <div className="extracted-data-empty">
           <div className="empty-icon">📋</div>
@@ -617,7 +585,6 @@ export const ExtractedDataPanel = ({ selectedIndex, invoiceGroups, extractedData
         </div>
       )}
 
-      {/* Production-Grade AI Processing Panel */}
       {selectedIndex !== null && isLoading && (
         <ExtractionProcessingPanel 
           invoiceIndex={selectedIndex}
@@ -626,7 +593,6 @@ export const ExtractedDataPanel = ({ selectedIndex, invoiceGroups, extractedData
         />
       )}
 
-      {/* Extracted Invoice Card */}
       {selectedIndex !== null && !isLoading && (hasData || errorMsg) && (
         <InvoiceCard
           idx={selectedIndex}
@@ -642,7 +608,6 @@ export const ExtractedDataPanel = ({ selectedIndex, invoiceGroups, extractedData
   );
 };
 
-/* Main Layout Component: MultiInvoiceWorkspace */
 export const MultiInvoiceWorkspace = () => {
   const path = window.location.pathname;
   const docId = path.split('/')[2];
@@ -656,17 +621,27 @@ export const MultiInvoiceWorkspace = () => {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const initialIndex = params.has('invoiceIndex') ? parseInt(params.get('invoiceIndex'), 10) : null;
+    
     fetch(`${API}/documents/${docId}/detect-invoices`)
       .then(res => res.json())
       .then(data => {
         if (data.success) {
           setInvoiceGroups(data.invoiceGroups || []);
+          if (initialIndex !== null) {
+              setSelectedInvoiceIndex(initialIndex);
+              // fetch it
+              processInvoice(initialIndex, data.invoiceGroups[initialIndex]);
+          } else {
+              setSelectedInvoiceIndex(0);
+              processInvoice(0, data.invoiceGroups[0]);
+          }
         }
       })
       .catch(console.error)
       .finally(() => setLoading(false));
 
-    // Also check backend for any pre-extracted invoice data for this document
     fetch(`${API}/documents/${docId}/invoices?refresh=${Date.now()}`)
       .then(res => res.json())
       .then(data => {
@@ -775,8 +750,6 @@ export const MultiInvoiceWorkspace = () => {
       if (directExtracted) {
         setExtractedData(prev => ({ ...prev, [index]: directExtracted }));
       } else if (data && (data.success || data.complete || data.reviewUrl)) {
-        // n8n workflow executed successfully returning success: true, complete: true, reviewUrl
-        // Load actual extracted invoice data from backend
         const backendData = await fetchBackendExtractedData(docId, index, data.reviewUrl);
         if (backendData) {
           setExtractedData(prev => ({ ...prev, [index]: backendData }));
@@ -784,7 +757,6 @@ export const MultiInvoiceWorkspace = () => {
           setErrorStates(prev => ({ ...prev, [index]: 'Unable to load extracted invoice data from backend.' }));
         }
       } else if (data && data.error) {
-        // Even if HTTP/n8n connection timed out, n8n may have finished in background and sent callback to backend DB
         const backendData = await fetchBackendExtractedData(docId, index);
         if (backendData) {
           setExtractedData(prev => ({ ...prev, [index]: backendData }));
@@ -815,7 +787,6 @@ export const MultiInvoiceWorkspace = () => {
     setSelectedInvoiceIndex(index);
 
     if (extractedData[index]) {
-      // Data already extracted, just scroll to its card
       setTimeout(() => {
         const cardElem = document.getElementById(`invoice-card-${index}`);
         if (cardElem) {
@@ -838,27 +809,28 @@ export const MultiInvoiceWorkspace = () => {
   return (
     <main className="page" style={{ padding: '0', height: 'calc(100vh - 80px)', overflow: 'hidden' }}>
       <div className="multi-workspace-shell">
-        <InvoiceList 
-          invoiceGroups={invoiceGroups}
-          selectedIndex={selectedInvoiceIndex}
-          extractedData={extractedData}
-          processingStates={processingStates}
-          errorStates={errorStates}
-          onInvoiceClick={handleInvoiceClick}
-        />
-        <DocumentViewer docId={docId} />
-        <ExtractedDataPanel 
-
-          invoiceGroups={invoiceGroups}
-          extractedData={extractedData}
-          processingStates={processingStates}
-          errorStates={errorStates}
-          selectedIndex={selectedInvoiceIndex}
-          onRetry={processInvoice}
-        />
+        <div className="multi-left-column">
+          <DocumentViewer docId={docId} selectedGroup={invoiceGroups[selectedInvoiceIndex]} />
+          <InvoiceList 
+            invoiceGroups={invoiceGroups}
+            selectedIndex={selectedInvoiceIndex}
+            extractedData={extractedData}
+            processingStates={processingStates}
+            errorStates={errorStates}
+            onInvoiceClick={handleInvoiceClick}
+          />
+        </div>
+        <div className="multi-extracted-panel">
+            <ExtractedDataPanel 
+            selectedIndex={selectedInvoiceIndex}
+            invoiceGroups={invoiceGroups}
+            extractedData={extractedData}
+            processingStates={processingStates}
+            errorStates={errorStates}
+            onRetry={processInvoice}
+            />
+        </div>
       </div>
     </main>
   );
 };
-
-
