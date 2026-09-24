@@ -866,7 +866,7 @@ export const MultiInvoiceWorkspace = () => {
   if (loading) return <main className="page"><div style={{ padding: '2rem' }}>Loading detected invoices...</div></main>;
 
   return (
-    <main className="page" style={{ padding: 0, overflow: 'hidden' }}>
+    <main className="page multi-workspace-page" style={{ padding: 0, margin: 0, width: '100%', maxWidth: '100%', height: 'calc(100vh - 72px)', overflow: 'hidden' }}>
       <div className="multi-workspace-shell">
         {/* Left Panel — 30% — PDF Preview + Invoice Tabs */}
         <div className="multi-left-column">

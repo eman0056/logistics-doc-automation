@@ -1590,7 +1590,7 @@ function App() {
 
     return (
       <>
-        <main className="page">
+        <main className="page multi-page">
           <div className="section-header">
             <div>
               <div className="eyebrow">Multi-Invoice Review</div>
@@ -1857,7 +1857,7 @@ function App() {
 
     return (
       <>
-        <main className="page">
+        <main className="page multi-page">
           <div className="section-header">
             <div>
               <div className="eyebrow">Invoice detail</div>

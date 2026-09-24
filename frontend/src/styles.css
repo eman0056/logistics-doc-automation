@@ -679,10 +679,14 @@ img {
 }
 
 .invoice-detail-shell {
-  display: grid;
-  grid-template-columns: minmax(220px, 0.35fr) minmax(0, 1fr);
-  gap: 1rem;
-  align-items: start;
+  display: flex;
+  flex-direction: row;
+  gap: 1.25rem;
+  align-items: stretch;
+  width: 100%;
+  max-width: 100%;
+  height: calc(100vh - 180px);
+  min-height: 520px;
 }
 
 .invoice-detail-summary {
@@ -706,12 +710,22 @@ img {
 }
 
 .multi-invoice-detail-panel {
-  min-height: 520px;
+  flex: 1 1 auto;
+  width: 100%;
+  max-width: none;
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
 }
 
 .detail-fields {
-  display: grid;
-  gap: 0.5rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  flex: 1 1 auto;
+  height: 100%;
+  overflow-y: auto;
 }
 
 .detail-field-grid {
@@ -1056,11 +1070,38 @@ img {
    Completely isolated CSS scope — does NOT affect single-invoice ReviewView.
 ───────────────────────────────────────────────────────────────────────────── */
 
+/* ── Multi-Invoice Page Wrapper Full-Width Override ─────────────────────── */
+.page.multi-page,
+.page.multi-workspace-page,
+.page:has(.multi-workspace-shell),
+.page:has(.mir-shell),
+.page:has(.invoice-detail-shell) {
+  max-width: 100% !important;
+  width: 100% !important;
+  margin: 0 !important;
+  padding-left: 1.25rem !important;
+  padding-right: 1.25rem !important;
+  box-sizing: border-box !important;
+}
+
+.page.multi-workspace-page {
+  padding: 0 !important;
+  margin: 0 !important;
+  max-width: 100% !important;
+  width: 100% !important;
+  height: calc(100vh - 72px) !important;
+  overflow: hidden !important;
+}
+
 .mir-shell {
-  display: grid;
-  grid-template-columns: 270px 1fr;
+  display: flex;
+  flex-direction: row;
   gap: 1.25rem;
-  align-items: start;
+  align-items: stretch;
+  width: 100%;
+  max-width: 100%;
+  height: calc(100vh - 180px);
+  min-height: 520px;
 }
 
 /* ── Left Sidebar ─────────────────────────────────────────────────────────── */
@@ -1207,12 +1248,16 @@ img {
 /* ── Right Detail Panel ───────────────────────────────────────────────────── */
 
 .mir-detail-panel {
+  flex: 1 1 auto;
+  width: 100%;
+  max-width: none;
   background: var(--card-bg);
   border: 1px solid var(--border);
   border-radius: 1.25rem;
   box-shadow: var(--shadow);
   overflow: hidden;
-  min-height: 520px;
+  height: 100%;
+  min-height: 0;
   display: flex;
   flex-direction: column;
 }
@@ -1294,10 +1339,11 @@ img {
 /* ── Editable Field Grid ──────────────────────────────────────────────────── */
 
 .mir-fields-body {
-  padding: 1.4rem 1.5rem;
+  padding: 1.25rem 1.5rem;
   overflow-y: auto;
   flex: 1 1 auto;
-  max-height: calc(100vh - 340px);
+  height: 100%;
+  max-height: none;
 }
 
 .mir-field-grid {
@@ -1607,17 +1653,39 @@ img {
 
 /* Right Panel — Extracted Data (70%) */
 .multi-extracted-panel {
-  flex: 0 0 70%;
-  max-width: 70%;
+  flex: 1 1 auto;
+  width: 100%;
+  max-width: none;
   display: flex;
   flex-direction: column;
   gap: 0;
-  overflow-y: auto;
+  overflow: hidden;
   background: var(--card-bg, #1e293b);
   border-left: 1px solid var(--border, #334155);
-  padding: 10px 12px;
+  padding: 16px 20px;
   box-sizing: border-box;
   height: 100%;
+  min-height: 0;
+}
+
+.multi-extracted-panel > div,
+.multi-extracted-panel .editor-panel,
+.multi-extracted-panel .extraction-processing-card {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.multi-extracted-panel .editor-scroll-content {
+  flex: 1 1 auto;
+  height: 100%;
+  max-height: none;
+  overflow-y: auto;
+  padding-right: 6px;
 }
 
 .extracted-data-empty {
@@ -2241,8 +2309,8 @@ img {
     max-width: 40%;
   }
   .multi-extracted-panel {
-    flex: 0 0 60%;
-    max-width: 60%;
+    flex: 1 1 auto;
+    max-width: none;
   }
 }
 
