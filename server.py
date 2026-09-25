@@ -688,10 +688,12 @@ class LogisticsAutomationHandler(http.server.BaseHTTPRequestHandler):
                 os.remove(temp_file_path)
                 
                 saved_file_path = os.path.join(BASE_DIR, res["storagePath"])
-                img_quality = 0.5
-                if os.path.splitext(saved_file_path)[1].lower() in ['.png', '.jpg', '.jpeg', '.webp']:
-                    img_quality = get_image_blur_quality(saved_file_path)
+                # Step 1: Analyze image quality FIRST using Python Laplacian variance
+                print(f"[Backend] 🔍 Analyzing image quality FIRST for document: {res['fileName']}")
+                img_quality = get_image_blur_quality(saved_file_path)
+                print(f"[Backend] ✅ Image quality score: {img_quality}")
 
+                # Step 2: Construct payload with calculated imageQuality score
                 payload = {
                     "documentId": res["documentId"],
                     "storagePath": res["storagePath"],
@@ -908,10 +910,12 @@ class LogisticsAutomationHandler(http.server.BaseHTTPRequestHandler):
         else:
             with open(file_path, "rb") as f:
                 base64_pdf = base64.b64encode(f.read()).decode('utf-8')
-        # Compute image quality for this invoice image if available
-        image_quality = 0.5
-        if file_path and os.path.splitext(file_path)[1].lower() in ['.png', '.jpg', '.jpeg', '.webp']:
-            image_quality = get_image_blur_quality(file_path)
+        # Step 1: Analyze image quality FIRST using Python Laplacian variance
+        print(f"[Backend] 🔍 Analyzing image quality FIRST for invoice {invoice_index} ({file_name})...")
+        image_quality = get_image_blur_quality(file_path)
+        print(f"[Backend] ✅ Calculated imageQuality score: {image_quality}")
+
+        # Step 2: Send to N8N webhook with calculated imageQuality score
         webhook_result = send_to_n8n_webhook(
             invoice_index, [page_start, page_end], base64_pdf, doc_id=doc_id,
             file_path=file_path, page_start_for_ocr=page_start, page_end_for_ocr=page_end,
