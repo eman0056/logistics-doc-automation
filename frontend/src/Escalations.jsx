@@ -43,7 +43,7 @@ export const Escalations = () => {
 
       (data.documents || []).forEach(doc => {
         const docStatus = doc.status || 'PENDING';
-        const isDocFlagged = docStatus === 'Escalation Required' || docStatus === 'Poor Image Quality';
+        const isDocFlagged = docStatus === 'Escalation Required' || docStatus === 'Poor Image Quality' || docStatus === 'POOR_IMAGE_QUALITY';
         
         if (isDocFlagged && !resolvedSet.has(doc.id)) {
           seenIds.add(doc.id);
@@ -61,7 +61,7 @@ export const Escalations = () => {
 
         (doc.invoices || []).forEach((inv, idx) => {
           const invStatus = inv.status || inv.extractionStatus;
-          const isInvFlagged = invStatus === 'Poor Image Quality' || invStatus === 'Escalation Required' || inv.poorImageQuality;
+          const isInvFlagged = invStatus === 'Poor Image Quality' || invStatus === 'POOR_IMAGE_QUALITY' || invStatus === 'Escalation Required' || inv.poorImageQuality;
           const invKey = `${doc.id}-${idx}`;
 
           if (isInvFlagged && !resolvedSet.has(invKey) && !resolvedSet.has(doc.id)) {

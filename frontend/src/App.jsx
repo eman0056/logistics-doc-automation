@@ -2,6 +2,7 @@ import React, { Suspense, useCallback, useEffect, useMemo, useRef, useState } fr
 import { apiGetJson, normalizeApiCacheUrl } from './dataCache.js';
 import { UploadMultiView, MultiInvoiceWorkspace, ExtractionProcessingPanel } from './MultiInvoiceViews.jsx';
 import { Escalations } from './Escalations.jsx';
+import { EscalationModal } from './EscalationModal.jsx';
 import { SummaryCards } from './SummaryCards.jsx';
 import { PreviewRange } from './PreviewRange.jsx';
 
@@ -373,6 +374,7 @@ function App() {
 
   const route = useMemo(() => {
         if (path === '/escalations') return 'escalations';
+    if (path === '/flagged') return 'flagged';
     if (path === '/preview') return 'preview';
     if (path === '/documents/upload') return 'upload';
     if (path === '/documents/upload-multi') return 'upload-multi';
@@ -410,6 +412,7 @@ function App() {
           <a href="/" className="nav-link">Dashboard</a>
           <a href="/documents" className="nav-link">Documents</a>
           <a href="/escalations" className="nav-link">Escalations</a>
+          <a href="/flagged" className="nav-link">Flagged 📸</a>
           <a href="/preview" className="nav-link">Preview</a>
           <a href="/documents/upload" className="nav-link">Upload Single</a>
           <a href="/documents/upload-multi" className="nav-link">Upload Multiple</a>
@@ -2007,11 +2010,190 @@ function App() {
     );
   };
 
+  /**
+   * FlaggedInvoicesView – displays invoices flagged with POOR_IMAGE_QUALITY status.
+   * Filters both document-level and invoice-level statuses.
+   */
+  const FlaggedInvoicesView = ({ documents: docs = [] }) => {
+    const [escalationTarget, setEscalationTarget] = useState(null);
+    const [resolvedKeys, setResolvedKeys] = useState(() => {
+      try { return new Set(JSON.parse(localStorage.getItem('resolved_escalations') || '[]')); }
+      catch { return new Set(); }
+    });
+    const [toastMsg, setToastMsg] = useState('');
+
+    // Collect all flagged invoices/documents
+    const flaggedItems = [];
+    docs.forEach((doc) => {
+      const docStatus = doc.status || '';
+      const poorQualityStatuses = ['POOR_IMAGE_QUALITY', 'Poor Image Quality'];
+
+      // Check doc-level poor quality
+      if (poorQualityStatuses.some(s => docStatus.includes(s)) && !resolvedKeys.has(doc.id)) {
+        flaggedItems.push({
+          key: doc.id,
+          docId: doc.id,
+          invoiceId: doc.id,
+          docName: doc.fileName,
+          invoiceLabel: 'Document Level',
+          status: docStatus,
+          date: doc.createdAt ? new Date(doc.createdAt).toLocaleDateString() : '—',
+          reviewUrl: `/documents/${doc.id}/review`,
+        });
+      }
+
+      // Check invoice-level poor quality
+      (doc.invoices || []).forEach((inv, idx) => {
+        const invStatus = inv.status || inv.extractionStatus || '';
+        const isPoor = poorQualityStatuses.some(s => invStatus.includes(s)) || inv.poorImageQuality;
+        const itemKey = `${doc.id}-${idx}`;
+        if (isPoor && !resolvedKeys.has(itemKey) && !resolvedKeys.has(doc.id)) {
+          flaggedItems.push({
+            key: itemKey,
+            docId: doc.id,
+            invoiceId: inv.id || String(idx),
+            docName: doc.fileName,
+            invoiceLabel: inv.invoiceNumber ? `Invoice ${inv.invoiceNumber}` : `Invoice #${idx + 1}`,
+            status: invStatus || 'Poor Image Quality',
+            date: doc.createdAt ? new Date(doc.createdAt).toLocaleDateString() : '—',
+            reviewUrl: (doc.invoiceCount || 1) > 1
+              ? `/documents/${doc.id}/multi-workspace?invoiceIndex=${idx}`
+              : `/documents/${doc.id}/review`,
+          });
+        }
+      });
+    });
+
+    const handleEscalationSuccess = (item) => {
+      setEscalationTarget(null);
+      setToastMsg(`✓ Escalation submitted for "${item.invoiceLabel}" in ${item.docName}`);
+      setTimeout(() => setToastMsg(''), 4000);
+    };
+
+    const handleResolve = (item) => {
+      const next = new Set(resolvedKeys);
+      next.add(item.key);
+      setResolvedKeys(next);
+      try { localStorage.setItem('resolved_escalations', JSON.stringify([...next])); } catch {}
+      setToastMsg(`✓ "${item.invoiceLabel}" marked as resolved`);
+      setTimeout(() => setToastMsg(''), 3000);
+    };
+
+    return (
+      <main className="page">
+        <div className="section-header">
+          <div>
+            <div className="eyebrow">Quality Review</div>
+            <h1 className="page-title">Flagged / Poor Image Quality</h1>
+            <p className="subtle-copy mt-2">Invoices flagged with POOR_IMAGE_QUALITY status requiring manual review or escalation.</p>
+          </div>
+          <span className="flagged-view-badge">
+            📸 {flaggedItems.length} Flagged Invoice{flaggedItems.length !== 1 ? 's' : ''}
+          </span>
+        </div>
+
+        {toastMsg && (
+          <div style={{
+            marginBottom: '1rem',
+            padding: '0.8rem 1.2rem',
+            background: 'rgba(31, 201, 145, 0.15)',
+            border: '1px solid var(--success)',
+            borderRadius: '8px',
+            color: '#7ae7ac',
+            fontWeight: 600,
+            fontSize: '0.9rem'
+          }}>
+            {toastMsg}
+          </div>
+        )}
+
+        <div className="card table-card">
+          <table className="data-table">
+            <thead>
+              <tr>
+                <th>Document</th>
+                <th>Invoice</th>
+                <th>Status</th>
+                <th>Date</th>
+                <th style={{ textAlign: 'right' }}>Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {flaggedItems.length === 0 ? (
+                <tr>
+                  <td colSpan="5">
+                    <div className="empty-state">
+                      🎉 No flagged invoices found! All image quality checks passed.
+                    </div>
+                  </td>
+                </tr>
+              ) : flaggedItems.map((item) => (
+                <tr key={item.key}>
+                  <td>
+                    <div style={{ fontWeight: 600, color: '#f8fafc' }}>{item.docName}</div>
+                  </td>
+                  <td>
+                    <span className="status-pill neutral">{item.invoiceLabel}</span>
+                  </td>
+                  <td>
+                    <span className="status-pill warning-strong">
+                      📸 {item.status}
+                    </span>
+                  </td>
+                  <td style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>{item.date}</td>
+                  <td style={{ textAlign: 'right' }}>
+                    <div style={{ display: 'flex', gap: '0.5rem', justifyContent: 'flex-end' }}>
+                      <a
+                        href={item.reviewUrl}
+                        className="primary-btn"
+                        style={{ padding: '0.4rem 0.8rem', fontSize: '0.8rem' }}
+                      >
+                        Review
+                      </a>
+                      <button
+                        type="button"
+                        id={`escalate-flag-btn-${item.key}`}
+                        className="escalate-btn"
+                        onClick={() => setEscalationTarget(item)}
+                      >
+                        🚨 Escalate
+                      </button>
+                      <button
+                        type="button"
+                        className="secondary-btn"
+                        onClick={() => handleResolve(item)}
+                        style={{ padding: '0.4rem 0.8rem', fontSize: '0.8rem', color: '#7ae7ac', borderColor: 'rgba(31,201,145,0.4)' }}
+                      >
+                        ✓ Resolve
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+
+        {escalationTarget && (
+          <EscalationModal
+            docId={escalationTarget.docId}
+            invoiceId={escalationTarget.invoiceId}
+            invoiceLabel={escalationTarget.invoiceLabel}
+            onClose={() => setEscalationTarget(null)}
+            onSuccess={() => handleEscalationSuccess(escalationTarget)}
+          />
+        )}
+      </main>
+    );
+  };
+
   if (loading) return <><>{nav}</><RouteSkeleton label="Loading dashboard..." /></>;
+
 
   let renderedRoute;
   switch (route) {
-        case 'escalations': renderedRoute = <Escalations />; break;
+    case 'escalations': renderedRoute = <Escalations />; break;
+    case 'flagged': renderedRoute = <FlaggedInvoicesView documents={documents} />; break;
     case 'preview': renderedRoute = <PreviewRange />; break;
     case 'upload': renderedRoute = <UploadView />; break;
     case 'upload-multi': renderedRoute = <UploadMultiView />; break;

@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { apiGetJson, normalizeApiCacheUrl } from './dataCache.js';
+import { EscalationModal } from './EscalationModal.jsx';
 
 const API = '/api';
 
@@ -363,6 +364,7 @@ export const InvoiceCard = ({ idx, group, data, isLoading, errorMsg, isSelected,
   const [saving, setSaving] = useState(false);
   const [saveSuccess, setSaveSuccess] = useState(false);
   const [saveErr, setSaveErr] = useState('');
+  const [showEscalationModal, setShowEscalationModal] = useState(false);
 
   useEffect(() => {
     setDraft(data || {});
@@ -514,8 +516,8 @@ export const InvoiceCard = ({ idx, group, data, isLoading, errorMsg, isSelected,
         
         {/* Status indicator */}
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-            <span className={`status-pill ${hasPoorQuality || errorMsg ? 'danger' : 'success'}`}>
-                {hasPoorQuality ? 'Poor Image Quality' : status}
+            <span className={`status-pill ${hasPoorQuality ? 'warning-strong' : errorMsg ? 'danger' : 'success'}`}>
+                {hasPoorQuality ? '📸 Poor Image Quality' : status}
             </span>
         </div>
 
@@ -527,6 +529,17 @@ export const InvoiceCard = ({ idx, group, data, isLoading, errorMsg, isSelected,
               {saving ? 'Saving...' : 'Save'}
             </button>
           </div>
+        )}
+        {hasPoorQuality && (
+          <button
+            type="button"
+            id={`escalate-btn-${idx}`}
+            className="escalate-btn"
+            onClick={() => setShowEscalationModal(true)}
+            title="Open escalation dialog for this flagged invoice"
+          >
+            🚨 Escalate
+          </button>
         )}
       </div>
 
@@ -624,6 +637,18 @@ export const InvoiceCard = ({ idx, group, data, isLoading, errorMsg, isSelected,
 
       {isEmpty && !errorMsg && !hasPoorQuality && (
         <div className="subtle-copy" style={{ padding: '1rem' }}>No extraction result found for this invoice.</div>
+      )}
+
+      {showEscalationModal && (
+        <EscalationModal
+          docId={draft.documentId || ''}
+          invoiceId={draft.invoiceId || String(idx)}
+          invoiceLabel={`Invoice ${idx + 1}`}
+          onClose={() => setShowEscalationModal(false)}
+          onSuccess={() => {
+            setShowEscalationModal(false);
+          }}
+        />
       )}
     </div>
   );

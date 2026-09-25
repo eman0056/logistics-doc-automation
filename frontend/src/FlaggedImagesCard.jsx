@@ -12,10 +12,10 @@ export const FlaggedImagesCard = () => {
       let total = 0;
       (data.documents || []).forEach(doc => {
         const docStatus = doc.status || '';
-        if (docStatus.includes('Poor Image Quality')) total++;
+        if (docStatus.includes('Poor Image Quality') || docStatus === 'POOR_IMAGE_QUALITY') total++;
         (doc.invoices || []).forEach(inv => {
           const invStatus = inv.status || inv.extractionStatus || '';
-          if (invStatus.includes('Poor Image Quality') || inv.poorImageQuality) total++;
+          if (invStatus.includes('Poor Image Quality') || invStatus === 'POOR_IMAGE_QUALITY' || inv.poorImageQuality) total++;
         });
       });
       try {
