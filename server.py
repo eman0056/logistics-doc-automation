@@ -174,7 +174,9 @@ def send_to_n8n_webhook(invoice_index, pages, base64_pdf, doc_id=None, raw_ocr_t
         "timestamp": datetime.now().isoformat()
     }
 
-    print(f"[n8n] Sending Invoice {invoice_index} (pages {page_start}-{page_end}) to webhook: {webhook_url}")
+    print("[n8n] Payload being sent:")
+print(json.dumps(payload, indent=2))
+print(f"[n8n] Sending Invoice {invoice_index} (pages {page_start}-{page_end}) to webhook: {webhook_url}")
 
     try:
         import urllib.request
@@ -822,7 +824,7 @@ class LogisticsAutomationHandler(http.server.BaseHTTPRequestHandler):
                 base64_pdf = base64.b64encode(f.read()).decode('utf-8')
         # Compute image quality for this invoice image if available
         image_quality = 0.5
-        if file_path and os.path.splitext(file_path)[1].lower() in ['.png', '.jpg', '.jpeg']:
+        if file_path and os.path.splitext(file_path)[1].lower() in ['.png', '.jpg', '.jpeg', '.webp']:
             image_quality = get_image_blur_quality(file_path)
         webhook_result = send_to_n8n_webhook(
             invoice_index, [page_start, page_end], base64_pdf, doc_id=doc_id,
