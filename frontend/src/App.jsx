@@ -2027,16 +2027,17 @@ function App() {
     docs.forEach((doc) => {
       const docStatus = doc.status || '';
       const poorQualityStatuses = ['POOR_IMAGE_QUALITY', 'Poor Image Quality'];
+      const isDocPoor = poorQualityStatuses.some(s => docStatus.includes(s)) || doc.poorImageQuality || (doc.imageQuality != null && doc.imageQuality < 0.6);
 
       // Check doc-level poor quality
-      if (poorQualityStatuses.some(s => docStatus.includes(s)) && !resolvedKeys.has(doc.id)) {
+      if (isDocPoor && !resolvedKeys.has(doc.id)) {
         flaggedItems.push({
           key: doc.id,
           docId: doc.id,
           invoiceId: doc.id,
           docName: doc.fileName,
           invoiceLabel: 'Document Level',
-          status: docStatus,
+          status: docStatus || 'POOR_IMAGE_QUALITY',
           date: doc.createdAt ? new Date(doc.createdAt).toLocaleDateString() : '—',
           reviewUrl: `/documents/${doc.id}/review`,
         });
@@ -2045,7 +2046,7 @@ function App() {
       // Check invoice-level poor quality
       (doc.invoices || []).forEach((inv, idx) => {
         const invStatus = inv.status || inv.extractionStatus || '';
-        const isPoor = poorQualityStatuses.some(s => invStatus.includes(s)) || inv.poorImageQuality;
+        const isPoor = poorQualityStatuses.some(s => invStatus.includes(s)) || inv.poorImageQuality || (inv.imageQuality != null && inv.imageQuality < 0.6) || isDocPoor;
         const itemKey = `${doc.id}-${idx}`;
         if (isPoor && !resolvedKeys.has(itemKey) && !resolvedKeys.has(doc.id)) {
           flaggedItems.push({
@@ -2054,7 +2055,7 @@ function App() {
             invoiceId: inv.id || String(idx),
             docName: doc.fileName,
             invoiceLabel: inv.invoiceNumber ? `Invoice ${inv.invoiceNumber}` : `Invoice #${idx + 1}`,
-            status: invStatus || 'Poor Image Quality',
+            status: invStatus || 'POOR_IMAGE_QUALITY',
             date: doc.createdAt ? new Date(doc.createdAt).toLocaleDateString() : '—',
             reviewUrl: (doc.invoiceCount || 1) > 1
               ? `/documents/${doc.id}/multi-workspace?invoiceIndex=${idx}`

@@ -283,7 +283,10 @@ def init_db(conn):
         "ALTER TABLE Document ADD COLUMN fileData TEXT;",
         "ALTER TABLE Document ADD COLUMN pageCount INTEGER DEFAULT 1;",
         "ALTER TABLE Document ADD COLUMN processedPages INTEGER DEFAULT 0;",
+        "ALTER TABLE Document ADD COLUMN imageQuality REAL;",
         "ALTER TABLE DocumentInvoice ADD COLUMN rawOcrText TEXT;",
+        "ALTER TABLE DocumentInvoice ADD COLUMN imageQuality REAL;",
+        "ALTER TABLE DocumentInvoice ADD COLUMN status TEXT;",
         "CREATE UNIQUE INDEX IF NOT EXISTS idx_document_invoice_order ON DocumentInvoice(documentId, invoiceIndex);",
     ]
     for stmt in alter_statements:
@@ -1679,13 +1682,13 @@ def get_documents():
     try:
         conn = get_db()
         cursor = execute_query(conn, """
-            SELECT d.id, d.fileName, d.fileSize, d.mimeType, d.storagePath, d.documentType, d.status, d.overallConfidence, d.invoiceGeneratedAt, d.createdAt, e.canonicalJson, e.confidenceScores, e.finalSubmittedData
+            SELECT d.id, d.fileName, d.fileSize, d.mimeType, d.storagePath, d.documentType, d.status, d.overallConfidence, d.invoiceGeneratedAt, d.createdAt, e.canonicalJson, e.confidenceScores, e.finalSubmittedData, d.imageQuality
             FROM Document d
             LEFT JOIN Extraction e ON d.id = e.documentId
             ORDER BY d.createdAt DESC;
         """)
         rows = cursor.fetchall()
-        invoice_cursor = execute_query(conn, "SELECT id, documentId, invoiceIndex, pageStart, pageEnd, rawOcrText, canonicalJson, confidenceScores, finalSubmittedData, status, overallConfidence FROM DocumentInvoice ORDER BY documentId, invoiceIndex;")
+        invoice_cursor = execute_query(conn, "SELECT id, documentId, invoiceIndex, pageStart, pageEnd, rawOcrText, canonicalJson, confidenceScores, finalSubmittedData, status, overallConfidence, imageQuality FROM DocumentInvoice ORDER BY documentId, invoiceIndex;")
         invoice_rows = invoice_cursor.fetchall()
         conn.close()
 
@@ -1701,13 +1704,20 @@ def get_documents():
           invoice_header = invoice_data.get('invoiceHeader') if isinstance(invoice_data, dict) else None
           if not isinstance(invoice_header, dict):
             invoice_header = invoice_data if isinstance(invoice_data, dict) else {}
+          inv_status = invoice[9]
+          inv_quality = invoice[11] if len(invoice) > 11 else None
+          is_poor = inv_status == 'POOR_IMAGE_QUALITY' or (inv_quality is not None and inv_quality < 0.6)
+
           invoices_by_document.setdefault(invoice[1], []).append({
             "id": invoice[0], "documentId": invoice[1], "invoiceIndex": invoice[2],
             "pageStart": invoice[3], "pageEnd": invoice[4], "rawOcrText": invoice[5], "canonicalJson": invoice[6],
             "confidenceScores": invoice[7], "finalSubmittedData": invoice[8],
             "extractedData": invoice_data,
-            "status": invoice[9], "overallConfidence": invoice[10],
-            "extractionStatus": invoice[9] or "PENDING",
+            "status": "POOR_IMAGE_QUALITY" if is_poor else (inv_status or "EXTRACTED"),
+            "overallConfidence": invoice[10],
+            "imageQuality": inv_quality,
+            "poorImageQuality": is_poor,
+            "extractionStatus": "POOR_IMAGE_QUALITY" if is_poor else (inv_status or "PENDING"),
             "extractionComplete": bool(invoice[6] or invoice[8]),
             "invoiceNumber": invoice_header.get('invoiceNumber') or invoice_header.get('invoiceId') or invoice_header.get('documentNumber') or invoice_header.get('invoiceNo')
           })
@@ -1738,6 +1748,10 @@ def get_documents():
                     "extractedData": latest_invoice.get("extractedData", {})
                 }
 
+            doc_status = r[6]
+            doc_quality = r[13] if len(r) > 13 else None
+            is_doc_poor = doc_status == 'POOR_IMAGE_QUALITY' or (doc_quality is not None and doc_quality < 0.6) or any(inv.get('poorImageQuality') for inv in invoice_records)
+
             doc = {
                 "id": r[0],
                 "fileName": r[1],
@@ -1745,8 +1759,10 @@ def get_documents():
                 "mimeType": r[3],
                 "storagePath": r[4],
                 "documentType": r[5],
-                "status": r[6] or ("EXTRACTED" if invoice_records else "PREPROCESSED"),
+                "status": "POOR_IMAGE_QUALITY" if is_doc_poor else (doc_status or ("EXTRACTED" if invoice_records else "PREPROCESSED")),
                 "overallConfidence": r[7],
+                "imageQuality": doc_quality,
+                "poorImageQuality": is_doc_poor,
                 "invoiceGeneratedAt": r[8].isoformat() if hasattr(r[8], "isoformat") else r[8],
                 "createdAt": r[9].isoformat() if hasattr(r[9], "isoformat") else r[9],
                 "extraction": extraction_payload
@@ -1931,8 +1947,18 @@ async def upload_documents(request: Request):
                 "callbackUrl": f"{app_base_url}/api/documents/{doc_id}/extraction/callback"
             }
             
+            try:
+                threshold = float(os.getenv('IMAGE_QUALITY_THRESHOLD', '0.6'))
+            except ValueError:
+                threshold = 0.6
+
+            initial_status = 'POOR_IMAGE_QUALITY' if img_quality < threshold else 'PREPROCESSED'
+
             conn = get_db()
-            execute_query(conn, "INSERT INTO Document (id, fileName, fileSize, mimeType, storagePath, status, pageCount, processedPages, fileData) VALUES (?, ?, ?, ?, ?, 'PREPROCESSED', ?, 0, ?)", (doc_id, file_item.filename, len(file_bytes), file_item.content_type or 'application/octet-stream', storage_path, page_count, file_b64))
+            execute_query(conn, "INSERT INTO Document (id, fileName, fileSize, mimeType, storagePath, status, pageCount, processedPages, fileData, imageQuality) VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?)", (doc_id, file_item.filename, len(file_bytes), file_item.content_type or 'application/octet-stream', storage_path, initial_status, page_count, file_b64, img_quality))
+            
+            # Pre-seed DocumentInvoice record so frontend Flagged tab detects poor quality instantly
+            execute_query(conn, "INSERT INTO DocumentInvoice (id, documentId, invoiceIndex, pageStart, pageEnd, imageQuality, status) VALUES (?, ?, 0, 1, ?, ?, ?)", (f"{doc_id}-invoice-1", doc_id, page_count, img_quality, initial_status))
             conn.commit()
             conn.close()
 

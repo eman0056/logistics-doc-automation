@@ -43,7 +43,7 @@ export const Escalations = () => {
 
       (data.documents || []).forEach(doc => {
         const docStatus = doc.status || 'PENDING';
-        const isDocFlagged = docStatus === 'Escalation Required' || docStatus === 'Poor Image Quality' || docStatus === 'POOR_IMAGE_QUALITY';
+        const isDocFlagged = docStatus === 'Escalation Required' || docStatus === 'Poor Image Quality' || docStatus === 'POOR_IMAGE_QUALITY' || doc.poorImageQuality || (doc.imageQuality != null && doc.imageQuality < 0.6);
         
         if (isDocFlagged && !resolvedSet.has(doc.id)) {
           seenIds.add(doc.id);
@@ -52,7 +52,7 @@ export const Escalations = () => {
             documentId: doc.id,
             docNumber: doc.fileName,
             invoiceNumber: 'Doc Level',
-            reason: docStatus,
+            reason: docStatus === 'PENDING' ? 'Poor Image Quality' : docStatus,
             date: doc.createdAt ? new Date(doc.createdAt).toISOString().split('T')[0] : '2026-09-24',
             status: 'Pending Review',
             isMulti: (doc.invoiceCount || 1) > 1
@@ -61,7 +61,7 @@ export const Escalations = () => {
 
         (doc.invoices || []).forEach((inv, idx) => {
           const invStatus = inv.status || inv.extractionStatus;
-          const isInvFlagged = invStatus === 'Poor Image Quality' || invStatus === 'POOR_IMAGE_QUALITY' || invStatus === 'Escalation Required' || inv.poorImageQuality;
+          const isInvFlagged = invStatus === 'Poor Image Quality' || invStatus === 'POOR_IMAGE_QUALITY' || invStatus === 'Escalation Required' || inv.poorImageQuality || (inv.imageQuality != null && inv.imageQuality < 0.6) || isDocFlagged;
           const invKey = `${doc.id}-${idx}`;
 
           if (isInvFlagged && !resolvedSet.has(invKey) && !resolvedSet.has(doc.id)) {
@@ -72,7 +72,7 @@ export const Escalations = () => {
               invoiceIndex: idx,
               docNumber: doc.fileName,
               invoiceNumber: inv.invoiceNumber || `Invoice #${idx + 1}`,
-              reason: invStatus || (inv.poorImageQuality ? 'Poor Image Quality' : 'Escalation Required'),
+              reason: invStatus || (inv.poorImageQuality || isInvFlagged ? 'Poor Image Quality' : 'Escalation Required'),
               date: doc.createdAt ? new Date(doc.createdAt).toISOString().split('T')[0] : '2026-09-24',
               status: 'Pending Review',
               isMulti: true

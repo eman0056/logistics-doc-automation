@@ -720,7 +720,17 @@ class LogisticsAutomationHandler(http.server.BaseHTTPRequestHandler):
                 
                 conn = sqlite3.connect(DB_PATH)
                 cursor = conn.cursor()
-                cursor.execute("UPDATE Document SET status = 'PREPROCESSED' WHERE id = ?;", (res["documentId"],))
+                doc_status = 'POOR_IMAGE_QUALITY' if img_quality < 0.6 else 'PREPROCESSED'
+                try:
+                    cursor.execute("ALTER TABLE Document ADD COLUMN imageQuality REAL")
+                except sqlite3.OperationalError:
+                    pass
+                try:
+                    cursor.execute("ALTER TABLE DocumentInvoice ADD COLUMN imageQuality REAL")
+                except sqlite3.OperationalError:
+                    pass
+                cursor.execute("UPDATE Document SET status = ?, imageQuality = ? WHERE id = ?;", (doc_status, img_quality, res["documentId"]))
+                cursor.execute("INSERT OR REPLACE INTO DocumentInvoice (id, documentId, invoiceIndex, pageStart, pageEnd, imageQuality, status) VALUES (?, ?, 0, 1, 1, ?, ?);", (f"{res['documentId']}-invoice-1", res["documentId"], img_quality, doc_status))
                 conn.commit()
                 conn.close()
                 
