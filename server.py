@@ -1,4 +1,6 @@
 import http.server
+from scripts.image_quality import get_image_blur_quality
+
 import socketserver
 import json
 import urllib.parse
@@ -120,7 +122,7 @@ def extract_text_from_pdf_pages(pdf_source, start_page, end_page):
     except Exception:
         return ""
 
-def send_to_n8n_webhook(invoice_index, pages, base64_pdf, doc_id=None, raw_ocr_text=None, file_path=None, page_start_for_ocr=None, page_end_for_ocr=None):
+def send_to_n8n_webhook(invoice_index, pages, base64_pdf, doc_id=None, raw_ocr_text=None, file_path=None, page_start_for_ocr=None, page_end_for_ocr=None, image_quality=None):
     """
     Send isolated invoice payload to n8n webhook
     """
@@ -168,6 +170,7 @@ def send_to_n8n_webhook(invoice_index, pages, base64_pdf, doc_id=None, raw_ocr_t
         "docId": doc_id,
         "rawOcrText": raw_ocr_text,
         "callbackUrl": callback_url,
+        "imageQuality": image_quality,
         "timestamp": datetime.now().isoformat()
     }
 
@@ -817,10 +820,14 @@ class LogisticsAutomationHandler(http.server.BaseHTTPRequestHandler):
         else:
             with open(file_path, "rb") as f:
                 base64_pdf = base64.b64encode(f.read()).decode('utf-8')
-
+        # Compute image quality for this invoice image if available
+        image_quality = 0.5
+        if file_path and os.path.splitext(file_path)[1].lower() in ['.png', '.jpg', '.jpeg']:
+            image_quality = get_image_blur_quality(file_path)
         webhook_result = send_to_n8n_webhook(
             invoice_index, [page_start, page_end], base64_pdf, doc_id=doc_id,
-            file_path=file_path, page_start_for_ocr=page_start, page_end_for_ocr=page_end
+            file_path=file_path, page_start_for_ocr=page_start, page_end_for_ocr=page_end,
+            image_quality=image_quality
         )
         if not webhook_result["success"]:
             return self._send_json({"success": False, "error": webhook_result["error"]}, 500)
@@ -829,6 +836,7 @@ class LogisticsAutomationHandler(http.server.BaseHTTPRequestHandler):
         return self._send_json({
             "success": True,
             "invoiceIndex": invoice_index,
+            "imageQuality": image_quality,
             "extractedData": extracted_data
         })
             
