@@ -161,6 +161,14 @@ def send_to_n8n_webhook(invoice_index, pages, base64_pdf, doc_id=None, raw_ocr_t
     app_base_url = os.getenv('APP_BASE_URL', 'https://logistics-doc-automation.vercel.app').rstrip('/')
     callback_url = f"{app_base_url}/api/documents/{doc_id}/extraction/callback"
 
+    if image_quality is None:
+        if file_path and os.path.exists(file_path):
+            image_quality = get_image_blur_quality(file_path)
+        elif base64_pdf:
+            image_quality = get_image_blur_quality(base64_pdf)
+        else:
+            image_quality = 0.5
+
     payload = {
         "invoiceIndex": invoice_index,
         "invoiceId": f"{doc_id}-invoice-{invoice_index}",

@@ -21,6 +21,7 @@ except:
 
 sys.path.append(os.path.join(BASE_DIR, "scripts"))
 from invoice_routing import detect_invoice_groups
+from image_quality import get_image_blur_quality
 
 app = FastAPI()
 
@@ -142,7 +143,7 @@ def extract_text_from_pdf_pages(pdf_source, start_page, end_page):
     except Exception:
         return ""
 
-def send_to_n8n_webhook(invoice_index, pages, base64_pdf, doc_id=None, raw_ocr_text=None, file_bytes=None, page_start_for_ocr=None, page_end_for_ocr=None):
+def send_to_n8n_webhook(invoice_index, pages, base64_pdf, doc_id=None, raw_ocr_text=None, file_bytes=None, page_start_for_ocr=None, page_end_for_ocr=None, image_quality=None):
     """
     Send isolated invoice payload to n8n webhook
     """
@@ -175,6 +176,14 @@ def send_to_n8n_webhook(invoice_index, pages, base64_pdf, doc_id=None, raw_ocr_t
             except Exception:
                 raw_ocr_text = ""
 
+    if image_quality is None:
+        if file_bytes:
+            image_quality = get_image_blur_quality(file_bytes)
+        elif base64_pdf:
+            image_quality = get_image_blur_quality(base64_pdf)
+        else:
+            image_quality = 0.5
+
     # Build callback URL so n8n can POST extracted data back to us
     app_base_url = os.getenv('APP_BASE_URL', 'https://logistics-doc-automation.vercel.app').rstrip('/')
     callback_url = f"{app_base_url}/api/documents/{doc_id}/extraction/callback"
@@ -191,10 +200,11 @@ def send_to_n8n_webhook(invoice_index, pages, base64_pdf, doc_id=None, raw_ocr_t
         "docId": doc_id,
         "rawOcrText": raw_ocr_text,
         "callbackUrl": callback_url,
+        "imageQuality": image_quality,
         "timestamp": datetime.now().isoformat()
     }
 
-    print(f"[n8n] Sending Invoice {invoice_index} (pages {page_start}-{page_end}) to webhook: {webhook_url}")
+    print(f"[n8n] Sending Invoice {invoice_index} (pages {page_start}-{page_end}, imageQuality={image_quality}) to webhook: {webhook_url}")
 
     try:
         import urllib.request
@@ -1903,6 +1913,9 @@ async def upload_documents(request: Request):
             page_count = count_pdf_pages(file_bytes) if (file_item.filename or '').lower().endswith('.pdf') else 1
             storage_path = f"api/documents/{doc_id}/file"
             
+            img_quality = get_image_blur_quality(file_bytes)
+            print(f"[Backend] 🔍 Calculated imageQuality score for {file_item.filename}: {img_quality}")
+
             payload = {
                 "documentId": doc_id,
                 "storagePath": storage_path,
@@ -1914,6 +1927,7 @@ async def upload_documents(request: Request):
                 "detectedInvoiceGroups": invoice_groups,
                 "rawOcrText": "\n\f\n".join(group.get("rawOcrText", "") for group in invoice_groups),
                 "workflowType": "multi-invoice" if invoice_count >= 2 else "single-invoice",
+                "imageQuality": img_quality,
                 "callbackUrl": f"{app_base_url}/api/documents/{doc_id}/extraction/callback"
             }
             
@@ -2085,9 +2099,14 @@ def _internal_process_invoice(doc_id: str, invoice_index: int, page_start: int, 
         import base64
         base64_pdf = base64.b64encode(file_bytes).decode('utf-8')
 
+    print(f"[Backend] 🔍 Analyzing image quality for invoice {invoice_index} ({file_name})...")
+    image_quality = get_image_blur_quality(file_bytes)
+    print(f"[Backend] ✅ Calculated imageQuality score: {image_quality}")
+
     webhook_result = send_to_n8n_webhook(
         invoice_index, [page_start, page_end], base64_pdf, doc_id=doc_id,
-        file_bytes=file_bytes, page_start_for_ocr=page_start, page_end_for_ocr=page_end
+        file_bytes=file_bytes, page_start_for_ocr=page_start, page_end_for_ocr=page_end,
+        image_quality=image_quality
     )
     if not webhook_result["success"]:
         return JSONResponse({"success": False, "error": webhook_result["error"]}, status_code=500)
@@ -2096,6 +2115,7 @@ def _internal_process_invoice(doc_id: str, invoice_index: int, page_start: int, 
     return {
         "success": True,
         "invoiceIndex": invoice_index,
+        "imageQuality": image_quality,
         "extractedData": extracted_data
     }
 
@@ -2431,11 +2451,42 @@ async def extraction_callback(doc_id: str, request: Request):
                 except json.JSONDecodeError:
                     pass
             confidence_json = json.dumps(confidence_scores) if confidence_scores is not None else None
+
+            # Calculate / retrieve image quality for status check
+            img_quality = invoice.get('imageQuality') or body.get('imageQuality')
+            if img_quality is None:
+                cursor_img = execute_query(conn, "SELECT fileData FROM Document WHERE id = ?", (doc_id,))
+                row_img = cursor_img.fetchone()
+                if row_img and row_img[0]:
+                    try:
+                        img_quality = get_image_blur_quality(base64.b64decode(row_img[0]))
+                    except Exception:
+                        img_quality = 0.5
+                else:
+                    img_quality = 0.5
+
+            try:
+                threshold = float(os.getenv('IMAGE_QUALITY_THRESHOLD', '0.6'))
+            except ValueError:
+                threshold = 0.6
+
+            inv_status = 'EXTRACTED' if img_quality >= threshold else 'POOR_IMAGE_QUALITY'
+
+            # Ensure imageQuality and status columns exist on DocumentInvoice table
+            try:
+                execute_query(conn, "ALTER TABLE DocumentInvoice ADD COLUMN imageQuality REAL")
+            except Exception:
+                pass
+            try:
+                execute_query(conn, "ALTER TABLE DocumentInvoice ADD COLUMN status TEXT")
+            except Exception:
+                pass
+
             cursor = execute_query(conn, "SELECT 1 FROM DocumentInvoice WHERE id = ?", (invoice_id,))
             if cursor.fetchone():
-                execute_query(conn, "UPDATE DocumentInvoice SET pageStart = COALESCE(?, pageStart), pageEnd = COALESCE(?, pageEnd), rawOcrText = COALESCE(?, rawOcrText), canonicalJson = ?, confidenceScores = ?, overallConfidence = ?, updatedAt = CURRENT_TIMESTAMP WHERE id = ?", (invoice.get('pageStart'), invoice.get('pageEnd'), invoice.get('rawOcrText'), json_str, confidence_json, invoice.get('overallConfidence'), invoice_id))
+                execute_query(conn, "UPDATE DocumentInvoice SET pageStart = COALESCE(?, pageStart), pageEnd = COALESCE(?, pageEnd), rawOcrText = COALESCE(?, rawOcrText), canonicalJson = ?, confidenceScores = ?, overallConfidence = ?, imageQuality = ?, status = ?, updatedAt = CURRENT_TIMESTAMP WHERE id = ?", (invoice.get('pageStart'), invoice.get('pageEnd'), invoice.get('rawOcrText'), json_str, confidence_json, invoice.get('overallConfidence'), img_quality, inv_status, invoice_id))
             else:
-                execute_query(conn, "INSERT INTO DocumentInvoice (id, documentId, invoiceIndex, pageStart, pageEnd, rawOcrText, canonicalJson, confidenceScores, overallConfidence) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)", (invoice_id, doc_id, invoice_index, invoice.get('pageStart'), invoice.get('pageEnd'), invoice.get('rawOcrText'), json_str, confidence_json, invoice.get('overallConfidence')))
+                execute_query(conn, "INSERT INTO DocumentInvoice (id, documentId, invoiceIndex, pageStart, pageEnd, rawOcrText, canonicalJson, confidenceScores, overallConfidence, imageQuality, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", (invoice_id, doc_id, invoice_index, invoice.get('pageStart'), invoice.get('pageEnd'), invoice.get('rawOcrText'), json_str, confidence_json, invoice.get('overallConfidence'), img_quality, inv_status))
 
             # Preserve the document-level record for existing consumers.
             cursor = execute_query(conn, "SELECT 1 FROM Extraction WHERE documentId=?", (doc_id,))
@@ -2448,7 +2499,19 @@ async def extraction_callback(doc_id: str, request: Request):
         count_cursor = execute_query(conn, "SELECT COUNT(*) FROM DocumentInvoice WHERE documentId = ?", (doc_id,))
         received_count = count_cursor.fetchone()[0]
         is_complete = received_count >= expected_count
-        execute_query(conn, "UPDATE Document SET status = ?, processedPages = CASE WHEN ? THEN COALESCE(pageCount, 1) ELSE processedPages END WHERE id = ?", ('EXTRACTED' if is_complete else 'PREPROCESSED', is_complete, doc_id))
+
+        cursor_poor = execute_query(conn, "SELECT COUNT(*) FROM DocumentInvoice WHERE documentId = ? AND status != 'POOR_IMAGE_QUALITY'", (doc_id,))
+        non_poor_row = cursor_poor.fetchone()
+        non_poor_count = non_poor_row[0] if non_poor_row else 0
+
+        if is_complete and non_poor_count == 0:
+            doc_status = 'POOR_IMAGE_QUALITY'
+        elif is_complete:
+            doc_status = 'EXTRACTED'
+        else:
+            doc_status = 'PREPROCESSED'
+
+        execute_query(conn, "UPDATE Document SET status = ?, processedPages = CASE WHEN ? THEN COALESCE(pageCount, 1) ELSE processedPages END WHERE id = ?", (doc_status, is_complete, doc_id))
         conn.commit()
 
         review_url = f"/documents/{doc_id}/invoices" if expected_count > 1 else f"/documents/{doc_id}/review"
