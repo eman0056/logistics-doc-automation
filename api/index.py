@@ -2501,12 +2501,14 @@ async def extraction_callback(doc_id: str, request: Request):
             # Ensure imageQuality and status columns exist on DocumentInvoice table
             try:
                 execute_query(conn, "ALTER TABLE DocumentInvoice ADD COLUMN imageQuality REAL")
+                conn.commit()
             except Exception:
-                pass
+                conn.rollback()
             try:
                 execute_query(conn, "ALTER TABLE DocumentInvoice ADD COLUMN status TEXT")
+                conn.commit()
             except Exception:
-                pass
+                conn.rollback()
 
             cursor = execute_query(conn, "SELECT 1 FROM DocumentInvoice WHERE id = ?", (invoice_id,))
             if cursor.fetchone():
