@@ -412,7 +412,6 @@ function App() {
           <a href="/" className="nav-link">Dashboard</a>
           <a href="/documents" className="nav-link">Documents</a>
           <a href="/escalations" className="nav-link">Escalations</a>
-          <a href="/flagged" className="nav-link">Flagged 📸</a>
           <a href="/preview" className="nav-link">Preview</a>
           <a href="/documents/upload" className="nav-link">Upload Single</a>
           <a href="/documents/upload-multi" className="nav-link">Upload Multiple</a>
