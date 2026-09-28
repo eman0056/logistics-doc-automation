@@ -485,8 +485,17 @@ class LogisticsAutomationHandler(http.server.BaseHTTPRequestHandler):
     def _handle_get_documents(self):
         conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
+        try:
+            cursor.execute("ALTER TABLE Document ADD COLUMN imageQuality REAL")
+        except sqlite3.OperationalError:
+            pass
+        try:
+            cursor.execute("ALTER TABLE DocumentInvoice ADD COLUMN imageQuality REAL")
+        except sqlite3.OperationalError:
+            pass
+
         cursor.execute("""
-            SELECT d.id, d.fileName, d.fileSize, d.mimeType, d.storagePath, d.documentType, d.status, d.overallConfidence, d.invoiceGeneratedAt, d.createdAt, e.canonicalJson, e.confidenceScores, e.finalSubmittedData
+            SELECT d.id, d.fileName, d.fileSize, d.mimeType, d.storagePath, d.documentType, d.status, d.overallConfidence, d.invoiceGeneratedAt, d.createdAt, e.canonicalJson, e.confidenceScores, e.finalSubmittedData, d.imageQuality
             FROM Document d
             LEFT JOIN Extraction e ON d.id = e.documentId
             ORDER BY d.createdAt DESC;
@@ -507,19 +516,31 @@ class LogisticsAutomationHandler(http.server.BaseHTTPRequestHandler):
             invoice_data = {}
           header = invoice_data.get('invoiceHeader') if isinstance(invoice_data, dict) else {}
           header = header if isinstance(header, dict) else {}
+          inv_status = invoice[9]
+          inv_quality = invoice[11] if len(invoice) > 11 else None
+          is_inv_poor = inv_status in ('POOR_IMAGE_QUALITY', 'Poor Image Quality') or (inv_quality is not None and inv_quality < 0.6)
           invoices_by_document.setdefault(invoice[1], []).append({
             "id": invoice[0], "documentId": invoice[1], "invoiceIndex": invoice[2],
             "pageStart": invoice[3], "pageEnd": invoice[4], "rawOcrText": invoice[5],
             "canonicalJson": invoice[6], "confidenceScores": invoice[7],
-            "finalSubmittedData": invoice[8], "status": invoice[9],
-            "extractionStatus": invoice[9] or "PENDING", "overallConfidence": invoice[10],
-            "imageQuality": invoice[11],
+            "finalSubmittedData": invoice[8],
+            "status": "POOR_IMAGE_QUALITY" if is_inv_poor else (inv_status or "EXTRACTED"),
+            "extractionStatus": "POOR_IMAGE_QUALITY" if is_inv_poor else (inv_status or "PENDING"),
+            "overallConfidence": invoice[10],
+            "imageQuality": inv_quality,
+            "poorImageQuality": is_inv_poor,
             "extractedData": invoice_data,
             "invoiceNumber": header.get('invoiceNumber') or header.get('invoiceId') or header.get('documentNumber') or header.get('invoiceNo')
           })
 
         docs = []
         for r in rows:
+            invoice_records = invoices_by_document.get(r[0], [])
+            doc_status = r[6]
+            doc_quality = r[13] if len(r) > 13 else None
+            is_doc_poor = doc_status in ('POOR_IMAGE_QUALITY', 'Poor Image Quality') or (doc_quality is not None and doc_quality < 0.6) or any(inv.get('poorImageQuality') for inv in invoice_records)
+            final_status = "POOR_IMAGE_QUALITY" if is_doc_poor else (doc_status or ("EXTRACTED" if invoice_records else "PREPROCESSED"))
+
             docs.append({
                 "id": r[0],
                 "fileName": r[1],
@@ -527,8 +548,10 @@ class LogisticsAutomationHandler(http.server.BaseHTTPRequestHandler):
                 "mimeType": r[3],
                 "storagePath": r[4],
                 "documentType": r[5],
-                "status": r[6],
+                "status": final_status,
                 "overallConfidence": r[7],
+                "imageQuality": doc_quality,
+                "poorImageQuality": is_doc_poor,
                 "invoiceGeneratedAt": r[8],
                 "createdAt": r[9],
                 "extraction": {
@@ -536,8 +559,8 @@ class LogisticsAutomationHandler(http.server.BaseHTTPRequestHandler):
                     "confidenceScores": r[11],
                     "finalSubmittedData": r[12]
                 },
-                "invoices": invoices_by_document.get(r[0], []),
-                "invoiceCount": len(invoices_by_document.get(r[0], []))
+                "invoices": invoice_records,
+                "invoiceCount": len(invoice_records)
             })
         self._send_json({"success": True, "documents": docs})
 
@@ -730,7 +753,9 @@ class LogisticsAutomationHandler(http.server.BaseHTTPRequestHandler):
                 except sqlite3.OperationalError:
                     pass
                 cursor.execute("UPDATE Document SET status = ?, imageQuality = ? WHERE id = ?;", (doc_status, img_quality, res["documentId"]))
-                cursor.execute("INSERT OR REPLACE INTO DocumentInvoice (id, documentId, invoiceIndex, pageStart, pageEnd, imageQuality, status) VALUES (?, ?, 0, 1, 1, ?, ?);", (f"{res['documentId']}-invoice-1", res["documentId"], img_quality, doc_status))
+                for idx, group in enumerate(invoice_groups if invoice_groups else [{"pageStart": 1, "pageEnd": 1}]):
+                    inv_id = f"{res['documentId']}-invoice-{idx + 1}"
+                    cursor.execute("INSERT OR REPLACE INTO DocumentInvoice (id, documentId, invoiceIndex, pageStart, pageEnd, imageQuality, status) VALUES (?, ?, ?, ?, ?, ?, ?);", (inv_id, res["documentId"], idx, group.get("pageStart", 1), group.get("pageEnd", 1), img_quality, doc_status))
                 conn.commit()
                 conn.close()
                 
@@ -784,12 +809,30 @@ class LogisticsAutomationHandler(http.server.BaseHTTPRequestHandler):
                 invoice_count = len(invoice_groups)
                 
                 res = ingest_file(temp_file_path)
+                saved_file_path = os.path.join(BASE_DIR, res["storagePath"])
+                img_quality = get_image_blur_quality(saved_file_path if os.path.exists(saved_file_path) else temp_file_path)
                 if os.path.exists(temp_file_path):
                     os.remove(temp_file_path)
                 
+                doc_status = 'POOR_IMAGE_QUALITY' if img_quality < 0.6 else 'PREPROCESSED'
                 conn = sqlite3.connect(DB_PATH)
                 cursor = conn.cursor()
-                cursor.execute("UPDATE Document SET status = 'PREPROCESSED' WHERE id = ?;", (res["documentId"],))
+                try:
+                    cursor.execute("ALTER TABLE Document ADD COLUMN imageQuality REAL")
+                except sqlite3.OperationalError:
+                    pass
+                try:
+                    cursor.execute("ALTER TABLE DocumentInvoice ADD COLUMN imageQuality REAL")
+                except sqlite3.OperationalError:
+                    pass
+
+                cursor.execute("UPDATE Document SET status = ?, imageQuality = ? WHERE id = ?;", (doc_status, img_quality, res["documentId"]))
+                for idx, group in enumerate(invoice_groups):
+                    inv_id = f"{res['documentId']}-invoice-{idx + 1}"
+                    cursor.execute(
+                        "INSERT OR REPLACE INTO DocumentInvoice (id, documentId, invoiceIndex, pageStart, pageEnd, imageQuality, status) VALUES (?, ?, ?, ?, ?, ?, ?);",
+                        (inv_id, res["documentId"], idx, group.get("pageStart", 1), group.get("pageEnd", 1), img_quality, doc_status)
+                    )
                 conn.commit()
                 conn.close()
                 
@@ -933,6 +976,22 @@ class LogisticsAutomationHandler(http.server.BaseHTTPRequestHandler):
         image_quality = get_image_blur_quality(file_path)
         print(f"[Backend] ✅ Calculated imageQuality score: {image_quality}")
 
+        if image_quality < 0.6:
+            conn_q = sqlite3.connect(DB_PATH)
+            cur_q = conn_q.cursor()
+            try:
+                cur_q.execute("ALTER TABLE DocumentInvoice ADD COLUMN imageQuality REAL")
+            except sqlite3.OperationalError:
+                pass
+            inv_id = f"{doc_id}-invoice-{invoice_index + 1}"
+            cur_q.execute(
+                "INSERT OR REPLACE INTO DocumentInvoice (id, documentId, invoiceIndex, pageStart, pageEnd, imageQuality, status) VALUES (?, ?, ?, ?, ?, ?, 'POOR_IMAGE_QUALITY');",
+                (inv_id, doc_id, invoice_index, page_start, page_end, image_quality)
+            )
+            cur_q.execute("UPDATE Document SET status = 'POOR_IMAGE_QUALITY', imageQuality = ? WHERE id = ?;", (image_quality, doc_id))
+            conn_q.commit()
+            conn_q.close()
+
         # Step 2: Send to N8N webhook with calculated imageQuality score
         webhook_result = send_to_n8n_webhook(
             invoice_index, [page_start, page_end], base64_pdf, doc_id=doc_id,
@@ -1070,10 +1129,14 @@ class LogisticsAutomationHandler(http.server.BaseHTTPRequestHandler):
         cursor.execute("SELECT COUNT(*) FROM DocumentInvoice WHERE documentId = ?;", (doc_id,))
         received_count = cursor.fetchone()[0]
 
-        # Propagate POOR_IMAGE_QUALITY to document level if ALL received invoices are flagged
-        cursor.execute("SELECT COUNT(*) FROM DocumentInvoice WHERE documentId = ? AND status != 'POOR_IMAGE_QUALITY';", (doc_id,))
-        non_poor_count = cursor.fetchone()[0]
-        if received_count >= expected_count and non_poor_count == 0:
+        # Propagate POOR_IMAGE_QUALITY to document level if ANY invoice is flagged or if doc was originally poor quality
+        cursor.execute("SELECT COUNT(*) FROM DocumentInvoice WHERE documentId = ? AND (status = 'POOR_IMAGE_QUALITY' OR status = 'Poor Image Quality' OR (imageQuality IS NOT NULL AND imageQuality < 0.6));", (doc_id,))
+        poor_invoice_count = cursor.fetchone()[0]
+        cursor.execute("SELECT status, imageQuality FROM Document WHERE id = ?;", (doc_id,))
+        doc_row = cursor.fetchone()
+        is_doc_originally_poor = doc_row and (doc_row[0] in ('POOR_IMAGE_QUALITY', 'Poor Image Quality') or (doc_row[1] is not None and doc_row[1] < 0.6))
+
+        if poor_invoice_count > 0 or is_doc_originally_poor:
             doc_status = 'POOR_IMAGE_QUALITY'
         elif received_count >= expected_count:
             doc_status = 'EXTRACTED'

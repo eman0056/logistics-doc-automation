@@ -47,12 +47,13 @@ export const Escalations = () => {
         
         if (isDocFlagged && !resolvedSet.has(doc.id)) {
           seenIds.add(doc.id);
+          const isDocPoor = docStatus === 'POOR_IMAGE_QUALITY' || docStatus === 'Poor Image Quality' || doc.poorImageQuality || (doc.imageQuality != null && doc.imageQuality < 0.6);
           issues.push({
             id: doc.id,
             documentId: doc.id,
             docNumber: doc.fileName,
             invoiceNumber: 'Doc Level',
-            reason: docStatus === 'PENDING' ? 'Poor Image Quality' : docStatus,
+            reason: isDocPoor ? 'Poor Image Quality' : docStatus,
             date: doc.createdAt ? new Date(doc.createdAt).toISOString().split('T')[0] : '2026-09-24',
             status: 'Pending Review',
             isMulti: (doc.invoiceCount || 1) > 1
@@ -66,13 +67,14 @@ export const Escalations = () => {
 
           if (isInvFlagged && !resolvedSet.has(invKey) && !resolvedSet.has(doc.id)) {
             seenIds.add(invKey);
+            const isInvPoor = invStatus === 'POOR_IMAGE_QUALITY' || invStatus === 'Poor Image Quality' || inv.poorImageQuality || (inv.imageQuality != null && inv.imageQuality < 0.6) || isDocFlagged;
             issues.push({
               id: invKey,
               documentId: doc.id,
               invoiceIndex: idx,
               docNumber: doc.fileName,
               invoiceNumber: inv.invoiceNumber || `Invoice #${idx + 1}`,
-              reason: invStatus || (inv.poorImageQuality || isInvFlagged ? 'Poor Image Quality' : 'Escalation Required'),
+              reason: isInvPoor ? 'Poor Image Quality' : (invStatus || 'Escalation Required'),
               date: doc.createdAt ? new Date(doc.createdAt).toISOString().split('T')[0] : '2026-09-24',
               status: 'Pending Review',
               isMulti: true
@@ -264,7 +266,7 @@ export const Escalations = () => {
                           className="primary-btn" 
                           style={{ padding: '0.4rem 0.8rem', fontSize: '0.8rem' }}
                         >
-                          Review
+                          Review & Edit
                         </a>
                         <button
                           type="button"

@@ -492,12 +492,15 @@ function App() {
 
   const renderDocumentsView = () => {
     const rows = documents.map((doc) => {
-      const status = doc.status || 'PENDING';
+      const docStatus = doc.status || 'PENDING';
+      const isPoor = docStatus === 'POOR_IMAGE_QUALITY' || docStatus === 'Poor Image Quality' || doc.poorImageQuality || (doc.imageQuality != null && doc.imageQuality < 0.6);
+      const displayStatus = isPoor ? 'Poor Image Quality' : docStatus;
+      const statusClass = isPoor ? 'danger' : normalizeStatus(docStatus);
       return (
         <tr key={doc.id}>
           <td>{doc.fileName}</td>
           <td><span className="status-pill neutral">{doc.documentType || 'Document'}</span></td>
-          <td><span className={`status-pill ${normalizeStatus(status)}`}>{status}</span></td>
+          <td><span className={`status-pill ${statusClass}`}>{displayStatus}</span></td>
           <td>{((doc.fileSize || 0) / 1024).toFixed(1)} KB</td>
           <td>{new Date(doc.createdAt).toLocaleDateString()}</td>
           <td style={{ textAlign: 'right' }}>
@@ -1983,7 +1986,10 @@ function App() {
   };
 
   const renderInvoicesView = () => {
-    const invoices = documents.filter((doc) => doc.status === 'INVOICE_GENERATED' || doc.extraction?.finalSubmittedData);
+    const invoices = documents.filter((doc) => {
+      const isPoor = doc.status === 'POOR_IMAGE_QUALITY' || doc.status === 'Poor Image Quality' || doc.poorImageQuality || (doc.imageQuality != null && doc.imageQuality < 0.6) || (doc.invoices || []).some(inv => inv.status === 'POOR_IMAGE_QUALITY' || inv.status === 'Poor Image Quality' || inv.poorImageQuality || (inv.imageQuality != null && inv.imageQuality < 0.6));
+      return (doc.status === 'INVOICE_GENERATED' || doc.extraction?.finalSubmittedData) && !isPoor;
+    });
 
     return (
       <>

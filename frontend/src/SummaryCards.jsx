@@ -32,12 +32,15 @@ export const SummaryCards = () => {
       // count flagged / poor quality
       let flagged = 0;
       docs.forEach((doc) => {
-        if (doc.status?.includes('Poor Image Quality')) flagged++;
+        const isDocPoor = doc.status === 'POOR_IMAGE_QUALITY' || doc.status === 'Poor Image Quality' || doc.poorImageQuality || (doc.imageQuality != null && doc.imageQuality < 0.6);
+        if (isDocPoor) flagged++;
         (doc.invoices || []).forEach((inv) => {
+          const invStatus = inv.status || inv.extractionStatus || '';
           if (
-            inv.status?.includes('Poor Image Quality') ||
-            inv.extractionStatus?.includes('Poor Image Quality') ||
-            inv.poorImageQuality
+            invStatus === 'POOR_IMAGE_QUALITY' ||
+            invStatus === 'Poor Image Quality' ||
+            inv.poorImageQuality ||
+            (inv.imageQuality != null && inv.imageQuality < 0.6)
           ) flagged++;
         });
       });

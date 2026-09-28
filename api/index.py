@@ -2008,7 +2008,27 @@ async def upload_multi_document(request: Request):
             page_count = count_pdf_pages(file_bytes) if (file_item.filename or '').lower().endswith('.pdf') else 1
             storage_path = f"api/documents/{doc_id}/file"
             
-            execute_query(conn, "INSERT INTO Document (id, fileName, fileSize, mimeType, storagePath, status, pageCount, processedPages, fileData) VALUES (?, ?, ?, ?, ?, 'PREPROCESSED', ?, 0, ?)", (doc_id, file_item.filename, len(file_bytes), file_item.content_type or 'application/octet-stream', storage_path, page_count, file_b64))
+            img_quality = get_image_blur_quality(file_bytes)
+            initial_status = 'POOR_IMAGE_QUALITY' if img_quality < 0.6 else 'PREPROCESSED'
+            
+            try:
+                execute_query(conn, "ALTER TABLE Document ADD COLUMN imageQuality REAL")
+            except Exception:
+                pass
+            try:
+                execute_query(conn, "ALTER TABLE DocumentInvoice ADD COLUMN imageQuality REAL")
+            except Exception:
+                pass
+
+            execute_query(conn, "INSERT INTO Document (id, fileName, fileSize, mimeType, storagePath, status, pageCount, processedPages, fileData, imageQuality) VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?)", (doc_id, file_item.filename, len(file_bytes), file_item.content_type or 'application/octet-stream', storage_path, initial_status, page_count, file_b64, img_quality))
+            
+            for idx, group in enumerate(invoice_groups):
+                inv_id = f"{doc_id}-invoice-{idx + 1}"
+                execute_query(
+                    conn,
+                    "INSERT OR REPLACE INTO DocumentInvoice (id, documentId, invoiceIndex, pageStart, pageEnd, imageQuality, status) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    (inv_id, doc_id, idx, group.get("pageStart", 1), group.get("pageEnd", 1), img_quality, initial_status)
+                )
             
             if not os.getenv("VERCEL"):
                 disk_path = os.path.normpath(os.path.join(BASE_DIR, storage_path))
@@ -2528,11 +2548,14 @@ async def extraction_callback(doc_id: str, request: Request):
         received_count = count_cursor.fetchone()[0]
         is_complete = received_count >= expected_count
 
-        cursor_poor = execute_query(conn, "SELECT COUNT(*) FROM DocumentInvoice WHERE documentId = ? AND status != 'POOR_IMAGE_QUALITY'", (doc_id,))
-        non_poor_row = cursor_poor.fetchone()
-        non_poor_count = non_poor_row[0] if non_poor_row else 0
+        cursor_poor = execute_query(conn, "SELECT COUNT(*) FROM DocumentInvoice WHERE documentId = ? AND (status = 'POOR_IMAGE_QUALITY' OR status = 'Poor Image Quality' OR (imageQuality IS NOT NULL AND imageQuality < 0.6))", (doc_id,))
+        poor_row = cursor_poor.fetchone()
+        poor_count = poor_row[0] if poor_row else 0
+        cursor_doc = execute_query(conn, "SELECT status, imageQuality FROM Document WHERE id = ?", (doc_id,))
+        doc_row = cursor_doc.fetchone()
+        is_doc_originally_poor = doc_row and (doc_row[0] in ('POOR_IMAGE_QUALITY', 'Poor Image Quality') or (doc_row[1] is not None and doc_row[1] < 0.6))
 
-        if is_complete and non_poor_count == 0:
+        if poor_count > 0 or is_doc_originally_poor:
             doc_status = 'POOR_IMAGE_QUALITY'
         elif is_complete:
             doc_status = 'EXTRACTED'
