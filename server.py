@@ -1027,7 +1027,7 @@ class LogisticsAutomationHandler(http.server.BaseHTTPRequestHandler):
             row_path = cur_path.fetchone()
             if row_path:
                 file_path_cb = os.path.join(BASE_DIR, row_path[0])
-                if os.path.splitext(file_path_cb)[1].lower() in ['.png', '.jpg', '.jpeg', '.webp']:
+                if os.path.exists(file_path_cb):
                     image_quality = get_image_blur_quality(file_path_cb)
             conn_path.close()
         except Exception:
