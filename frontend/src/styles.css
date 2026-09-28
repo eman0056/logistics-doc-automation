@@ -1115,6 +1115,74 @@ img {
   min-height: 520px;
 }
 
+/* ── Document Preview Panel ───────────────────────────────────────────────── */
+
+.mir-doc-preview-panel {
+  flex: 0 0 30%;
+  max-width: 30%;
+  min-width: 260px;
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 1.25rem;
+  box-shadow: var(--shadow);
+  overflow: hidden;
+  position: sticky;
+  top: 88px;
+  max-height: calc(100vh - 116px);
+  display: flex;
+  flex-direction: column;
+}
+
+.mir-doc-preview-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 1rem 1.2rem 0.85rem;
+  border-bottom: 1px solid var(--border);
+  background: var(--table-header);
+  flex-shrink: 0;
+  gap: 0.5rem;
+}
+
+.mir-doc-preview-body {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: #0b1620;
+  position: relative;
+}
+
+.mir-doc-preview-iframe {
+  flex: 1 1 auto;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  border: 0;
+  display: block;
+  background: #111827;
+}
+
+.mir-doc-preview-link {
+  flex-shrink: 0;
+  display: block;
+  text-align: center;
+  padding: 0.55rem 1rem;
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+  border-top: 1px solid var(--border);
+  background: var(--table-header);
+  text-decoration: none;
+  transition: color 0.18s ease, background 0.18s ease;
+}
+
+.mir-doc-preview-link:hover {
+  color: var(--primary);
+  background: var(--panel-alt);
+}
+
+
 /* ── Left Sidebar ─────────────────────────────────────────────────────────── */
 
 .mir-sidebar {
@@ -1456,6 +1524,10 @@ img {
   .mir-sidebar {
     position: static;
     max-height: 320px;
+  }
+
+  .mir-doc-preview-panel {
+    display: none;
   }
 
   .mir-invoice-list {

@@ -1632,6 +1632,34 @@ function App() {
           {invoices.length > 0 && (
             <div className="mir-shell">
 
+              {/* ── DOCUMENT PREVIEW PANEL ───────────────────────────────── */}
+              <div className="mir-doc-preview-panel" aria-label="Original document preview">
+                <div className="mir-doc-preview-header">
+                  <span className="mir-sidebar-title">Original Document</span>
+                  {selectedInvoice?.pageStart != null && (
+                    <span className="mir-invoice-pages">
+                      Pages {selectedInvoice.pageStart}–{selectedInvoice.pageEnd ?? selectedInvoice.pageStart}
+                    </span>
+                  )}
+                </div>
+                <div className="mir-doc-preview-body">
+                  <iframe
+                    key={`${docId}-page-${selectedInvoice?.pageStart || 1}`}
+                    className="mir-doc-preview-iframe"
+                    src={`${API}/documents/${docId}/file#page=${selectedInvoice?.pageStart || 1}`}
+                    title="Original document preview"
+                  />
+                  <a
+                    href={`${API}/documents/${docId}/file`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="mir-doc-preview-link"
+                  >
+                    ↗ Open in new tab
+                  </a>
+                </div>
+              </div>
+
               {/* ── LEFT SIDEBAR: Invoice 1…N Selector ─────────────────── */}
               <aside className="mir-sidebar" aria-label="Invoice selector">
                 <div className="mir-sidebar-header">
