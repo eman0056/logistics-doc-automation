@@ -721,6 +721,19 @@ function App() {
             const documentsResponse = await fetchJson(`${API}/documents?refresh=${Date.now()}`);
             const documentsJson = await documentsResponse.json();
             const completedDocument = (documentsJson.documents || []).find((document) => document.id === completedId) || null;
+
+            // If document is flagged as POOR_IMAGE_QUALITY, redirect immediately to escalations
+            const docStatus = completedDocument?.status || '';
+            const isDocPoor = docStatus === 'POOR_IMAGE_QUALITY' || docStatus === 'Poor Image Quality' || completedDocument?.poorImageQuality;
+            if (isDocPoor) {
+              setUploading(false);
+              setStatusText('Poor image quality detected — redirecting to escalations...');
+              if (window.location.pathname !== '/escalations') {
+                window.location.assign('/escalations');
+              }
+              return;
+            }
+
             const invoiceCount = Number(completedDocument?.invoiceCount ?? completedDocument?.invoices?.length ?? 0);
 
             if (!completedDocument || invoiceCount < 1) {
@@ -795,6 +808,19 @@ function App() {
                 }
                 return response.json();
               }));
+
+              // If ANY document is flagged as Poor Image Quality, redirect immediately to /escalations
+              const hasPoorQuality = statuses.some((s) => s.isPoorImageQuality || s.status === 'POOR_IMAGE_QUALITY' || s.status === 'Poor Image Quality');
+              if (hasPoorQuality) {
+                setUploading(false);
+                setStatusText('Poor image quality detected — redirecting to escalations...');
+                if (!redirectScheduled) {
+                  redirectScheduled = true;
+                  window.setTimeout(() => { window.location.assign('/escalations'); }, 600);
+                }
+                return;
+              }
+
               const current = statuses.reduce((sum, status) => sum + (status.processedPages || 0), 0);
               const total = statuses.reduce((sum, status) => sum + (status.pageCount || 1), 0);
               setPageProgress({ current, total });

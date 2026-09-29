@@ -606,13 +606,20 @@ class LogisticsAutomationHandler(http.server.BaseHTTPRequestHandler):
             invoice_count = 0
         conn.close()
 
-        is_extracted = row[2] in ["EXTRACTED", "IN_REVIEW", "APPROVED", "INVOICE_GENERATED"]
-        review_url = f"/documents/{row[0]}/invoices" if invoice_count > 1 else f"/documents/{row[0]}/review"
+        is_poor = row[2] in ["POOR_IMAGE_QUALITY", "Poor Image Quality"]
+        is_extracted = is_poor or row[2] in ["EXTRACTED", "IN_REVIEW", "APPROVED", "INVOICE_GENERATED"]
+        if is_poor:
+            review_url = "/escalations"
+        elif invoice_count > 1:
+            review_url = f"/documents/{row[0]}/invoices"
+        else:
+            review_url = f"/documents/{row[0]}/review"
         self._send_json({
             "success": True,
             "documentId": row[0],
             "fileName": row[1],
             "status": row[2],
+            "isPoorImageQuality": is_poor,
             "isExtracted": is_extracted,
             "overallConfidence": row[3],
             "reviewUrl": review_url
