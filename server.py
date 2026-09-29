@@ -824,15 +824,6 @@ class LogisticsAutomationHandler(http.server.BaseHTTPRequestHandler):
                 doc_status = 'POOR_IMAGE_QUALITY' if img_quality < 0.6 else 'PREPROCESSED'
                 conn = sqlite3.connect(DB_PATH)
                 cursor = conn.cursor()
-                try:
-                    cursor.execute("ALTER TABLE Document ADD COLUMN imageQuality REAL")
-                except sqlite3.OperationalError:
-                    pass
-                try:
-                    cursor.execute("ALTER TABLE DocumentInvoice ADD COLUMN imageQuality REAL")
-                except sqlite3.OperationalError:
-                    pass
-
                 cursor.execute("UPDATE Document SET status = ?, imageQuality = ? WHERE id = ?;", (doc_status, img_quality, res["documentId"]))
                 for idx, group in enumerate(invoice_groups):
                     inv_id = f"{res['documentId']}-invoice-{idx + 1}"

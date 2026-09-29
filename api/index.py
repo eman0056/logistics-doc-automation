@@ -279,7 +279,7 @@ def init_db(conn):
     # Safely add columns that might already exist
     alter_statements = [
         "ALTER TABLE Document ADD COLUMN customerId TEXT DEFAULT 'cust-1';",
-        "ALTER TABLE Document ADD COLUMN updatedAt DATETIME;",
+        "ALTER TABLE Document ADD COLUMN updatedAt TIMESTAMP;",
         "ALTER TABLE Document ADD COLUMN fileData TEXT;",
         "ALTER TABLE Document ADD COLUMN pageCount INTEGER DEFAULT 1;",
         "ALTER TABLE Document ADD COLUMN processedPages INTEGER DEFAULT 0;",
@@ -320,6 +320,8 @@ def execute_query(conn, query, params=()):
     cursor = conn.cursor()
     if POSTGRES_URL and psycopg2:
         query = query.replace("?", "%s")
+        if "INSERT OR REPLACE INTO" in query:
+            query = query.replace("INSERT OR REPLACE INTO", "INSERT INTO")
     cursor.execute(query, params)
     return cursor
 
@@ -1988,6 +1990,7 @@ async def upload_documents(request: Request):
         return JSONResponse({"error": str(e)}, status_code=500)
 
 @app.post("/api/documents/upload-multi")
+@app.post("/api/upload-multi-invoice")
 async def upload_multi_document(request: Request):
     form = await request.form()
     files = form.getlist('file')
@@ -2011,22 +2014,13 @@ async def upload_multi_document(request: Request):
             img_quality = get_image_blur_quality(file_bytes)
             initial_status = 'POOR_IMAGE_QUALITY' if img_quality < 0.6 else 'PREPROCESSED'
             
-            try:
-                execute_query(conn, "ALTER TABLE Document ADD COLUMN imageQuality REAL")
-            except Exception:
-                pass
-            try:
-                execute_query(conn, "ALTER TABLE DocumentInvoice ADD COLUMN imageQuality REAL")
-            except Exception:
-                pass
-
             execute_query(conn, "INSERT INTO Document (id, fileName, fileSize, mimeType, storagePath, status, pageCount, processedPages, fileData, imageQuality) VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?)", (doc_id, file_item.filename, len(file_bytes), file_item.content_type or 'application/octet-stream', storage_path, initial_status, page_count, file_b64, img_quality))
             
             for idx, group in enumerate(invoice_groups):
                 inv_id = f"{doc_id}-invoice-{idx + 1}"
                 execute_query(
                     conn,
-                    "INSERT OR REPLACE INTO DocumentInvoice (id, documentId, invoiceIndex, pageStart, pageEnd, imageQuality, status) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    "INSERT INTO DocumentInvoice (id, documentId, invoiceIndex, pageStart, pageEnd, imageQuality, status) VALUES (?, ?, ?, ?, ?, ?, ?)",
                     (inv_id, doc_id, idx, group.get("pageStart", 1), group.get("pageEnd", 1), img_quality, initial_status)
                 )
             
@@ -2043,12 +2037,26 @@ async def upload_multi_document(request: Request):
                 "invoiceGroups": invoice_groups
             })
         conn.commit()
-        return {"success": True, "documentIds": results, "dispatches": dispatches}
+        primary_doc_id = results[0] if results else None
+        return {
+            "success": True,
+            "docId": primary_doc_id,
+            "documentIds": results,
+            "dispatches": dispatches
+        }
     except Exception as e:
-        if conn: conn.rollback()
+        if conn:
+            try:
+                conn.rollback()
+            except Exception:
+                pass
         return JSONResponse({"error": str(e)}, status_code=500)
     finally:
-        if conn: conn.close()
+        if conn:
+            try:
+                conn.close()
+            except Exception:
+                pass
 
 @app.get("/api/documents/{doc_id}/detect-invoices")
 def detect_invoices(doc_id: str):
