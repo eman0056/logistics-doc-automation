@@ -1098,29 +1098,45 @@ class LogisticsAutomationHandler(http.server.BaseHTTPRequestHandler):
 
         status = 'EXTRACTED' if image_quality >= threshold else 'POOR_IMAGE_QUALITY'
 
-        # Ensure the imageQuality column exists
-        try:
-            cursor.execute("ALTER TABLE DocumentInvoice ADD COLUMN imageQuality REAL")
-        except sqlite3.OperationalError:
-            pass
-
-        # Insert or replace with image quality and status
+        # Upsert: find by id OR (documentId, invoiceIndex) to avoid unique constraint violation
         cursor.execute(
-            "INSERT OR REPLACE INTO DocumentInvoice (id, documentId, invoiceIndex, pageStart, pageEnd, rawOcrText, canonicalJson, confidenceScores, imageQuality, status, overallConfidence, updatedAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)",
-            (
-                invoice_id,
-                doc_id,
-                invoice_index,
-                body.get('pageStart'),
-                body.get('pageEnd'),
-                body.get('rawOcrText'),
-                json_str,
-                json.dumps(body.get('confidenceScores')) if body.get('confidenceScores') is not None else None,
-                image_quality,
-                status,
-                body.get('overallConfidence')
-            )
+            "SELECT id FROM DocumentInvoice WHERE id = ? OR (documentId = ? AND invoiceIndex = ?)",
+            (invoice_id, doc_id, invoice_index)
         )
+        existing_row = cursor.fetchone()
+        if existing_row:
+            existing_id = existing_row[0]
+            cursor.execute(
+                "UPDATE DocumentInvoice SET pageStart = COALESCE(?, pageStart), pageEnd = COALESCE(?, pageEnd), rawOcrText = COALESCE(?, rawOcrText), canonicalJson = ?, confidenceScores = ?, imageQuality = ?, status = ?, overallConfidence = ?, updatedAt = CURRENT_TIMESTAMP WHERE id = ?",
+                (
+                    body.get('pageStart'),
+                    body.get('pageEnd'),
+                    body.get('rawOcrText'),
+                    json_str,
+                    json.dumps(body.get('confidenceScores')) if body.get('confidenceScores') is not None else None,
+                    image_quality,
+                    status,
+                    body.get('overallConfidence'),
+                    existing_id
+                )
+            )
+        else:
+            cursor.execute(
+                "INSERT INTO DocumentInvoice (id, documentId, invoiceIndex, pageStart, pageEnd, rawOcrText, canonicalJson, confidenceScores, imageQuality, status, overallConfidence, updatedAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)",
+                (
+                    invoice_id,
+                    doc_id,
+                    invoice_index,
+                    body.get('pageStart'),
+                    body.get('pageEnd'),
+                    body.get('rawOcrText'),
+                    json_str,
+                    json.dumps(body.get('confidenceScores')) if body.get('confidenceScores') is not None else None,
+                    image_quality,
+                    status,
+                    body.get('overallConfidence')
+                )
+            )
 
         cursor.execute("UPDATE Extraction SET canonicalJson = ? WHERE documentId = ?;", (json_str, doc_id))
         expected_count = int(body.get('invoiceCount') or 1)

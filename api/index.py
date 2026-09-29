@@ -2526,21 +2526,12 @@ async def extraction_callback(doc_id: str, request: Request):
 
             inv_status = 'EXTRACTED' if img_quality >= threshold else 'POOR_IMAGE_QUALITY'
 
-            # Ensure imageQuality and status columns exist on DocumentInvoice table
-            try:
-                execute_query(conn, "ALTER TABLE DocumentInvoice ADD COLUMN imageQuality REAL")
-                conn.commit()
-            except Exception:
-                conn.rollback()
-            try:
-                execute_query(conn, "ALTER TABLE DocumentInvoice ADD COLUMN status TEXT")
-                conn.commit()
-            except Exception:
-                conn.rollback()
-
-            cursor = execute_query(conn, "SELECT 1 FROM DocumentInvoice WHERE id = ?", (invoice_id,))
-            if cursor.fetchone():
-                execute_query(conn, "UPDATE DocumentInvoice SET pageStart = COALESCE(?, pageStart), pageEnd = COALESCE(?, pageEnd), rawOcrText = COALESCE(?, rawOcrText), canonicalJson = ?, confidenceScores = ?, overallConfidence = ?, imageQuality = ?, status = ?, updatedAt = CURRENT_TIMESTAMP WHERE id = ?", (invoice.get('pageStart'), invoice.get('pageEnd'), invoice.get('rawOcrText'), json_str, confidence_json, invoice.get('overallConfidence'), img_quality, inv_status, invoice_id))
+            # Upsert: first try by id, then fall back to (documentId, invoiceIndex)
+            cursor = execute_query(conn, "SELECT id FROM DocumentInvoice WHERE id = ? OR (documentId = ? AND invoiceIndex = ?)", (invoice_id, doc_id, invoice_index))
+            existing = cursor.fetchone()
+            if existing:
+                existing_id = existing[0]
+                execute_query(conn, "UPDATE DocumentInvoice SET pageStart = COALESCE(?, pageStart), pageEnd = COALESCE(?, pageEnd), rawOcrText = COALESCE(?, rawOcrText), canonicalJson = ?, confidenceScores = ?, overallConfidence = ?, imageQuality = ?, status = ?, updatedAt = CURRENT_TIMESTAMP WHERE id = ?", (invoice.get('pageStart'), invoice.get('pageEnd'), invoice.get('rawOcrText'), json_str, confidence_json, invoice.get('overallConfidence'), img_quality, inv_status, existing_id))
             else:
                 execute_query(conn, "INSERT INTO DocumentInvoice (id, documentId, invoiceIndex, pageStart, pageEnd, rawOcrText, canonicalJson, confidenceScores, overallConfidence, imageQuality, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", (invoice_id, doc_id, invoice_index, invoice.get('pageStart'), invoice.get('pageEnd'), invoice.get('rawOcrText'), json_str, confidence_json, invoice.get('overallConfidence'), img_quality, inv_status))
 
