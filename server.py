@@ -171,7 +171,7 @@ def send_to_n8n_webhook(invoice_index, pages, base64_pdf, doc_id=None, raw_ocr_t
 
     payload = {
         "invoiceIndex": invoice_index,
-        "invoiceId": f"{doc_id}-invoice-{invoice_index}",
+        "invoiceId": f"{doc_id}-invoice-{invoice_index + 1}",
         "pages": [page_start, page_end],
         "pageStart": page_start,
         "pageEnd": page_end,
@@ -296,6 +296,9 @@ class LogisticsAutomationHandler(http.server.BaseHTTPRequestHandler):
         elif path.startswith("/api/documents/") and path.endswith("/detect-invoices"):
             doc_id = path.split("/")[3]
             return self._handle_detect_invoices(doc_id)
+        elif path.startswith("/api/documents/") and path.endswith("/invoices"):
+            doc_id = path.split("/")[3]
+            return self._handle_get_invoices(doc_id)
         elif path == "/api/review-tasks":
             return self._handle_get_review_tasks()
         elif path in ["/api/config-check", "/api/config"]:
@@ -360,8 +363,20 @@ class LogisticsAutomationHandler(http.server.BaseHTTPRequestHandler):
             return self._send_json({"error": "Payload missing"}, 400)
 
         json_str = json.dumps(submitted)
+        invoice_index = body.get('invoiceIndex')
+
         conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
+        if invoice_index is not None:
+            try:
+                inv_idx = int(invoice_index)
+                cursor.execute(
+                    "UPDATE DocumentInvoice SET canonicalJson = ?, finalSubmittedData = ?, status = 'APPROVED', updatedAt = CURRENT_TIMESTAMP WHERE documentId = ? AND invoiceIndex = ?;",
+                    (json_str, json_str, doc_id, inv_idx)
+                )
+            except (ValueError, TypeError):
+                pass
+
         cursor.execute("UPDATE Extraction SET finalSubmittedData = ? WHERE documentId = ?;", (json_str, doc_id))
         cursor.execute("UPDATE Document SET status = 'APPROVED' WHERE id = ?;", (doc_id,))
         conn.commit()
@@ -587,6 +602,56 @@ class LogisticsAutomationHandler(http.server.BaseHTTPRequestHandler):
             return self._send_json({"success": True, "invoiceGroups": invoice_groups})
         except Exception as e:
             return self._send_json({"error": str(e)}, 500)
+
+    def _handle_get_invoices(self, doc_id):
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        try:
+            cursor.execute("ALTER TABLE DocumentInvoice ADD COLUMN imageQuality REAL")
+        except sqlite3.OperationalError:
+            pass
+
+        try:
+            cursor.execute(
+                "SELECT id, documentId, invoiceIndex, pageStart, pageEnd, rawOcrText, canonicalJson, confidenceScores, finalSubmittedData, status, overallConfidence, imageQuality FROM DocumentInvoice WHERE documentId = ? ORDER BY invoiceIndex ASC;",
+                (doc_id,)
+            )
+            rows = cursor.fetchall()
+        except sqlite3.OperationalError:
+            rows = []
+        conn.close()
+
+        invoices = []
+        for r in rows:
+            try:
+                invoice_data = json.loads(r[6] or r[8] or '{}')
+            except (TypeError, json.JSONDecodeError):
+                invoice_data = {}
+            header = invoice_data.get('invoiceHeader') if isinstance(invoice_data, dict) else {}
+            header = header if isinstance(header, dict) else {}
+            inv_status = r[9]
+            inv_quality = r[11] if len(r) > 11 else None
+            is_inv_poor = inv_status in ('POOR_IMAGE_QUALITY', 'Poor Image Quality') or (inv_quality is not None and inv_quality < 0.6)
+            invoices.append({
+                "id": r[0],
+                "documentId": r[1],
+                "invoiceIndex": r[2],
+                "pageStart": r[3],
+                "pageEnd": r[4],
+                "rawOcrText": r[5],
+                "canonicalJson": r[6],
+                "confidenceScores": r[7],
+                "finalSubmittedData": r[8],
+                "status": "POOR_IMAGE_QUALITY" if is_inv_poor else (inv_status or "EXTRACTED"),
+                "extractionStatus": "POOR_IMAGE_QUALITY" if is_inv_poor else (inv_status or "PENDING"),
+                "overallConfidence": r[10],
+                "imageQuality": inv_quality,
+                "poorImageQuality": is_inv_poor,
+                "extractedData": invoice_data,
+                "invoiceNumber": header.get('invoiceNumber') or header.get('invoiceId') or header.get('documentNumber') or header.get('invoiceNo')
+            })
+
+        return self._send_json({"success": True, "documentId": doc_id, "invoices": invoices})
     def _handle_get_document_status(self, doc_id):
         conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()

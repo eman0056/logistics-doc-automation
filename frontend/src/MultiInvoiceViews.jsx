@@ -200,16 +200,17 @@ export const InvoiceList = ({ invoiceGroups, selectedIndex, extractedData, proce
         <div style={{ color: 'var(--text-muted, #94a3b8)', fontSize: '13px' }}>No invoices detected.</div>
       ) : (
         invoiceGroups.map((group, idx) => {
-          const isSelected = selectedIndex === idx;
-          const isError = Boolean(errorStates[idx]) || (extractedData[idx] && extractedData[idx].status === 'Poor Image Quality') || (extractedData[idx] && extractedData[idx].status === 'Escalation Required');
+          const targetIndex = group.invoiceIndex !== undefined ? Number(group.invoiceIndex) : idx;
+          const isSelected = selectedIndex === targetIndex;
+          const isError = Boolean(errorStates[targetIndex]) || (extractedData[targetIndex] && extractedData[targetIndex].status === 'Poor Image Quality') || (extractedData[targetIndex] && extractedData[targetIndex].status === 'Escalation Required');
           
           return (
             <div 
-              key={idx}
+              key={targetIndex}
               className={`invoice-selector-tab ${isSelected ? 'selected' : ''} ${isError ? 'has-warning' : ''}`}
-              onClick={() => onInvoiceClick(idx, group)}
+              onClick={() => onInvoiceClick(targetIndex, group)}
             >
-              Invoice {idx + 1}
+              Invoice {targetIndex + 1}
               {isError && <span className="warning-icon">⚠</span>}
             </div>
           );
@@ -761,9 +762,9 @@ export const MultiInvoiceWorkspace = () => {
         if (invRes.ok) {
           const invJson = await invRes.json();
           const invoiceList = invJson.invoices || [];
-          const matchingInvoice = invoiceList.find(inv => Number(inv.invoiceIndex) === Number(index)) || invoiceList[index];
+          const matchingInvoice = invoiceList.find(inv => Number(inv.invoiceIndex) === Number(index));
           if (matchingInvoice) {
-            const realObj = extractRealInvoiceObject(matchingInvoice.extractedData || matchingInvoice.canonicalJson || matchingInvoice);
+            const realObj = extractRealInvoiceObject(matchingInvoice.extractedData || matchingInvoice.canonicalJson || matchingInvoice.finalSubmittedData || matchingInvoice);
             if (realObj) {
               return realObj;
             }
@@ -780,15 +781,9 @@ export const MultiInvoiceWorkspace = () => {
           const foundDoc = (docsJson.documents || []).find(d => d.id === targetDocId);
           if (foundDoc) {
             const invoiceList = foundDoc.invoices || [];
-            const matchingInvoice = invoiceList.find(inv => Number(inv.invoiceIndex) === Number(index)) || invoiceList[index];
+            const matchingInvoice = invoiceList.find(inv => Number(inv.invoiceIndex) === Number(index));
             if (matchingInvoice) {
-              const realObj = extractRealInvoiceObject(matchingInvoice.extractedData || matchingInvoice.canonicalJson || matchingInvoice);
-              if (realObj) {
-                return realObj;
-              }
-            }
-            if (foundDoc.extraction) {
-              const realObj = extractRealInvoiceObject(foundDoc.extraction.canonicalJson || foundDoc.extraction.extractedData || foundDoc.extraction);
+              const realObj = extractRealInvoiceObject(matchingInvoice.extractedData || matchingInvoice.canonicalJson || matchingInvoice.finalSubmittedData || matchingInvoice);
               if (realObj) {
                 return realObj;
               }
@@ -888,6 +883,24 @@ export const MultiInvoiceWorkspace = () => {
     }
   };
 
+  const handleSaveInvoice = async (index, draftData) => {
+    const res = await fetch(`${API}/documents/${docId}/review`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        docId,
+        invoiceIndex: index,
+        editedData: draftData,
+        editedExtractedData: draftData
+      })
+    });
+    const data = await res.json();
+    if (!res.ok || data.error) {
+      throw new Error(data.error || 'Failed to save invoice');
+    }
+    setExtractedData(prev => ({ ...prev, [index]: draftData }));
+  };
+
   if (loading) return <main className="page"><div style={{ padding: '2rem' }}>Loading detected invoices...</div></main>;
 
   return (
@@ -915,6 +928,7 @@ export const MultiInvoiceWorkspace = () => {
             processingStates={processingStates}
             errorStates={errorStates}
             onRetry={processInvoice}
+            onSave={handleSaveInvoice}
           />
         </div>
       </div>
