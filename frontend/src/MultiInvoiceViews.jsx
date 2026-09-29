@@ -714,13 +714,11 @@ export const MultiInvoiceWorkspace = () => {
       .then(data => {
         if (data.success) {
           setInvoiceGroups(data.invoiceGroups || []);
-          if (initialIndex !== null) {
+          if (initialIndex !== null && !isNaN(initialIndex) && data.invoiceGroups && data.invoiceGroups[initialIndex]) {
               setSelectedInvoiceIndex(initialIndex);
-              // fetch it
               processInvoice(initialIndex, data.invoiceGroups[initialIndex]);
           } else {
-              setSelectedInvoiceIndex(0);
-              processInvoice(0, data.invoiceGroups[0]);
+              setSelectedInvoiceIndex(null);
           }
         }
       })
