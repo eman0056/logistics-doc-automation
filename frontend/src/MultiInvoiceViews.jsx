@@ -476,7 +476,27 @@ export const extractRealInvoiceObject = (raw) => {
   }
 
   if (isRealInvoice(parsed)) {
-    return parsed;
+    const header = (parsed.invoiceHeader || parsed.header) && typeof (parsed.invoiceHeader || parsed.header) === 'object' && !Array.isArray(parsed.invoiceHeader || parsed.header) ? (parsed.invoiceHeader || parsed.header) : parsed;
+    let shipments = parsed.shipmentDetails || parsed.shipmentDetail || parsed.shipments || parsed.shipment;
+    if (!Array.isArray(shipments)) {
+      shipments = shipments && typeof shipments === 'object' ? [shipments] : [];
+    }
+    let charges = parsed.chargeLineItems || parsed.lineItems || parsed.items || parsed.charges;
+    if (!Array.isArray(charges)) {
+      charges = charges && typeof charges === 'object' ? [charges] : [];
+    }
+    if (charges.length === 0 && shipments.length > 0) {
+      charges = [...charges];
+      shipments.forEach(s => {
+        if (s && Array.isArray(s.chargeLineItems)) charges.push(...s.chargeLineItems);
+      });
+    }
+    return {
+      ...parsed,
+      invoiceHeader: header,
+      shipmentDetails: shipments,
+      chargeLineItems: charges
+    };
   }
 
   return null;

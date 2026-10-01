@@ -1,19 +1,6 @@
 import React, { useState, useEffect } from 'react';
 
-export const DEFAULT_DEMO_ESCALATIONS = [
-  { id: 'esc-1', documentId: 'demo-doc-1', docNumber: 'DHL_Express_Invoice_091.pdf', invoiceNumber: 'INV-9021', reason: 'Poor Image Quality', date: '2026-09-24', status: 'Poor Image Quality', isMulti: true, invoiceIndex: 0 },
-  { id: 'esc-2', documentId: 'demo-doc-2', docNumber: 'Maersk_Bill_Of_Lading.pdf', invoiceNumber: 'BL-88102', reason: 'Poor Image Quality', date: '2026-09-24', status: 'Poor Image Quality', isMulti: false },
-  { id: 'esc-3', documentId: 'demo-doc-3', docNumber: 'FedEx_Freight_Shipment.pdf', invoiceNumber: 'INV-4401', reason: 'Missing Line Items', date: '2026-09-23', status: 'Escalation Required', isMulti: true, invoiceIndex: 1 },
-  { id: 'esc-4', documentId: 'demo-doc-4', docNumber: 'Combined_Invoices_Sept.pdf', invoiceNumber: 'INV-1092', reason: 'Poor Image Quality', date: '2026-09-23', status: 'Poor Image Quality', isMulti: true, invoiceIndex: 2 },
-  { id: 'esc-5', documentId: 'demo-doc-5', docNumber: 'Apex_Logistics_Receipt.pdf', invoiceNumber: 'REC-332', reason: 'Unclear Currency', date: '2026-09-22', status: 'Escalation Required', isMulti: false },
-  { id: 'esc-6', documentId: 'demo-doc-6', docNumber: 'Port_Terminal_Fee.pdf', invoiceNumber: 'PTF-9901', reason: 'Poor Image Quality', date: '2026-09-22', status: 'Poor Image Quality', isMulti: false },
-  { id: 'esc-7', documentId: 'demo-doc-7', docNumber: 'Customs_Clearance_Doc.pdf', invoiceNumber: 'CC-5521', reason: 'Unclear Tax ID', date: '2026-09-21', status: 'Escalation Required', isMulti: false },
-  { id: 'esc-8', documentId: 'demo-doc-8', docNumber: 'Hapag_Lloyd_Invoice.pdf', invoiceNumber: 'HL-7712', reason: 'Poor Image Quality', date: '2026-09-21', status: 'Poor Image Quality', isMulti: true, invoiceIndex: 0 },
-  { id: 'esc-9', documentId: 'demo-doc-9', docNumber: 'Ocean_Freight_Manifest.pdf', invoiceNumber: 'OFM-112', reason: 'Missing Weight', date: '2026-09-20', status: 'Escalation Required', isMulti: true, invoiceIndex: 1 },
-  { id: 'esc-10', documentId: 'demo-doc-10', docNumber: 'Warehouse_Storage_Slip.pdf', invoiceNumber: 'WSS-404', reason: 'Poor Image Quality', date: '2026-09-20', status: 'Poor Image Quality', isMulti: false },
-  { id: 'esc-11', documentId: 'demo-doc-11', docNumber: 'Kuehne_Nagel_Delivery.pdf', invoiceNumber: 'KN-9011', reason: 'Poor Image Quality', date: '2026-09-19', status: 'Poor Image Quality', isMulti: true, invoiceIndex: 0 },
-  { id: 'esc-12', documentId: 'demo-doc-12', docNumber: 'DB_Schenker_Voucher.pdf', invoiceNumber: 'DBS-663', reason: 'Unclear Total', date: '2026-09-19', status: 'Escalation Required', isMulti: false }
-];
+export const DEFAULT_DEMO_ESCALATIONS = [];
 
 export const getResolvedEscalationIds = () => {
   try {
@@ -54,7 +41,7 @@ export const Escalations = () => {
             docNumber: doc.fileName,
             invoiceNumber: 'Doc Level',
             reason: isDocPoor ? 'Poor Image Quality' : docStatus,
-            date: doc.createdAt ? new Date(doc.createdAt).toISOString().split('T')[0] : '2026-09-24',
+            date: doc.createdAt ? new Date(doc.createdAt).toISOString().split('T')[0] : new Date().toISOString().split('T')[0],
             status: 'Pending Review',
             isMulti: (doc.invoiceCount || 1) > 1
           });
@@ -62,12 +49,12 @@ export const Escalations = () => {
 
         (doc.invoices || []).forEach((inv, idx) => {
           const invStatus = inv.status || inv.extractionStatus;
-          const isInvFlagged = invStatus === 'Poor Image Quality' || invStatus === 'POOR_IMAGE_QUALITY' || invStatus === 'Escalation Required' || inv.poorImageQuality || (inv.imageQuality != null && inv.imageQuality < 0.6) || isDocFlagged;
-          const invKey = `${doc.id}-${idx}`;
+          const isInvFlagged = invStatus === 'Poor Image Quality' || invStatus === 'POOR_IMAGE_QUALITY' || invStatus === 'Escalation Required' || inv.poorImageQuality || (inv.imageQuality != null && inv.imageQuality < 0.6);
+          const invKey = inv.id || `${doc.id}-${idx}`;
 
           if (isInvFlagged && !resolvedSet.has(invKey) && !resolvedSet.has(doc.id)) {
             seenIds.add(invKey);
-            const isInvPoor = invStatus === 'POOR_IMAGE_QUALITY' || invStatus === 'Poor Image Quality' || inv.poorImageQuality || (inv.imageQuality != null && inv.imageQuality < 0.6) || isDocFlagged;
+            const isInvPoor = invStatus === 'POOR_IMAGE_QUALITY' || invStatus === 'Poor Image Quality' || inv.poorImageQuality || (inv.imageQuality != null && inv.imageQuality < 0.6);
             issues.push({
               id: invKey,
               documentId: doc.id,
@@ -75,7 +62,7 @@ export const Escalations = () => {
               docNumber: doc.fileName,
               invoiceNumber: inv.invoiceNumber || `Invoice #${idx + 1}`,
               reason: isInvPoor ? 'Poor Image Quality' : (invStatus || 'Escalation Required'),
-              date: doc.createdAt ? new Date(doc.createdAt).toISOString().split('T')[0] : '2026-09-24',
+              date: doc.createdAt ? new Date(doc.createdAt).toISOString().split('T')[0] : new Date().toISOString().split('T')[0],
               status: 'Pending Review',
               isMulti: true
             });
@@ -83,19 +70,10 @@ export const Escalations = () => {
         });
       });
 
-      // Add default demo items if they haven't been resolved
-      DEFAULT_DEMO_ESCALATIONS.forEach((demoItem) => {
-        if (!resolvedSet.has(demoItem.id) && !seenIds.has(demoItem.id)) {
-          issues.push(demoItem);
-        }
-      });
-
       setEscalations(issues);
     } catch (err) {
       console.error('Failed to load escalations', err);
-      // Fallback to demo items excluding resolved
-      const fallback = DEFAULT_DEMO_ESCALATIONS.filter(item => !resolvedSet.has(item.id));
-      setEscalations(fallback);
+      setEscalations([]);
     } finally {
       setLoading(false);
     }

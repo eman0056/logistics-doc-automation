@@ -1817,16 +1817,18 @@ def _serialize_invoice_row(row):
 
 
 @app.get("/api/documents/{doc_id}/invoices")
-def get_document_invoices(doc_id: str):
+def get_document_invoices(doc_id: str, ids: str = None):
   conn = get_db()
-  document_cursor = execute_query(conn, "SELECT 1 FROM Document WHERE id = ?", (doc_id,))
-  if not document_cursor.fetchone():
-    conn.close()
-    return JSONResponse({"error": "Document not found"}, status_code=404)
-  cursor = execute_query(conn, "SELECT id, documentId, invoiceIndex, pageStart, pageEnd, rawOcrText, canonicalJson, confidenceScores, finalSubmittedData, status, overallConfidence FROM DocumentInvoice WHERE documentId = ? ORDER BY invoiceIndex", (doc_id,))
+  raw_ids = ids if ids else doc_id
+  doc_ids = [d.strip() for d in raw_ids.split(',') if d.strip()]
+  if not doc_ids:
+    doc_ids = [doc_id]
+
+  placeholders = ','.join(['?'] * len(doc_ids))
+  cursor = execute_query(conn, f"SELECT id, documentId, invoiceIndex, pageStart, pageEnd, rawOcrText, canonicalJson, confidenceScores, finalSubmittedData, status, overallConfidence FROM DocumentInvoice WHERE documentId IN ({placeholders}) ORDER BY documentId ASC, invoiceIndex ASC", tuple(doc_ids))
   invoices = [_serialize_invoice_row(row) for row in cursor.fetchall()]
   conn.close()
-  return {"success": True, "documentId": doc_id, "invoiceCount": len(invoices), "invoices": invoices}
+  return {"success": True, "documentId": doc_id, "documentIds": doc_ids, "invoiceCount": len(invoices), "invoices": invoices}
 
 
 @app.get("/api/documents/{doc_id}/invoices/{invoice_id}")
@@ -2266,6 +2268,99 @@ def get_document_file(doc_id: str):
         return response
     except Exception:
         return JSONResponse({"error": "Failed to decode file"}, status_code=500)
+
+@app.get("/api/documents/{doc_id}/page-range")
+def get_document_page_range(doc_id: str, start: int = 1, end: int = 1):
+    import io
+    from fastapi.responses import Response
+    conn = get_db()
+    cursor = execute_query(conn, "SELECT fileData, fileName, mimeType, storagePath FROM Document WHERE id = ?", (doc_id,))
+    row = cursor.fetchone()
+    conn.close()
+
+    if not row:
+        return JSONResponse({"error": "File not found"}, status_code=404)
+
+    file_data_b64, file_name, mime_type, storage_path = row
+    file_bytes = None
+    if file_data_b64:
+        try:
+            file_bytes = base64.b64decode(file_data_b64)
+        except Exception:
+            pass
+
+    if not file_bytes and storage_path:
+        disk_path = os.path.normpath(os.path.join(BASE_DIR, storage_path))
+        if os.path.exists(disk_path):
+            try:
+                with open(disk_path, 'rb') as fh:
+                    file_bytes = fh.read()
+            except Exception:
+                pass
+
+    if not file_bytes:
+        return JSONResponse({"error": "File content unavailable"}, status_code=404)
+
+    is_pdf = (file_name or "").lower().endswith(".pdf") or file_bytes.lstrip().startswith(b"%PDF")
+    content_bytes = file_bytes
+    if is_pdf:
+        try:
+            try:
+                from pypdf import PdfReader, PdfWriter
+            except ImportError:
+                from PyPDF2 import PdfReader, PdfWriter
+
+            reader = PdfReader(io.BytesIO(file_bytes))
+            total_pages = len(reader.pages)
+            start_idx = max(0, min(start - 1, total_pages - 1))
+            end_idx = max(start_idx, min(end - 1, total_pages - 1))
+
+            writer = PdfWriter()
+            for i in range(start_idx, end_idx + 1):
+                writer.add_page(reader.pages[i])
+
+            out_stream = io.BytesIO()
+            writer.write(out_stream)
+            content_bytes = out_stream.getvalue()
+        except Exception as e:
+            print(f"[FastAPI PDF Slice Error] Fallback to full document for {doc_id}: {e}")
+
+    content_type = "application/pdf" if is_pdf else (mime_type or "application/octet-stream")
+    response = Response(
+        content=content_bytes,
+        media_type=content_type,
+        headers={"Content-Disposition": f'inline; filename="{file_name or doc_id}"'}
+    )
+    response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+    return response
+
+@app.post("/api/documents/{doc_id}/escalate")
+async def escalate_invoice(doc_id: str, request: Request):
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    invoice_id = str(body.get('invoiceId') if body.get('invoiceId') is not None else body.get('invoiceIndex', ''))
+    notes = str(body.get('notes') or body.get('reason') or '')
+
+    conn = get_db()
+    cursor = execute_query(conn, """
+        CREATE TABLE IF NOT EXISTS EscalationLog (
+            id TEXT PRIMARY KEY,
+            documentId TEXT NOT NULL,
+            invoiceId TEXT,
+            notes TEXT,
+            createdAt DATETIME DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    esc_id = f"esc-{uuid.uuid4().hex[:8]}"
+    execute_query(conn, "INSERT INTO EscalationLog (id, documentId, invoiceId, notes) VALUES (?, ?, ?, ?)", (esc_id, doc_id, invoice_id, notes))
+    execute_query(conn, "UPDATE DocumentInvoice SET status = 'POOR_IMAGE_QUALITY' WHERE id = ? AND documentId = ?", (invoice_id, doc_id))
+    execute_query(conn, "UPDATE Document SET status = 'POOR_IMAGE_QUALITY' WHERE id = ?", (doc_id,))
+    conn.commit()
+    conn.close()
+
+    return {"success": True, "escalationId": esc_id, "documentId": doc_id, "invoiceId": invoice_id}
 
 @app.post("/api/batch-generate")
 async def batch_generate(request: Request):

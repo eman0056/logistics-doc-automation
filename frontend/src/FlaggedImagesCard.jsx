@@ -18,22 +18,6 @@ export const FlaggedImagesCard = () => {
           const invStatus = inv.status || inv.extractionStatus || '';
           if (invStatus.includes('Poor Image Quality') || invStatus === 'POOR_IMAGE_QUALITY' || inv.poorImageQuality || (inv.imageQuality != null && inv.imageQuality < 0.6)) total++;
         });
-      });
-      try {
-        const resolved = JSON.parse(localStorage.getItem('resolved_escalations') || '[]');
-        const demo = [
-          { id: 'esc-1', reason: 'Poor Image Quality' },
-          { id: 'esc-2', reason: 'Poor Image Quality' },
-          { id: 'esc-4', reason: 'Poor Image Quality' },
-          { id: 'esc-6', reason: 'Poor Image Quality' },
-          { id: 'esc-8', reason: 'Poor Image Quality' },
-          { id: 'esc-10', reason: 'Poor Image Quality' },
-          { id: 'esc-11', reason: 'Poor Image Quality' }
-        ];
-        demo.forEach(item => {
-          if (!resolved.includes(item.id)) total++;
-        });
-      } catch {}
       setCount(total);
     } catch (err) {
       console.error('Failed to load flagged count', err);

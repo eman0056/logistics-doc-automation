@@ -377,9 +377,15 @@ class LogisticsAutomationHandler(http.server.BaseHTTPRequestHandler):
 
         json_str = json.dumps(submitted)
         invoice_index = body.get('invoiceIndex')
+        invoice_id = body.get('invoiceId')
 
         conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
+        if invoice_id:
+            cursor.execute(
+                "UPDATE DocumentInvoice SET canonicalJson = ?, finalSubmittedData = ?, status = 'APPROVED', updatedAt = CURRENT_TIMESTAMP WHERE id = ? AND documentId = ?;",
+                (json_str, json_str, invoice_id, doc_id)
+            )
         if invoice_index is not None:
             try:
                 inv_idx = int(invoice_index)
@@ -1157,37 +1163,39 @@ class LogisticsAutomationHandler(http.server.BaseHTTPRequestHandler):
     def _handle_extraction_callback(self, doc_id):
         content_length = int(self.headers.get('Content-Length', 0))
         body = json.loads(self.rfile.read(content_length).decode('utf-8'))
-        extracted = body.get('extractedData') or body.get('canonicalJson')
 
-        if not extracted:
+        invoice_payloads = body.get('invoices')
+        if not invoice_payloads and (body.get('extractedData') or body.get('canonicalJson')):
+            invoice_payloads = [{
+                "invoiceId": body.get('invoiceId'),
+                "invoiceIndex": body.get('invoiceIndex', 0),
+                "pageStart": body.get('pageStart'),
+                "pageEnd": body.get('pageEnd'),
+                "rawOcrText": body.get('rawOcrText'),
+                "canonicalJson": body.get('extractedData') or body.get('canonicalJson'),
+                "confidenceScores": body.get('confidenceScores'),
+                "overallConfidence": body.get('overallConfidence')
+            }]
+
+        if not invoice_payloads:
             return self._send_json({"error": "Missing extracted payload"}, 400)
 
-        json_str = json.dumps(extracted)
         conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
-        cursor.execute("CREATE TABLE IF NOT EXISTS DocumentInvoice (id TEXT PRIMARY KEY, documentId TEXT NOT NULL, invoiceIndex INTEGER NOT NULL, pageStart INTEGER, pageEnd INTEGER, rawOcrText TEXT, canonicalJson TEXT, confidenceScores TEXT, finalSubmittedData TEXT, status TEXT DEFAULT 'EXTRACTED', overallConfidence REAL, createdAt DATETIME DEFAULT CURRENT_TIMESTAMP, updatedAt DATETIME DEFAULT CURRENT_TIMESTAMP)")
-        try:
-            invoice_id = body.get('invoiceId') or f"{doc_id}-invoice-{int(body.get('invoiceIndex', 0)) + 1}"
-            invoice_index = int(body.get('invoiceIndex', 0))
-        except (TypeError, ValueError):
-            return self._send_json({"error": "Invalid invoice callback metadata"}, 400)
+        cursor.execute("CREATE TABLE IF NOT EXISTS DocumentInvoice (id TEXT PRIMARY KEY, documentId TEXT NOT NULL, invoiceIndex INTEGER NOT NULL, pageStart INTEGER, pageEnd INTEGER, rawOcrText TEXT, canonicalJson TEXT, confidenceScores TEXT, finalSubmittedData TEXT, status TEXT DEFAULT 'EXTRACTED', overallConfidence REAL, imageQuality REAL, createdAt DATETIME DEFAULT CURRENT_TIMESTAMP, updatedAt DATETIME DEFAULT CURRENT_TIMESTAMP)")
 
-        # Compute image quality for this invoice in the callback context
+        # Compute image quality for document
         image_quality = 0.5
         try:
-            conn_path = sqlite3.connect(DB_PATH)
-            cur_path = conn_path.cursor()
-            cur_path.execute("SELECT storagePath FROM Document WHERE id = ?", (doc_id,))
-            row_path = cur_path.fetchone()
+            cursor.execute("SELECT storagePath FROM Document WHERE id = ?", (doc_id,))
+            row_path = cursor.fetchone()
             if row_path:
                 file_path_cb = os.path.join(BASE_DIR, row_path[0])
                 if os.path.exists(file_path_cb):
                     image_quality = get_image_blur_quality(file_path_cb)
-            conn_path.close()
         except Exception:
             pass
 
-        # Determine status based on quality threshold
         try:
             threshold = float(os.getenv('IMAGE_QUALITY_THRESHOLD', '0.6'))
         except ValueError:
@@ -1195,52 +1203,64 @@ class LogisticsAutomationHandler(http.server.BaseHTTPRequestHandler):
 
         status = 'EXTRACTED' if image_quality >= threshold else 'POOR_IMAGE_QUALITY'
 
-        # Upsert: find by id OR (documentId, invoiceIndex) to avoid unique constraint violation
-        cursor.execute(
-            "SELECT id FROM DocumentInvoice WHERE id = ? OR (documentId = ? AND invoiceIndex = ?)",
-            (invoice_id, doc_id, invoice_index)
-        )
-        existing_row = cursor.fetchone()
-        if existing_row:
-            existing_id = existing_row[0]
+        last_json_str = None
+        for index, inv_item in enumerate(invoice_payloads):
+            extracted = inv_item.get('canonicalJson') or inv_item.get('extractedData') or {}
+            if isinstance(extracted, str):
+                try: extracted = json.loads(extracted)
+                except Exception: pass
+            
+            json_str = json.dumps(extracted)
+            last_json_str = json_str
+            inv_idx = int(inv_item.get('invoiceIndex', index))
+            inv_id = inv_item.get('invoiceId') or f"{doc_id}-invoice-{inv_idx + 1}"
+            
             cursor.execute(
-                "UPDATE DocumentInvoice SET pageStart = COALESCE(?, pageStart), pageEnd = COALESCE(?, pageEnd), rawOcrText = COALESCE(?, rawOcrText), canonicalJson = ?, confidenceScores = ?, imageQuality = ?, status = ?, overallConfidence = ?, updatedAt = CURRENT_TIMESTAMP WHERE id = ?",
-                (
-                    body.get('pageStart'),
-                    body.get('pageEnd'),
-                    body.get('rawOcrText'),
-                    json_str,
-                    json.dumps(body.get('confidenceScores')) if body.get('confidenceScores') is not None else None,
-                    image_quality,
-                    status,
-                    body.get('overallConfidence'),
-                    existing_id
-                )
+                "SELECT id FROM DocumentInvoice WHERE id = ? OR (documentId = ? AND invoiceIndex = ?)",
+                (inv_id, doc_id, inv_idx)
             )
-        else:
-            cursor.execute(
-                "INSERT INTO DocumentInvoice (id, documentId, invoiceIndex, pageStart, pageEnd, rawOcrText, canonicalJson, confidenceScores, imageQuality, status, overallConfidence, updatedAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)",
-                (
-                    invoice_id,
-                    doc_id,
-                    invoice_index,
-                    body.get('pageStart'),
-                    body.get('pageEnd'),
-                    body.get('rawOcrText'),
-                    json_str,
-                    json.dumps(body.get('confidenceScores')) if body.get('confidenceScores') is not None else None,
-                    image_quality,
-                    status,
-                    body.get('overallConfidence')
+            existing_row = cursor.fetchone()
+            if existing_row:
+                existing_id = existing_row[0]
+                cursor.execute(
+                    "UPDATE DocumentInvoice SET pageStart = COALESCE(?, pageStart), pageEnd = COALESCE(?, pageEnd), rawOcrText = COALESCE(?, rawOcrText), canonicalJson = ?, confidenceScores = ?, imageQuality = ?, status = ?, overallConfidence = ?, updatedAt = CURRENT_TIMESTAMP WHERE id = ?",
+                    (
+                        inv_item.get('pageStart'),
+                        inv_item.get('pageEnd'),
+                        inv_item.get('rawOcrText'),
+                        json_str,
+                        json.dumps(inv_item.get('confidenceScores')) if inv_item.get('confidenceScores') is not None else None,
+                        image_quality,
+                        status,
+                        inv_item.get('overallConfidence'),
+                        existing_id
+                    )
                 )
-            )
+            else:
+                cursor.execute(
+                    "INSERT INTO DocumentInvoice (id, documentId, invoiceIndex, pageStart, pageEnd, rawOcrText, canonicalJson, confidenceScores, imageQuality, status, overallConfidence, updatedAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)",
+                    (
+                        inv_id,
+                        doc_id,
+                        inv_idx,
+                        inv_item.get('pageStart'),
+                        inv_item.get('pageEnd'),
+                        inv_item.get('rawOcrText'),
+                        json_str,
+                        json.dumps(inv_item.get('confidenceScores')) if inv_item.get('confidenceScores') is not None else None,
+                        image_quality,
+                        status,
+                        inv_item.get('overallConfidence')
+                    )
+                )
 
-        cursor.execute("UPDATE Extraction SET canonicalJson = ? WHERE documentId = ?;", (json_str, doc_id))
-        expected_count = int(body.get('invoiceCount') or 1)
+        if last_json_str:
+            cursor.execute("UPDATE Extraction SET canonicalJson = ? WHERE documentId = ?;", (last_json_str, doc_id))
+        
+        expected_count = int(body.get('invoiceCount') or len(invoice_payloads))
         cursor.execute("SELECT COUNT(*) FROM DocumentInvoice WHERE documentId = ?;", (doc_id,))
         received_count = cursor.fetchone()[0]
 
-        # Propagate POOR_IMAGE_QUALITY to document level if ANY invoice is flagged or if doc was originally poor quality
         cursor.execute("SELECT COUNT(*) FROM DocumentInvoice WHERE documentId = ? AND (status = 'POOR_IMAGE_QUALITY' OR status = 'Poor Image Quality' OR (imageQuality IS NOT NULL AND imageQuality < 0.6));", (doc_id,))
         poor_invoice_count = cursor.fetchone()[0]
         cursor.execute("SELECT status, imageQuality FROM Document WHERE id = ?;", (doc_id,))
@@ -1259,7 +1279,14 @@ class LogisticsAutomationHandler(http.server.BaseHTTPRequestHandler):
         conn.close()
 
         review_url = f"/documents/{doc_id}/invoices" if expected_count > 1 else f"/documents/{doc_id}/review"
-        self._send_json({"success": True, "invoiceCount": received_count, "complete": received_count >= expected_count, "reviewUrl": review_url})
+        self._send_json({
+            "success": True,
+            "documentId": doc_id,
+            "invoiceCount": received_count,
+            "complete": received_count >= expected_count,
+            "reviewUrl": review_url,
+            "invoiceUrl": review_url
+        })
 
     def _handle_get_review_tasks(self):
         conn = sqlite3.connect(DB_PATH)
