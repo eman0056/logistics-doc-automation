@@ -4,85 +4,427 @@ import { EscalationModal } from './EscalationModal.jsx';
 
 const API = '/api';
 
-export const UploadMultiView = () => {
-  const [selectedFiles, setSelectedFiles] = useState([]);
-  const [uploading, setUploading] = useState(false);
-  const [statusText, setStatusText] = useState('');
+// ── FILE STATUS CONSTANTS ────────────────────────────────────────────────────
+const FILE_STATUS = {
+  READY: 'READY',
+  UPLOADING: 'UPLOADING',
+  EXTRACTING: 'EXTRACTING',
+  COMPLETED: 'COMPLETED',
+  NEEDS_REVIEW: 'NEEDS_REVIEW',
+  FAILED: 'FAILED',
+};
 
-  const handleFiles = (files) => {
-    if (!files || !files.length) return;
-    setSelectedFiles(Array.from(files));
+const MAX_FILE_SIZE_MB = 50;
+
+function formatFileSize(bytes) {
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function buildFileEntry(file) {
+  return {
+    file,
+    id: `${file.name}-${file.size}-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+    status: FILE_STATUS.READY,
+    error: null,
+    documentId: null,
+    invoiceCount: 0,
+    needsReview: false,
+  };
+}
+
+const StatusBadge = ({ status, needsReview }) => {
+  if (status === FILE_STATUS.READY)
+    return <span className="bq-badge bq-badge--ready">Ready</span>;
+  if (status === FILE_STATUS.UPLOADING)
+    return <span className="bq-badge bq-badge--uploading"><span className="bq-spin" />Uploading</span>;
+  if (status === FILE_STATUS.EXTRACTING)
+    return <span className="bq-badge bq-badge--extracting"><span className="bq-spin" />Extracting</span>;
+  if (status === FILE_STATUS.COMPLETED)
+    return <span className="bq-badge bq-badge--completed">✓ Completed</span>;
+  if (status === FILE_STATUS.NEEDS_REVIEW)
+    return <span className="bq-badge bq-badge--review">⚠ Needs Review</span>;
+  if (status === FILE_STATUS.FAILED)
+    return <span className="bq-badge bq-badge--failed">✕ Failed</span>;
+  return null;
+};
+
+export const UploadMultiView = () => {
+  const [fileEntries, setFileEntries] = useState([]);
+  const [isDragging, setIsDragging] = useState(false);
+  const [isProcessing, setIsProcessing] = useState(false);
+  const [batchDone, setBatchDone] = useState(false);
+  const [batchResults, setBatchResults] = useState({ docs: 0, completed: 0, needsReview: 0, invoices: 0, failed: 0, poorQuality: 0, docIds: [] });
+  const [validationErrors, setValidationErrors] = useState([]);
+  const fileInputRef = useRef(null);
+  const addMoreRef = useRef(null);
+
+  const validateAndAddFiles = (newFiles) => {
+    const errors = [];
+    const toAdd = [];
+    Array.from(newFiles).forEach((file) => {
+      if (!file.name.toLowerCase().endsWith('.pdf') && file.type !== 'application/pdf') {
+        errors.push(`"${file.name}" — Invalid PDF file.`);
+        return;
+      }
+      if (file.size > MAX_FILE_SIZE_MB * 1024 * 1024) {
+        errors.push(`"${file.name}" — File exceeds the ${MAX_FILE_SIZE_MB} MB maximum allowed size.`);
+        return;
+      }
+      const isDuplicate = fileEntries.some(
+        (e) => e.file.name === file.name && e.file.size === file.size
+      ) || toAdd.some(
+        (e) => e.file.name === file.name && e.file.size === file.size
+      );
+      if (isDuplicate) {
+        errors.push(`"${file.name}" — Duplicate file detected, already in queue.`);
+        return;
+      }
+      toAdd.push(buildFileEntry(file));
+    });
+    setValidationErrors(errors);
+    if (toAdd.length > 0) setFileEntries((prev) => [...prev, ...toAdd]);
   };
 
-  const handleUpload = async () => {
-    if (!selectedFiles.length) {
-      alert('Please select document files first.');
-      return;
-    }
+  const handleDrop = (e) => {
+    e.preventDefault();
+    setIsDragging(false);
+    validateAndAddFiles(e.dataTransfer.files);
+  };
 
-    setUploading(true);
-    setStatusText('Uploading document for Multiple Invoice Processing...');
+  const handleDragOver = (e) => { e.preventDefault(); setIsDragging(true); };
+  const handleDragLeave = (e) => { e.preventDefault(); setIsDragging(false); };
+
+  const handleFileInput = (e) => {
+    validateAndAddFiles(e.target.files);
+    e.target.value = '';
+  };
+
+  const removeEntry = (id) => setFileEntries((prev) => prev.filter((e) => e.id !== id));
+  const clearAll = () => { setFileEntries([]); setValidationErrors([]); };
+
+  const updateEntry = (id, patch) => setFileEntries((prev) => prev.map((e) => e.id === id ? { ...e, ...patch } : e));
+
+  const processFile = async (entry) => {
+    updateEntry(entry.id, { status: FILE_STATUS.UPLOADING, error: null });
 
     const formData = new FormData();
-    selectedFiles.forEach((file) => formData.append('file', file));
+    formData.append('file', entry.file);
 
+    let data;
     try {
       let res = await fetch(`${API}/upload-multi-invoice`, { method: 'POST', body: formData });
-      if (!res.ok) {
-        res = await fetch(`${API}/documents/upload-multi`, { method: 'POST', body: formData });
+      if (!res.ok) res = await fetch(`${API}/documents/upload-multi`, { method: 'POST', body: formData });
+      data = await res.json();
+    } catch (netErr) {
+      updateEntry(entry.id, { status: FILE_STATUS.FAILED, error: 'Network error — could not reach server.' });
+      return { success: false };
+    }
+
+    if (!data.success) {
+      updateEntry(entry.id, { status: FILE_STATUS.FAILED, error: data.error || 'Upload failed.' });
+      return { success: false };
+    }
+
+    const docId = data.docId || (data.documentIds && data.documentIds[0]);
+    const invoiceCount = data.totalInvoices || data.invoices?.length || 1;
+    updateEntry(entry.id, { status: FILE_STATUS.EXTRACTING, documentId: docId, invoiceCount });
+
+    // Poll for extraction completion (max 90 seconds)
+    const startTime = Date.now();
+    while (Date.now() - startTime < 90000) {
+      await new Promise((r) => setTimeout(r, 2000));
+      try {
+        const statusRes = await fetch(`${API}/documents/${docId}/status`);
+        const statusData = await statusRes.json();
+        const s = statusData.status || '';
+        if (s === 'POOR_IMAGE_QUALITY' || s === 'Poor Image Quality') {
+          updateEntry(entry.id, { status: FILE_STATUS.NEEDS_REVIEW, invoiceCount, needsReview: true });
+          return { success: true, needsReview: true, docId, invoiceCount };
+        }
+        if (['EXTRACTED', 'IN_REVIEW', 'APPROVED', 'INVOICE_GENERATED'].includes(s)) {
+          updateEntry(entry.id, { status: FILE_STATUS.COMPLETED, invoiceCount });
+          return { success: true, docId, invoiceCount };
+        }
+        if (s === 'FAILED') {
+          updateEntry(entry.id, { status: FILE_STATUS.FAILED, error: 'Extraction failed — Review or Retry.' });
+          return { success: false };
+        }
+      } catch (e) {
+        // Polling error — keep trying
       }
-      const data = await res.json();
-      const docId = data.docId || (data.documentIds && data.documentIds[0]);
-      if (data.success && docId) {
-        setStatusText('Upload complete! Displaying workspace...');
-        window.location.assign(`/documents/${docId}/multi-workspace`);
-      } else {
-        alert(data.error || 'Upload failed');
-        setUploading(false);
-      }
-    } catch (error) {
-      alert(error.message || 'Network error');
-      setUploading(false);
+    }
+
+    // Timed out — mark completed anyway (backend may still be processing)
+    updateEntry(entry.id, { status: FILE_STATUS.COMPLETED, invoiceCount });
+    return { success: true, docId, invoiceCount };
+  };
+
+  const handleProcessAll = async () => {
+    if (!fileEntries.length) return;
+    setIsProcessing(true);
+    setBatchDone(false);
+    setValidationErrors([]);
+
+    let completed = 0, failed = 0, needsReview = 0, totalInvoices = 0, poorQuality = 0;
+    const docIds = [];
+
+    // Process sequentially with a small concurrency window (2 at a time) to avoid swamping the backend
+    const CONCURRENCY = 2;
+    const readyEntries = fileEntries.filter((e) => e.status === FILE_STATUS.READY || e.status === FILE_STATUS.FAILED);
+    
+    for (let i = 0; i < readyEntries.length; i += CONCURRENCY) {
+      const batch = readyEntries.slice(i, i + CONCURRENCY);
+      const results = await Promise.all(batch.map((e) => processFile(e)));
+      results.forEach((r, idx) => {
+        if (r.success) {
+          if (r.needsReview) { needsReview++; poorQuality++; }
+          else { completed++; }
+          totalInvoices += r.invoiceCount || 0;
+          if (r.docId) docIds.push(r.docId);
+        } else {
+          failed++;
+        }
+      });
+    }
+
+    // Include previously completed entries in batch results
+    const prevCompleted = fileEntries.filter((e) => e.status === FILE_STATUS.COMPLETED || e.status === FILE_STATUS.NEEDS_REVIEW);
+    prevCompleted.forEach((e) => {
+      if (e.documentId && !docIds.includes(e.documentId)) docIds.push(e.documentId);
+    });
+
+    setBatchResults({ docs: fileEntries.length, completed, needsReview, failed, invoices: totalInvoices, poorQuality, docIds });
+    setIsProcessing(false);
+    setBatchDone(true);
+  };
+
+  const handleRetry = async (entry) => {
+    updateEntry(entry.id, { status: FILE_STATUS.READY, error: null });
+  };
+
+  const handleReviewInvoices = () => {
+    const { docIds } = batchResults;
+    if (docIds.length === 0) return;
+    if (docIds.length === 1) {
+      window.location.assign(`/documents/${docIds[0]}/multi-workspace`);
+    } else {
+      window.location.assign(`/batch-workspace?ids=${docIds.join(',')}`);
     }
   };
+
+  const totalFiles = fileEntries.length;
+  const completedCount = fileEntries.filter((e) => [FILE_STATUS.COMPLETED, FILE_STATUS.NEEDS_REVIEW].includes(e.status)).length;
+  const processingCount = fileEntries.filter((e) => [FILE_STATUS.UPLOADING, FILE_STATUS.EXTRACTING].includes(e.status)).length;
+
+  if (batchDone) {
+    return (
+      <main className="page">
+        <div className="section-header">
+          <div>
+            <div className="eyebrow">Batch Processing</div>
+            <h1 className="page-title">Batch Processing Complete</h1>
+          </div>
+        </div>
+        <div className="bq-summary-card">
+          <div className="bq-summary-icon">✅</div>
+          <h2 className="bq-summary-title">Processing Complete</h2>
+          <div className="bq-summary-grid">
+            <div className="bq-summary-stat">
+              <div className="bq-summary-stat__value">{batchResults.docs}</div>
+              <div className="bq-summary-stat__label">Documents</div>
+            </div>
+            <div className="bq-summary-stat bq-summary-stat--success">
+              <div className="bq-summary-stat__value">{batchResults.completed}</div>
+              <div className="bq-summary-stat__label">Successfully Processed</div>
+            </div>
+            <div className="bq-summary-stat bq-summary-stat--warning">
+              <div className="bq-summary-stat__value">{batchResults.needsReview}</div>
+              <div className="bq-summary-stat__label">Needs Review</div>
+            </div>
+            <div className="bq-summary-stat bq-summary-stat--primary">
+              <div className="bq-summary-stat__value">{batchResults.invoices}</div>
+              <div className="bq-summary-stat__label">Invoices Extracted</div>
+            </div>
+            <div className="bq-summary-stat bq-summary-stat--warning">
+              <div className="bq-summary-stat__value">{batchResults.poorQuality}</div>
+              <div className="bq-summary-stat__label">Poor Image Quality</div>
+            </div>
+            <div className="bq-summary-stat bq-summary-stat--danger">
+              <div className="bq-summary-stat__value">{batchResults.failed}</div>
+              <div className="bq-summary-stat__label">Failed</div>
+            </div>
+          </div>
+          <div className="bq-summary-actions">
+            {batchResults.docIds.length > 0 && (
+              <button className="primary-btn" onClick={handleReviewInvoices}>
+                📋 Review Invoices
+              </button>
+            )}
+            <button className="secondary-btn" onClick={() => { setBatchDone(false); setFileEntries([]); setValidationErrors([]); }}>
+              ⬆ Upload More Documents
+            </button>
+            <a className="secondary-btn" href="/documents">← Back to Documents</a>
+          </div>
+          {/* Show failed files with retry */}
+          {fileEntries.some((e) => e.status === FILE_STATUS.FAILED) && (
+            <div className="bq-failed-list">
+              <div className="bq-failed-title">Failed Documents</div>
+              {fileEntries.filter((e) => e.status === FILE_STATUS.FAILED).map((e) => (
+                <div key={e.id} className="bq-failed-row">
+                  <span className="bq-failed-name">📄 {e.file.name}</span>
+                  <span className="bq-failed-error">{e.error || 'Extraction failed'}</span>
+                  <button className="secondary-btn bq-retry-btn" onClick={() => { setBatchDone(false); updateEntry(e.id, { status: FILE_STATUS.READY, error: null }); }}>
+                    ↺ Retry
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </main>
+    );
+  }
 
   return (
     <main className="page">
       <div className="section-header">
         <div>
           <div className="eyebrow">Workflow</div>
-          <h1 className="page-title">Multiple Invoices Upload</h1>
-          <p className="subtle-copy mt-2">Upload a single PDF containing multiple invoices. You can select and process each invoice independently.</p>
+          <h1 className="page-title">Upload Multiple Documents</h1>
+          <p className="subtle-copy mt-2">Upload multiple PDF documents at once. Each document can contain one or multiple invoices.</p>
         </div>
       </div>
-      <div className="card upload-panel">
-        <div
-          className="dropzone"
-          onClick={() => document.getElementById('fileInputMulti').click()}
-          onDragOver={(e) => { e.preventDefault(); e.dataTransfer.dropEffect = 'copy'; }}
-          onDragEnter={(e) => e.preventDefault()}
-          onDrop={(e) => { e.preventDefault(); handleFiles(e.dataTransfer.files); }}
-        >
-          <input
-            id="fileInputMulti"
-            type="file"
-            accept=".pdf"
-            style={{ display: 'none' }}
-            onChange={(e) => setSelectedFiles(Array.from(e.target.files || []))}
-          />
-          <div className="dropzone-icon">📥</div>
-          <div className="dropzone-title">Select Multiple Invoice PDF</div>
-          <div className="dropzone-subtext">Must be a PDF file containing multiple invoices</div>
-          {selectedFiles.length > 0 && <div className="file-chip">Selected: {selectedFiles[0].name}</div>}
+
+      {/* ── DROPZONE ── */}
+      <div
+        className={`bq-dropzone${isDragging ? ' bq-dropzone--active' : ''}`}
+        onClick={() => !isProcessing && fileInputRef.current?.click()}
+        onDragOver={handleDragOver}
+        onDragLeave={handleDragLeave}
+        onDrop={!isProcessing ? handleDrop : (e) => e.preventDefault()}
+      >
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept=".pdf,application/pdf"
+          multiple
+          style={{ display: 'none' }}
+          onChange={handleFileInput}
+        />
+        <div className="bq-dropzone__icon">
+          <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" /><polyline points="17 8 12 3 7 8" /><line x1="12" y1="3" x2="12" y2="15" />
+          </svg>
         </div>
-        <button className="primary-btn w-full mt-4" onClick={handleUpload} disabled={uploading}>
-          {uploading ? 'Uploading...' : 'Upload & Detect Invoices'}
+        <div className="bq-dropzone__title">Drag & drop your PDF files here</div>
+        <div className="bq-dropzone__or">or</div>
+        <button type="button" className="primary-btn bq-dropzone__browse" onClick={(e) => { e.stopPropagation(); !isProcessing && fileInputRef.current?.click(); }}>
+          Browse Files
         </button>
-        {statusText && <div className="progress-box">{statusText}</div>}
+        <div className="bq-dropzone__hint">Supports multiple PDFs. Each PDF can contain one or multiple invoices. Max {MAX_FILE_SIZE_MB} MB per file.</div>
       </div>
+
+      {/* ── VALIDATION ERRORS ── */}
+      {validationErrors.length > 0 && (
+        <div className="bq-validation-errors">
+          {validationErrors.map((err, i) => (
+            <div key={i} className="bq-validation-error">⚠ {err}</div>
+          ))}
+          <button className="bq-validation-dismiss" onClick={() => setValidationErrors([])}>Dismiss</button>
+        </div>
+      )}
+
+      {/* ── FILE QUEUE ── */}
+      {fileEntries.length > 0 && (
+        <div className="bq-queue-section">
+          {/* Header row */}
+          <div className="bq-queue-header">
+            <div className="bq-queue-title">
+              Selected Documents <span className="bq-queue-count">{totalFiles}</span>
+              {isProcessing && <span className="bq-queue-processing-badge">Processing {processingCount > 0 ? processingCount + ' active' : '...'}</span>}
+            </div>
+            <div className="bq-queue-actions">
+              {!isProcessing && (
+                <>
+                  <input ref={addMoreRef} type="file" accept=".pdf,application/pdf" multiple style={{ display: 'none' }} onChange={handleFileInput} />
+                  <button type="button" className="secondary-btn bq-add-more-btn" onClick={() => addMoreRef.current?.click()}>
+                    + Add More Files
+                  </button>
+                  <button type="button" className="secondary-btn bq-clear-btn" onClick={clearAll}>
+                    Clear All
+                  </button>
+                </>
+              )}
+            </div>
+          </div>
+
+          {/* Overall progress bar (when processing) */}
+          {isProcessing && (
+            <div className="bq-overall-progress">
+              <div className="bq-op-label">
+                <span>{completedCount} of {totalFiles} documents processed</span>
+                <span className="bq-op-pct">{Math.round((completedCount / Math.max(totalFiles, 1)) * 100)}%</span>
+              </div>
+              <div className="bq-op-bar">
+                <div className="bq-op-bar-fill" style={{ width: `${(completedCount / Math.max(totalFiles, 1)) * 100}%` }} />
+              </div>
+            </div>
+          )}
+
+          {/* File list */}
+          <div className="bq-file-list">
+            {fileEntries.map((entry) => (
+              <div key={entry.id} className={`bq-file-row${entry.status === FILE_STATUS.FAILED ? ' bq-file-row--failed' : ''}`}>
+                <div className="bq-file-icon">
+                  <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#6366f1" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" /><polyline points="14 2 14 8 20 8" /><line x1="9" y1="13" x2="15" y2="13" /><line x1="9" y1="17" x2="13" y2="17" />
+                  </svg>
+                </div>
+                <div className="bq-file-info">
+                  <div className="bq-file-name">{entry.file.name}</div>
+                  <div className="bq-file-meta">
+                    {formatFileSize(entry.file.size)}
+                    {entry.invoiceCount > 0 && ` · ${entry.invoiceCount} invoice${entry.invoiceCount !== 1 ? 's' : ''} detected`}
+                    {entry.error && <span className="bq-file-error-msg"> · {entry.error}</span>}
+                  </div>
+                </div>
+                <div className="bq-file-status">
+                  <StatusBadge status={entry.status} />
+                </div>
+                <div className="bq-file-actions">
+                  {entry.status === FILE_STATUS.FAILED && !isProcessing && (
+                    <button type="button" className="bq-retry-btn secondary-btn" onClick={() => handleRetry(entry)} title="Retry this document">
+                      ↺ Retry
+                    </button>
+                  )}
+                  {!isProcessing && entry.status === FILE_STATUS.READY && (
+                    <button type="button" className="bq-remove-btn" onClick={() => removeEntry(entry.id)} title="Remove file" aria-label="Remove file">
+                      ×
+                    </button>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+
+          {/* Process button */}
+          {!isProcessing && (
+            <button
+              type="button"
+              className="primary-btn bq-process-btn"
+              onClick={handleProcessAll}
+              disabled={isProcessing || fileEntries.filter((e) => e.status === FILE_STATUS.READY || e.status === FILE_STATUS.FAILED).length === 0}
+            >
+              🚀 Process All Documents
+            </button>
+          )}
+        </div>
+      )}
     </main>
   );
 };
+
 
 // Helper to unwraps nested JSON strings or containers to extract real invoice object
 export const extractRealInvoiceObject = (raw) => {
@@ -693,243 +1035,955 @@ export const ExtractedDataPanel = ({ selectedIndex, invoiceGroups, extractedData
   );
 };
 
-export const MultiInvoiceWorkspace = () => {
-  const path = window.location.pathname;
-  const docId = path.split('/')[2];
-  
-  const [invoiceGroups, setInvoiceGroups] = useState([]);
-  const [selectedInvoiceIndex, setSelectedInvoiceIndex] = useState(null);
 
-  const [extractedData, setExtractedData] = useState({});
-  const [processingStates, setProcessingStates] = useState({});
-  const [errorStates, setErrorStates] = useState({});
+export const MultiInvoiceWorkspace = ({ docId: propDocId, docIds: propDocIds }) => {
+  const path = window.location.pathname;
+  const searchParams = new URLSearchParams(window.location.search);
+  // Support batch mode: ids= query param takes precedence over path-based docId
+  const idsParam = searchParams.get('ids');
+  const docIds = propDocIds || (idsParam ? idsParam.split(',').filter(Boolean) : null);
+  const primaryDocId = propDocId || (docIds ? docIds[0] : null) || path.split('/')[2];
+  const isBatchMode = docIds && docIds.length > 1;
+
+  const [doc, setDoc] = useState(null);
+  const [invoices, setInvoices] = useState([]);
+  const [selectedInvoiceIndex, setSelectedInvoiceIndex] = useState(0);
+  const [drafts, setDrafts] = useState({});
+  const [activeTab, setActiveTab] = useState('header');
   const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [saveSuccess, setSaveSuccess] = useState(false);
+  const [saveError, setSaveError] = useState('');
+  const [showDiscardModal, setShowDiscardModal] = useState(false);
+  const [showEscalationModal, setShowEscalationModal] = useState(false);
+  const [pageOffset, setPageOffset] = useState(0);
+  const [zoomLevel, setZoomLevel] = useState(100);
+  // Batch review filters
+  const [filterDoc, setFilterDoc] = useState('all');
+  const [filterStatus, setFilterStatus] = useState('all');
+  const [searchQuery, setSearchQuery] = useState('');
 
   useEffect(() => {
-    const params = new URLSearchParams(window.location.search);
-    const initialIndex = params.has('invoiceIndex') ? parseInt(params.get('invoiceIndex'), 10) : null;
-    
-    fetch(`${API}/documents/${docId}/detect-invoices`)
-      .then(res => res.json())
-      .then(data => {
-        if (data.success) {
-          setInvoiceGroups(data.invoiceGroups || []);
-          if (initialIndex !== null && !isNaN(initialIndex) && data.invoiceGroups && data.invoiceGroups[initialIndex]) {
-              setSelectedInvoiceIndex(initialIndex);
-              processInvoice(initialIndex, data.invoiceGroups[initialIndex]);
-          } else {
-              setSelectedInvoiceIndex(null);
-          }
-        }
-      })
-      .catch(console.error)
-      .finally(() => setLoading(false));
-
-    fetch(`${API}/documents/${docId}/invoices?refresh=${Date.now()}`)
-      .then(res => res.json())
-      .then(data => {
-        if (data.success && Array.isArray(data.invoices) && data.invoices.length > 0) {
-          const loaded = {};
-          data.invoices.forEach(inv => {
-            const index = inv.invoiceIndex;
-            const realObj = extractRealInvoiceObject(inv.extractedData || inv.canonicalJson || inv);
-            if (realObj) {
-              loaded[index] = realObj;
-            }
-          });
-          if (Object.keys(loaded).length > 0) {
-            setExtractedData(prev => ({ ...loaded, ...prev }));
-          }
-        }
-      })
-      .catch(console.error);
-  }, [docId]);
-
-  const fetchBackendExtractedData = async (targetDocId, index, reviewUrl) => {
-    let targetEndpoint = `${API}/documents/${targetDocId}/invoices?refresh=${Date.now()}`;
-    if (reviewUrl && typeof reviewUrl === 'string') {
-      const rawPath = reviewUrl.replace(/^\/api/, '');
-      if (rawPath.includes('/invoices')) {
-        targetEndpoint = `${API}${rawPath.startsWith('/') ? '' : '/'}${rawPath}?refresh=${Date.now()}`;
-      }
-    }
-
-    for (let attempt = 0; attempt < 5; attempt++) {
+    let active = true;
+    const load = async () => {
+      setLoading(true);
       try {
-        const invRes = await fetch(targetEndpoint, { cache: 'no-store' });
-        if (invRes.ok) {
-          const invJson = await invRes.json();
-          const invoiceList = invJson.invoices || [];
-          const matchingInvoice = invoiceList.find(inv => Number(inv.invoiceIndex) === Number(index));
-          if (matchingInvoice) {
-            const realObj = extractRealInvoiceObject(matchingInvoice.extractedData || matchingInvoice.canonicalJson || matchingInvoice.finalSubmittedData || matchingInvoice);
-            if (realObj) {
-              return realObj;
-            }
-          }
-        }
-      } catch (err) {
-        console.warn('Attempt', attempt, 'fetching extracted invoice data failed:', err);
-      }
+        let invoiceList = [];
+        let foundDoc = null;
 
-      try {
-        const docsRes = await fetch(`${API}/documents?refresh=${Date.now()}`, { cache: 'no-store' });
-        if (docsRes.ok) {
-          const docsJson = await docsRes.json();
-          const foundDoc = (docsJson.documents || []).find(d => d.id === targetDocId);
-          if (foundDoc) {
-            const invoiceList = foundDoc.invoices || [];
-            const matchingInvoice = invoiceList.find(inv => Number(inv.invoiceIndex) === Number(index));
-            if (matchingInvoice) {
-              const realObj = extractRealInvoiceObject(matchingInvoice.extractedData || matchingInvoice.canonicalJson || matchingInvoice.finalSubmittedData || matchingInvoice);
-              if (realObj) {
-                return realObj;
+        if (isBatchMode) {
+          // Load invoices from all docs in the batch
+          const idsQuery = docIds.join(',');
+          const [docsRes, invRes] = await Promise.all([
+            fetch(`${API}/documents?refresh=${Date.now()}`),
+            fetch(`${API}/documents/${primaryDocId}/invoices?ids=${encodeURIComponent(idsQuery)}&refresh=${Date.now()}`)
+          ]);
+          const docsData = await docsRes.json();
+          const invData = await invRes.json();
+          foundDoc = (docsData.documents || []).find(d => d.id === primaryDocId) || null;
+          invoiceList = Array.isArray(invData.invoices) ? invData.invoices : [];
+        } else {
+          const docId = primaryDocId;
+          const [docRes, invRes] = await Promise.all([
+            fetch(`${API}/documents?refresh=${Date.now()}`),
+            fetch(`${API}/documents/${docId}/invoices?refresh=${Date.now()}`)
+          ]);
+          const docData = await docRes.json();
+          const invData = await invRes.json();
+          foundDoc = (docData.documents || []).find(d => d.id === docId) || null;
+          invoiceList = Array.isArray(invData.invoices) ? invData.invoices : [];
+
+          if (invoiceList.length === 0) {
+            try {
+              const detectRes = await fetch(`${API}/documents/${docId}/detect-invoices`);
+              const detectData = await detectRes.json();
+              if (detectData.success && Array.isArray(detectData.invoiceGroups)) {
+                invoiceList = detectData.invoiceGroups.map((grp, idx) => ({
+                  id: `detected-${idx}`,
+                  documentId: docId,
+                  sourceFileName: foundDoc?.fileName || docId,
+                  fileName: foundDoc?.fileName || docId,
+                  invoiceIndex: grp.invoiceIndex !== undefined ? grp.invoiceIndex : idx,
+                  pageStart: grp.pageStart || 1,
+                  pageEnd: grp.pageEnd || grp.pageStart || 1,
+                  status: 'Ready for Review',
+                  overallConfidence: 0.95,
+                  extractedData: {}
+                }));
               }
+            } catch (e) {
+              console.warn('Invoice detection fallback error:', e);
             }
           }
         }
+
+        if (active) {
+          setDoc(foundDoc);
+          setInvoices(invoiceList);
+
+          const params = new URLSearchParams(window.location.search);
+          const initialIndex = params.has('invoiceIndex') ? parseInt(params.get('invoiceIndex'), 10) : 0;
+          const validIndex = (!isNaN(initialIndex) && initialIndex >= 0 && initialIndex < invoiceList.length) ? initialIndex : 0;
+          setSelectedInvoiceIndex(validIndex);
+
+          const initialDrafts = {};
+          invoiceList.forEach((inv, idx) => {
+            const realObj = extractRealInvoiceObject(inv.extractedData || inv.canonicalJson || inv) || {};
+            initialDrafts[idx] = realObj;
+          });
+          setDrafts(initialDrafts);
+        }
       } catch (err) {
-        console.warn('Fallback docs fetch failed:', err);
+        console.error('Failed loading multi invoice workspace:', err);
+      } finally {
+        if (active) setLoading(false);
       }
+    };
+    load();
+    return () => { active = false; };
+  }, [primaryDocId]);
 
-      await new Promise(r => setTimeout(r, 800));
-    }
+  useEffect(() => {
+    setPageOffset(0);
+    setSaveSuccess(false);
+    setSaveError('');
+  }, [selectedInvoiceIndex]);
 
-    return null;
+  const selectedInvoice = invoices[selectedInvoiceIndex] || null;
+  const currentDraft = drafts[selectedInvoiceIndex] || {};
+
+  const pageStart = selectedInvoice?.pageStart || 1;
+  const pageEnd = selectedInvoice?.pageEnd || pageStart;
+  const currentPageNumber = Math.min(pageEnd, pageStart + pageOffset);
+
+  const updateDraftPath = (parts, value) => {
+    setDrafts((prev) => {
+      const currentInvoiceDraft = JSON.parse(JSON.stringify(prev[selectedInvoiceIndex] || {}));
+      let target = currentInvoiceDraft;
+      parts.slice(0, -1).forEach((part) => {
+        if (!target[part]) target[part] = {};
+        target = target[part];
+      });
+      target[parts[parts.length - 1]] = value;
+      return { ...prev, [selectedInvoiceIndex]: currentInvoiceDraft };
+    });
   };
 
-  const processInvoice = async (index, group) => {
-    if (processingStates[index] || extractedData[index]) return;
-
-    setProcessingStates(prev => ({ ...prev, [index]: true }));
-    setErrorStates(prev => ({ ...prev, [index]: null }));
-
+  const handleSaveSelectedInvoice = async () => {
+    if (!selectedInvoice) return;
+    setSaving(true);
+    setSaveError('');
+    setSaveSuccess(false);
     try {
-      const pageStart = group?.pageStart || (group?.pages ? group.pages[0] : 1);
-      const pageEnd = group?.pageEnd || (group?.pages ? group.pages[1] : 1);
-
-      const res = await fetch(`${API}/process-invoice`, {
+      const invoiceId = selectedInvoice.id || selectedInvoice.invoiceId;
+      // Use the invoice's own documentId for data isolation (critical for multi-PDF batches)
+      const saveDocId = selectedInvoice.documentId || primaryDocId;
+      const res = await fetch(`${API}/documents/${saveDocId}/review`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          docId,
-          invoiceIndex: index,
-          pages: [pageStart, pageEnd],
-          pageStart,
-          pageEnd
+          docId: saveDocId,
+          invoiceId,
+          invoiceIndex: selectedInvoice.invoiceIndex ?? selectedInvoiceIndex,
+          editedData: currentDraft,
+          editedExtractedData: currentDraft
         })
       });
-
       const data = await res.json();
+      if (!res.ok || data.error) throw new Error(data.error || 'Failed to save invoice changes');
       
-      const directExtracted = extractRealInvoiceObject(data?.extractedData) || extractRealInvoiceObject(data);
-
-      if (directExtracted) {
-        setExtractedData(prev => ({ ...prev, [index]: directExtracted }));
-      } else if (data && (data.success || data.complete || data.reviewUrl)) {
-        const backendData = await fetchBackendExtractedData(docId, index, data.reviewUrl);
-        if (backendData) {
-          setExtractedData(prev => ({ ...prev, [index]: backendData }));
-        } else {
-          setErrorStates(prev => ({ ...prev, [index]: 'Unable to load extracted invoice data from backend.' }));
-        }
-      } else if (data && data.error) {
-        const backendData = await fetchBackendExtractedData(docId, index);
-        if (backendData) {
-          setExtractedData(prev => ({ ...prev, [index]: backendData }));
-        } else {
-          setErrorStates(prev => ({ ...prev, [index]: data.error }));
-        }
-      } else {
-        const backendData = await fetchBackendExtractedData(docId, index);
-        if (backendData) {
-          setExtractedData(prev => ({ ...prev, [index]: backendData }));
-        } else {
-          setErrorStates(prev => ({ ...prev, [index]: 'Invalid response from invoice extraction pipeline.' }));
-        }
-      }
-    } catch (e) {
-      const backendData = await fetchBackendExtractedData(docId, index);
-      if (backendData) {
-        setExtractedData(prev => ({ ...prev, [index]: backendData }));
-      } else {
-        setErrorStates(prev => ({ ...prev, [index]: e.message }));
-      }
+      setSaveSuccess(true);
+      setInvoices((prev) => prev.map((inv, idx) => idx === selectedInvoiceIndex ? { ...inv, status: 'APPROVED' } : inv));
+      setTimeout(() => setSaveSuccess(false), 3000);
+    } catch (err) {
+      setSaveError(err.message || 'Save failed');
     } finally {
-      setProcessingStates(prev => ({ ...prev, [index]: false }));
+      setSaving(false);
     }
   };
 
-  const handleInvoiceClick = (index, group) => {
-    setSelectedInvoiceIndex(index);
-
-    if (extractedData[index]) {
-      setTimeout(() => {
-        const cardElem = document.getElementById(`invoice-card-${index}`);
-        if (cardElem) {
-          cardElem.scrollIntoView({ behavior: 'smooth', block: 'start' });
-        }
-      }, 50);
-    } else {
-      processInvoice(index, group);
-      setTimeout(() => {
-        const cardElem = document.getElementById(`invoice-card-${index}`);
-        if (cardElem) {
-          cardElem.scrollIntoView({ behavior: 'smooth', block: 'start' });
-        }
-      }, 100);
-    }
+  const handleConfirmDiscard = () => {
+    if (!selectedInvoice) return;
+    const originalExtracted = extractRealInvoiceObject(selectedInvoice.extractedData || selectedInvoice.canonicalJson || selectedInvoice) || {};
+    setDrafts((prev) => ({ ...prev, [selectedInvoiceIndex]: originalExtracted }));
+    setShowDiscardModal(false);
   };
 
-  const handleSaveInvoice = async (index, draftData) => {
-    const res = await fetch(`${API}/documents/${docId}/review`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        docId,
-        invoiceIndex: index,
-        editedData: draftData,
-        editedExtractedData: draftData
-      })
+  if (loading) {
+    return (
+      <main className="emir-page">
+        <div className="emir-empty-box">
+          <div className="emir-empty-icon">🔄</div>
+          <div className="emir-empty-text">Loading multi-invoice review workspace...</div>
+        </div>
+      </main>
+    );
+  }
+
+  // ── FILTER LOGIC ─────────────────────────────────────────────────────────
+  const uniqueDocNames = [...new Set(invoices.map(inv => inv.sourceFileName || inv.fileName || inv.documentId || primaryDocId).filter(Boolean))];
+  const filteredInvoices = invoices.filter((inv, idx) => {
+    const srcName = inv.sourceFileName || inv.fileName || inv.documentId || primaryDocId;
+    const status = inv.status || inv.extractionStatus || '';
+    const isPoor = inv.poorImageQuality || status === 'POOR_IMAGE_QUALITY' || status === 'Poor Image Quality';
+    if (filterDoc !== 'all' && srcName !== filterDoc) return false;
+    
+    if (filterStatus === 'ready') {
+      if (isPoor || !['EXTRACTED', 'IN_REVIEW', 'APPROVED', 'Ready for Review', 'EXTRACTED'].includes(status)) return false;
+    } else if (filterStatus === 'review') {
+      if (isPoor || (status !== 'NEEDS_REVIEW' && status !== 'Needs Review')) return false;
+    } else if (filterStatus === 'poor') {
+      if (!isPoor) return false;
+    } else if (filterStatus === 'approved') {
+      if (status !== 'APPROVED') return false;
+    } else if (filterStatus === 'failed') {
+      if (status !== 'FAILED') return false;
+    }
+    
+    if (searchQuery.trim()) {
+      const q = searchQuery.toLowerCase();
+      const invNum = String(inv.invoiceNumber || '').toLowerCase();
+      const fName = String(srcName || '').toLowerCase();
+      if (!invNum.includes(q) && !fName.includes(q)) return false;
+    }
+    return true;
+  });
+  // Map filtered back to global indices for selection
+  const filteredWithIndex = filteredInvoices.map(inv => ({ inv, globalIdx: invoices.indexOf(inv) }));
+
+  const headerObj = currentDraft.invoiceHeader || currentDraft.header || currentDraft || {};
+  const rawInvNum = headerObj.invoiceNumber || headerObj.invoice_number || currentDraft.invoiceNumber || selectedInvoice?.invoiceNumber;
+  const extractedInvNum = rawInvNum ? String(rawInvNum) : 'Not extracted';
+  const confidencePercent = Math.round(((selectedInvoice?.overallConfidence ?? 0.95) * 100));
+  const invoiceStatus = selectedInvoice?.status || selectedInvoice?.extractionStatus || 'Ready for Review';
+  const isPoorQuality = selectedInvoice?.poorImageQuality || invoiceStatus === 'Poor Image Quality' || invoiceStatus === 'POOR_IMAGE_QUALITY';
+  // Use selected invoice's own documentId for PDF preview
+  const activeDocId = selectedInvoice?.documentId || primaryDocId;
+  const totalDocPages = invoices.length > 0 ? (invoices[invoices.length - 1].pageEnd || invoices[invoices.length - 1].pageStart || 1) : 1;
+
+  const invoiceInfoFields = [
+    { label: 'Invoice Number', key: 'invoiceNumber', value: headerObj.invoiceNumber || currentDraft.invoiceNumber },
+    { label: 'Invoice Date', key: 'invoiceDate', value: headerObj.invoiceDate || currentDraft.invoiceDate },
+    { label: 'Due Date', key: 'dueDate', value: headerObj.dueDate || currentDraft.dueDate },
+    { label: 'Payment Terms', key: 'paymentTerms', value: headerObj.paymentTerms || currentDraft.paymentTerms },
+    { label: 'PO / Ref Number', key: 'poNumber', value: headerObj.poNumber || currentDraft.poNumber || headerObj.purchaseOrderNumber }
+  ];
+
+  const carrierInfoFields = [
+    { label: 'Carrier / Vendor Name', key: 'vendorName', value: headerObj.vendorName || currentDraft.vendorName || headerObj.carrierName },
+    { label: 'SCAC Code', key: 'carrierScacCode', value: headerObj.carrierScacCode || currentDraft.scac || headerObj.scac },
+    { label: 'Transport Mode', key: 'mode', value: headerObj.mode || currentDraft.transportMode },
+    { label: 'Service Level', key: 'serviceLevel', value: headerObj.serviceLevel || currentDraft.serviceLevel }
+  ];
+
+  const billingInfoFields = [
+    { label: 'Customer / Bill To Name', key: 'customerName', value: headerObj.customerName || currentDraft.customerName || headerObj.billTo },
+    { label: 'Account Number', key: 'accountNumber', value: headerObj.accountNumber || currentDraft.accountNumber },
+    { label: 'Billing Address', key: 'billToAddress', value: headerObj.billToAddress || currentDraft.billToAddress }
+  ];
+
+  const financialInfoFields = [
+    { label: 'Subtotal Amount', key: 'subtotalAmount', value: headerObj.subtotalAmount || currentDraft.subtotalAmount },
+    { label: 'Tax Amount', key: 'taxAmount', value: headerObj.taxAmount || currentDraft.taxAmount },
+    { label: 'Total Amount Due', key: 'totalAmount', value: headerObj.totalAmount || headerObj.totalAmountDue || currentDraft.totalAmount },
+    { label: 'Currency', key: 'currency', value: headerObj.currency || currentDraft.currency || '$' }
+  ];
+
+  const paymentInfoFields = [
+    { label: 'Remit To Name', key: 'remitToCompanyName', value: headerObj.remitToCompanyName || currentDraft.remitToCompanyName || headerObj.remitTo },
+    { label: 'Remit Address', key: 'remitToAddress', value: headerObj.remitToAddress || currentDraft.remitToAddress },
+    { label: 'Payment Method / Bank', key: 'paymentMethod', value: headerObj.paymentMethod || currentDraft.paymentMethod }
+  ];
+
+  let shipmentData = currentDraft.shipmentDetails || currentDraft.shipmentDetail || currentDraft.shipments || currentDraft.shipment;
+  if (!Array.isArray(shipmentData)) {
+    shipmentData = shipmentData && typeof shipmentData === 'object' ? [shipmentData] : [];
+  }
+
+  let lineItemsData = currentDraft.chargeLineItems || currentDraft.lineItems || currentDraft.items || currentDraft.charges;
+  if (!Array.isArray(lineItemsData)) {
+    lineItemsData = lineItemsData && typeof lineItemsData === 'object' ? [lineItemsData] : [];
+  }
+  if (lineItemsData.length === 0 && shipmentData.length > 0) {
+    lineItemsData = [...lineItemsData];
+    shipmentData.forEach(s => {
+      if (s && Array.isArray(s.chargeLineItems)) lineItemsData.push(...s.chargeLineItems);
     });
-    const data = await res.json();
-    if (!res.ok || data.error) {
-      throw new Error(data.error || 'Failed to save invoice');
-    }
-    setExtractedData(prev => ({ ...prev, [index]: draftData }));
-  };
+  }
 
-  if (loading) return <main className="page"><div style={{ padding: '2rem' }}>Loading detected invoices...</div></main>;
+  const relativePage = currentPageNumber - pageStart + 1;
+  // Use activeDocId for isolated PDF preview (critical for multi-PDF data isolation)
+  const pdfSourceUrl = `${API}/documents/${activeDocId}/page-range?start=${pageStart}&end=${pageEnd}`;
+  const pdfIframeSrc = `${pdfSourceUrl}#page=${relativePage}`;
 
   return (
-    <main className="page multi-workspace-page" style={{ padding: 0, margin: 0, width: '100%', maxWidth: '100%', height: 'calc(100vh - 72px)', overflow: 'hidden' }}>
-      <div className="multi-workspace-shell">
-        {/* Left Panel — 30% — PDF Preview + Invoice Tabs */}
-        <div className="multi-left-column">
-          <DocumentViewer docId={docId} selectedGroup={invoiceGroups[selectedInvoiceIndex]} />
-          <InvoiceList 
-            invoiceGroups={invoiceGroups}
-            selectedIndex={selectedInvoiceIndex}
-            extractedData={extractedData}
-            processingStates={processingStates}
-            errorStates={errorStates}
-            onInvoiceClick={handleInvoiceClick}
-          />
+    <main className="emir-page">
+      {/* ── A. TOP HEADER ─────────────────────────────────────────────────── */}
+      <header className="emir-header">
+        <div className="emir-header-left">
+          <div className="emir-breadcrumbs">
+            <span>Document Review</span>
+            <span>/</span>
+            <span>{isBatchMode ? 'Batch Multi-Invoice Processing' : 'Multi-Invoice Processing'}</span>
+            {!isBatchMode && <span className="emir-file-badge">{doc?.fileName || 'Combined_Invoice.pdf'}</span>}
+            {isBatchMode && <span className="emir-file-badge">{uniqueDocNames.length} documents</span>}
+          </div>
+          <h1 className="emir-title">{isBatchMode ? 'Batch Invoice Review Workspace' : 'Multi-Invoice Review Workspace'}</h1>
+          <p className="emir-subtitle">
+            {isBatchMode
+              ? <><strong style={{ color: 'var(--primary, #6366f1)' }}>Documents: {uniqueDocNames.length}</strong> &nbsp;·&nbsp; <strong style={{ color: 'var(--primary, #6366f1)' }}>Invoices: {invoices.length}</strong> · Select an invoice below to review</>  
+              : <><strong style={{ color: 'var(--primary, #6366f1)' }}>{invoices.length}</strong> invoices detected • Select an invoice below to review original pages and extracted data</>  
+            }
+          </p>
         </div>
 
-        {/* Right Panel — 70% — Extracted Fields */}
-        <div className="multi-extracted-panel">
-          <ExtractedDataPanel 
-            selectedIndex={selectedInvoiceIndex}
-            invoiceGroups={invoiceGroups}
-            extractedData={extractedData}
-            processingStates={processingStates}
-            errorStates={errorStates}
-            onRetry={processInvoice}
-            onSave={handleSaveInvoice}
-          />
+        <div className="emir-header-actions">
+          {saveSuccess && <span style={{ color: 'var(--success, #1FC991)', fontWeight: 600, fontSize: '0.88rem' }}>✓ Saved & Approved</span>}
+          {saveError && <span style={{ color: 'var(--danger, #EA6A6A)', fontSize: '0.85rem' }}>{saveError}</span>}
+          
+          {isPoorQuality && (
+            <button
+              type="button"
+              className="escalate-btn"
+              onClick={() => setShowEscalationModal(true)}
+            >
+              🚨 Escalate Invoice
+            </button>
+          )}
+
+          <button
+            type="button"
+            className="emir-btn-discard"
+            onClick={() => setShowDiscardModal(true)}
+          >
+            ✕ Discard
+          </button>
+
+          <button
+            type="button"
+            className="emir-btn-save"
+            onClick={handleSaveSelectedInvoice}
+            disabled={saving}
+          >
+            {saving ? 'Saving...' : '✓ Save & Approve'}
+          </button>
         </div>
+      </header>
+
+      {/* ── B. MAIN REVIEW WORKSPACE (2-COLUMN GRID) ───────────────────────── */}
+      <div className="emir-workspace">
+        {/* LEFT COLUMN — ORIGINAL DOCUMENT VIEWER */}
+        <section className="emir-doc-card">
+          <div className="emir-card-header">
+            <div className="emir-card-title">
+              <span>📄 ORIGINAL DOCUMENT</span>
+            </div>
+            <div className="emir-range-tag">
+              Invoice {String(selectedInvoiceIndex + 1).padStart(2, '0')} · Pages {pageStart}–{pageEnd} of {totalDocPages}
+            </div>
+          </div>
+
+          <div className="emir-doc-toolbar">
+            <div className="emir-toolbar-group">
+              <button
+                type="button"
+                className="emir-tb-btn"
+                onClick={() => setPageOffset(p => Math.max(0, p - 1))}
+                disabled={pageStart + pageOffset <= pageStart}
+                title="Previous page in this invoice"
+              >
+                ◀ Prev
+              </button>
+              <span className="emir-tb-text">Page {currentPageNumber} of {pageEnd}</span>
+              <button
+                type="button"
+                className="emir-tb-btn"
+                onClick={() => setPageOffset(p => (pageStart + p < pageEnd ? p + 1 : p))}
+                disabled={pageStart + pageOffset >= pageEnd}
+                title="Next page in this invoice"
+              >
+                Next ▶
+              </button>
+            </div>
+
+            <div className="emir-toolbar-group">
+              <button
+                type="button"
+                className="emir-tb-btn"
+                onClick={() => setZoomLevel(z => Math.max(50, z - 25))}
+                title="Zoom out"
+              >
+                −
+              </button>
+              <span className="emir-tb-text">{zoomLevel}%</span>
+              <button
+                type="button"
+                className="emir-tb-btn"
+                onClick={() => setZoomLevel(z => Math.min(200, z + 25))}
+                title="Zoom in"
+              >
+                +
+              </button>
+              <button
+                type="button"
+                className="emir-tb-btn"
+                onClick={() => setZoomLevel(100)}
+                title="Reset Fit"
+              >
+                Reset
+              </button>
+              <a
+                href={pdfSourceUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="emir-tb-btn"
+                title="Open invoice pages in new tab"
+              >
+                ↗ New Tab
+              </a>
+            </div>
+          </div>
+
+          <div className="emir-doc-body">
+            <iframe
+              key={`doc-${activeDocId}-inv-${selectedInvoiceIndex}-p-${currentPageNumber}`}
+              className="emir-doc-iframe"
+              src={pdfIframeSrc}
+              title="Original Invoice PDF Viewer"
+              style={{ transform: `scale(${zoomLevel / 100})`, transformOrigin: 'top center' }}
+            />
+          </div>
+        </section>
+
+        {/* RIGHT COLUMN — EXTRACTED INFORMATION */}
+        <section className="emir-extracted-card">
+          <div className="emir-summary-bar">
+            <div className="emir-summary-info">
+              <div className="emir-card-tag">EXTRACTED DATA</div>
+              <div className="emir-summary-number">
+                {extractedInvNum !== 'Not extracted' ? extractedInvNum : <span className="text-muted" style={{ fontSize: '0.9rem', fontStyle: 'italic', color: '#94a3b8' }}>Invoice Number Not Extracted</span>}
+              </div>
+            </div>
+
+            <div className="emir-summary-meta">
+              <span className={`emir-confidence-badge ${confidencePercent < 80 ? 'warning' : ''}`}>
+                🎯 Confidence {confidencePercent}%
+              </span>
+              <span className={`status-pill ${isPoorQuality ? 'warning-strong' : invoiceStatus === 'APPROVED' ? 'success' : 'primary'}`}>
+                {isPoorQuality ? '⚠ Poor Image Quality' : invoiceStatus}
+              </span>
+            </div>
+          </div>
+
+          {/* WARNING BANNER FOR POOR IMAGE QUALITY */}
+          {isPoorQuality && (
+            <div className="emir-warning-banner">
+              <div className="emir-warning-title">⚠ Poor Image Quality · Review Required</div>
+              <div className="emir-warning-desc">
+                The image for this isolated invoice is low quality or blurry. All extracted data fields are rendered below for manual verification.
+              </div>
+            </div>
+          )}
+
+          {/* TAB SELECTOR */}
+          <div className="emir-tabs">
+            <button
+              type="button"
+              className={`emir-tab-btn ${activeTab === 'header' ? 'is-active' : ''}`}
+              onClick={() => setActiveTab('header')}
+            >
+              📄 Invoice Info
+            </button>
+            <button
+              type="button"
+              className={`emir-tab-btn ${activeTab === 'shipments' ? 'is-active' : ''}`}
+              onClick={() => setActiveTab('shipments')}
+            >
+              🚚 Shipments {shipmentData.length > 0 ? `(${shipmentData.length})` : ''}
+            </button>
+            <button
+              type="button"
+              className={`emir-tab-btn ${activeTab === 'charges' ? 'is-active' : ''}`}
+              onClick={() => setActiveTab('charges')}
+            >
+              💳 Charge Line Items {lineItemsData.length > 0 ? `(${lineItemsData.length})` : ''}
+            </button>
+            <button
+              type="button"
+              className={`emir-tab-btn ${activeTab === 'confidence' ? 'is-active' : ''}`}
+              onClick={() => setActiveTab('confidence')}
+            >
+              🎯 Extraction Info
+            </button>
+          </div>
+
+          {/* TAB CONTENT PANEL */}
+          <div className="emir-tab-panel">
+            {/* 1. INVOICE HEADER TAB */}
+            {activeTab === 'header' && (
+              <>
+                <div className="emir-field-section">
+                  <h3 className="emir-section-title">📋 INVOICE INFORMATION</h3>
+                  <div className="emir-field-grid">
+                    {invoiceInfoFields.map(f => (
+                      <div className="emir-field-group" key={f.key}>
+                        <label className="emir-field-label">{f.label}</label>
+                        <input
+                          className="emir-field-input"
+                          value={f.value === null || f.value === undefined ? '' : String(f.value)}
+                          placeholder="Not extracted"
+                          onChange={(e) => updateDraftPath(['invoiceHeader', f.key], e.target.value)}
+                        />
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="emir-field-section">
+                  <h3 className="emir-section-title">🚛 CARRIER INFORMATION</h3>
+                  <div className="emir-field-grid">
+                    {carrierInfoFields.map(f => (
+                      <div className="emir-field-group" key={f.key}>
+                        <label className="emir-field-label">{f.label}</label>
+                        <input
+                          className="emir-field-input"
+                          value={f.value === null || f.value === undefined ? '' : String(f.value)}
+                          placeholder="Not extracted"
+                          onChange={(e) => updateDraftPath(['invoiceHeader', f.key], e.target.value)}
+                        />
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="emir-field-section">
+                  <h3 className="emir-section-title">🏢 BILLING & CUSTOMER INFORMATION</h3>
+                  <div className="emir-field-grid">
+                    {billingInfoFields.map(f => (
+                      <div className="emir-field-group" key={f.key}>
+                        <label className="emir-field-label">{f.label}</label>
+                        <input
+                          className="emir-field-input"
+                          value={f.value === null || f.value === undefined ? '' : String(f.value)}
+                          placeholder="Not extracted"
+                          onChange={(e) => updateDraftPath(['invoiceHeader', f.key], e.target.value)}
+                        />
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="emir-field-section">
+                  <h3 className="emir-section-title">💰 FINANCIAL SUMMARY</h3>
+                  <div className="emir-field-grid">
+                    {financialInfoFields.map(f => (
+                      <div className="emir-field-group" key={f.key}>
+                        <label className="emir-field-label">{f.label}</label>
+                        <input
+                          className="emir-field-input"
+                          value={f.value === null || f.value === undefined ? '' : String(f.value)}
+                          placeholder="Not extracted"
+                          onChange={(e) => updateDraftPath(['invoiceHeader', f.key], e.target.value)}
+                        />
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="emir-field-section">
+                  <h3 className="emir-section-title">🏦 PAYMENT & REMITTANCE INFORMATION</h3>
+                  <div className="emir-field-grid">
+                    {paymentInfoFields.map(f => (
+                      <div className="emir-field-group" key={f.key}>
+                        <label className="emir-field-label">{f.label}</label>
+                        <input
+                          className="emir-field-input"
+                          value={f.value === null || f.value === undefined ? '' : String(f.value)}
+                          placeholder="Not extracted"
+                          onChange={(e) => updateDraftPath(['invoiceHeader', f.key], e.target.value)}
+                        />
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </>
+            )}
+
+            {/* 2. SHIPMENTS TAB */}
+            {activeTab === 'shipments' && (
+              <>
+                {shipmentData.length === 0 ? (
+                  <div className="emir-empty-box">
+                    <div className="emir-empty-icon">🚚</div>
+                    <div className="emir-empty-text">No shipment records extracted for this invoice.</div>
+                    <div style={{ fontSize: '12px', color: '#94a3b8', marginTop: '4px' }}>If missing due to unreadable text, you can enter details manually.</div>
+                  </div>
+                ) : (
+                  <div className="emir-table-container">
+                    <table className="emir-table">
+                      <thead>
+                        <tr>
+                          <th>Shipment #</th>
+                          <th>Tracking / PRO</th>
+                          <th>Carrier</th>
+                          <th>Mode</th>
+                          <th>Origin</th>
+                          <th>Destination</th>
+                          <th>Ship Date</th>
+                          <th>Delivery Date</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {shipmentData.map((ship, idx) => (
+                          <tr key={idx}>
+                            <td>
+                              <input
+                                className="emir-table-input"
+                                value={ship.shipmentNumber || idx + 1}
+                                placeholder="Not extracted"
+                                onChange={(e) => updateDraftPath(['shipmentDetails', idx, 'shipmentNumber'], e.target.value)}
+                              />
+                            </td>
+                            <td>
+                              <input
+                                className="emir-table-input"
+                                value={ship.trackingNumber || ship.proNumber || ''}
+                                placeholder="Not extracted"
+                                onChange={(e) => updateDraftPath(['shipmentDetails', idx, 'trackingNumber'], e.target.value)}
+                              />
+                            </td>
+                            <td>
+                              <input
+                                className="emir-table-input"
+                                value={ship.carrierName || ship.carrier || ''}
+                                placeholder="Not extracted"
+                                onChange={(e) => updateDraftPath(['shipmentDetails', idx, 'carrierName'], e.target.value)}
+                              />
+                            </td>
+                            <td>
+                              <input
+                                className="emir-table-input"
+                                value={ship.mode || ''}
+                                placeholder="Not extracted"
+                                onChange={(e) => updateDraftPath(['shipmentDetails', idx, 'mode'], e.target.value)}
+                              />
+                            </td>
+                            <td>
+                              <input
+                                className="emir-table-input"
+                                value={ship.origin || ship.originCity || ''}
+                                placeholder="Not extracted"
+                                onChange={(e) => updateDraftPath(['shipmentDetails', idx, 'origin'], e.target.value)}
+                              />
+                            </td>
+                            <td>
+                              <input
+                                className="emir-table-input"
+                                value={ship.destination || ship.destCity || ''}
+                                placeholder="Not extracted"
+                                onChange={(e) => updateDraftPath(['shipmentDetails', idx, 'destination'], e.target.value)}
+                              />
+                            </td>
+                            <td>
+                              <input
+                                className="emir-table-input"
+                                value={ship.shipDate || ship.pickupDate || ''}
+                                placeholder="Not extracted"
+                                onChange={(e) => updateDraftPath(['shipmentDetails', idx, 'shipDate'], e.target.value)}
+                              />
+                            </td>
+                            <td>
+                              <input
+                                className="emir-table-input"
+                                value={ship.deliveryDate || ''}
+                                placeholder="Not extracted"
+                                onChange={(e) => updateDraftPath(['shipmentDetails', idx, 'deliveryDate'], e.target.value)}
+                              />
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </>
+            )}
+
+            {/* 3. CHARGE LINE ITEMS TAB */}
+            {activeTab === 'charges' && (
+              <>
+                {lineItemsData.length === 0 ? (
+                  <div className="emir-empty-box">
+                    <div className="emir-empty-icon">💳</div>
+                    <div className="emir-empty-text">No charge line items extracted for this invoice.</div>
+                    <div style={{ fontSize: '12px', color: '#94a3b8', marginTop: '4px' }}>If missing due to unreadable text, you can enter details manually.</div>
+                  </div>
+                ) : (
+                  <div className="emir-table-container">
+                    <table className="emir-table">
+                      <thead>
+                        <tr>
+                          <th>#</th>
+                          <th>Description</th>
+                          <th>Code / Category</th>
+                          <th>Quantity</th>
+                          <th>Rate</th>
+                          <th>Amount</th>
+                          <th>Currency</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {lineItemsData.map((item, idx) => (
+                          <tr key={idx}>
+                            <td>{idx + 1}</td>
+                            <td>
+                              <input
+                                className="emir-table-input"
+                                value={item.description || item.chargeDescription || ''}
+                                placeholder="Not extracted"
+                                onChange={(e) => updateDraftPath(['chargeLineItems', idx, 'description'], e.target.value)}
+                              />
+                            </td>
+                            <td>
+                              <input
+                                className="emir-table-input"
+                                value={item.chargeCode || item.code || ''}
+                                placeholder="Not extracted"
+                                onChange={(e) => updateDraftPath(['chargeLineItems', idx, 'chargeCode'], e.target.value)}
+                              />
+                            </td>
+                            <td>
+                              <input
+                                className="emir-table-input"
+                                value={item.quantity ?? item.qty ?? 1}
+                                placeholder="1"
+                                onChange={(e) => updateDraftPath(['chargeLineItems', idx, 'quantity'], e.target.value)}
+                              />
+                            </td>
+                            <td>
+                              <input
+                                className="emir-table-input"
+                                value={item.rate || item.unitPrice || ''}
+                                placeholder="Not extracted"
+                                onChange={(e) => updateDraftPath(['chargeLineItems', idx, 'rate'], e.target.value)}
+                              />
+                            </td>
+                            <td>
+                              <input
+                                className="emir-table-input"
+                                value={item.amount || item.chargeAmount || ''}
+                                placeholder="Not extracted"
+                                onChange={(e) => updateDraftPath(['chargeLineItems', idx, 'amount'], e.target.value)}
+                              />
+                            </td>
+                            <td>
+                              <input
+                                className="emir-table-input"
+                                value={item.currency || '$'}
+                                placeholder="$"
+                                onChange={(e) => updateDraftPath(['chargeLineItems', idx, 'currency'], e.target.value)}
+                              />
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </>
+            )}
+
+            {/* 4. EXTRACTION / CONFIDENCE TAB */}
+            {activeTab === 'confidence' && (
+              <div className="emir-field-section">
+                <h3 className="emir-section-title">🎯 EXTRACTION & CONFIDENCE METRICS</h3>
+                <div className="emir-field-grid">
+                  <div className="emir-field-group">
+                    <label className="emir-field-label">Document ID</label>
+                    <input className="emir-field-input" value={activeDocId || ''} readOnly style={{ opacity: 0.8 }} />
+                  </div>
+                  <div className="emir-field-group">
+                    <label className="emir-field-label">Invoice Index</label>
+                    <input className="emir-field-input" value={`Invoice ${selectedInvoiceIndex + 1}`} readOnly style={{ opacity: 0.8 }} />
+                  </div>
+                  <div className="emir-field-group">
+                    <label className="emir-field-label">Isolated Page Range</label>
+                    <input className="emir-field-input" value={`Pages ${pageStart}–${pageEnd}`} readOnly style={{ opacity: 0.8 }} />
+                  </div>
+                  <div className="emir-field-group">
+                    <label className="emir-field-label">Overall Confidence Score</label>
+                    <input className="emir-field-input" value={`${confidencePercent}%`} readOnly style={{ opacity: 0.8 }} />
+                  </div>
+                  <div className="emir-field-group">
+                    <label className="emir-field-label">Image Quality Flag</label>
+                    <input className="emir-field-input" value={isPoorQuality ? 'Poor Image Quality (Needs Review)' : 'Normal Image Quality'} readOnly style={{ opacity: 0.8, color: isPoorQuality ? 'var(--danger, #EA6A6A)' : 'var(--success, #1FC991)' }} />
+                  </div>
+                  <div className="emir-field-group">
+                    <label className="emir-field-label">Processing Status</label>
+                    <input className="emir-field-input" value={invoiceStatus} readOnly style={{ opacity: 0.8 }} />
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+        </section>
       </div>
+
+      {/* ── C. INVOICE NAVIGATOR with Filters & Document Grouping ────────── */}
+      <section className="emir-invoices-section">
+        <div className="emir-invoices-header">
+          <h2 className="emir-invoices-title">
+            <span>INVOICES</span>
+          </h2>
+          <span className="emir-invoices-count">{filteredWithIndex.length} of {invoices.length} invoices</span>
+        </div>
+
+        {/* Document grouping tabs */}
+        {isBatchMode && uniqueDocNames.length > 1 && (
+          <div className="bq-doc-tabs">
+            <button
+              type="button"
+              className={`bq-doc-tab${filterDoc === 'all' ? ' bq-doc-tab--active' : ''}`}
+              onClick={() => { setFilterDoc('all'); setSelectedInvoiceIndex(0); }}
+            >
+              All Documents ({invoices.length})
+            </button>
+            {uniqueDocNames.map((name) => (
+              <button
+                key={name}
+                type="button"
+                className={`bq-doc-tab${filterDoc === name ? ' bq-doc-tab--active' : ''}`}
+                onClick={() => { 
+                  setFilterDoc(name); 
+                  const foundIdx = invoices.findIndex(inv => (inv.sourceFileName || inv.fileName || inv.documentId || primaryDocId) === name);
+                  setSelectedInvoiceIndex(foundIdx !== -1 ? foundIdx : 0); 
+                }}
+              >
+                📄 {name.length > 24 ? name.slice(0, 22) + '…' : name}
+              </button>
+            ))}
+          </div>
+        )}
+
+        {/* Status filters + Search */}
+        <div className="bq-filter-bar">
+          <div className="bq-filter-tabs">
+            {[['all','All'],['ready','Ready'],['review','Needs Review'],['poor','Poor Image'],['approved','Approved'],['failed','Failed']].map(([val, label]) => (
+              <button key={val} type="button" className={`bq-filter-tab${filterStatus === val ? ' bq-filter-tab--active' : ''}`} onClick={() => setFilterStatus(val)}>{label}</button>
+            ))}
+          </div>
+          <div className="bq-search-wrap">
+            <input
+              type="text"
+              className="bq-search-input"
+              placeholder="Search invoice # or filename…"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+            />
+            {searchQuery && <button className="bq-search-clear" onClick={() => setSearchQuery('')}>×</button>}
+          </div>
+        </div>
+
+        <div className="emir-cards-grid">
+          {filteredWithIndex.length === 0 && (
+            <div className="emir-empty-box" style={{ gridColumn: '1 / -1' }}>
+              <div className="emir-empty-icon">🔍</div>
+              <div className="emir-empty-text">No invoices match the current filters.</div>
+            </div>
+          )}
+          {filteredWithIndex.map(({ inv, globalIdx }) => {
+            const isSelected = selectedInvoiceIndex === globalIdx;
+            const invDraft = drafts[globalIdx] || {};
+            const invHeader = invDraft.invoiceHeader || invDraft.header || {};
+            const invNumberVal = invHeader.invoiceNumber || invDraft.invoiceNumber || inv.invoiceNumber;
+            const displayNum = invNumberVal ? String(invNumberVal) : 'Not extracted';
+            const conf = Math.round(((inv.overallConfidence ?? 0.95) * 100));
+            const status = inv.status || inv.extractionStatus || 'Ready for Review';
+            const poor = inv.poorImageQuality || status === 'Poor Image Quality' || status === 'POOR_IMAGE_QUALITY';
+            const srcName = inv.sourceFileName || inv.fileName || '';
+
+            return (
+              <div
+                key={inv.id || globalIdx}
+                className={`emir-card ${isSelected ? 'is-selected' : ''}`}
+                onClick={() => setSelectedInvoiceIndex(globalIdx)}
+              >
+                <div className="emir-card-top">
+                  <span className="emir-card-tag">INVOICE {String(globalIdx + 1).padStart(2, '0')}</span>
+                  {isSelected && <span className="emir-selected-pill">● SELECTED</span>}
+                </div>
+
+                <div className="emir-card-number" style={{ fontStyle: displayNum === 'Not extracted' ? 'italic' : 'normal', opacity: displayNum === 'Not extracted' ? 0.7 : 1 }}>
+                  {displayNum}
+                </div>
+
+                {srcName && (
+                  <div className="emir-card-source" title={srcName}>
+                    📄 {srcName.length > 26 ? srcName.slice(0, 24) + '…' : srcName}
+                  </div>
+                )}
+
+                <div className="emir-card-meta">
+                  <span>Pages {inv.pageStart || 1}–{inv.pageEnd ?? inv.pageStart ?? 1}</span>
+                  <span>{conf}% confidence</span>
+                </div>
+
+                <div className="emir-card-footer">
+                  <span className={`status-pill ${poor ? 'warning-strong' : status === 'APPROVED' ? 'success' : 'primary'}`}>
+                    {poor ? '⚠ Poor Image' : status}
+                  </span>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </section>
+
+      {/* ── D. CUSTOM DISCARD CONFIRMATION MODAL ─────────────────────────── */}
+      {showDiscardModal && (
+        <div className="emir-modal-overlay">
+          <div className="emir-modal-card">
+            <div className="emir-modal-header">
+              <div className="emir-modal-icon">⚠️</div>
+              <h3 className="emir-modal-title">Discard Invoice Changes?</h3>
+            </div>
+            <div className="emir-modal-body">
+              This will remove all unsaved modifications made to the currently selected invoice (<strong>Invoice {selectedInvoiceIndex + 1}</strong>).
+            </div>
+            <div className="emir-modal-footer">
+              <button
+                type="button"
+                className="secondary-btn"
+                onClick={() => setShowDiscardModal(false)}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="emir-btn-discard"
+                onClick={handleConfirmDiscard}
+              >
+                Discard Changes
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── E. ESCALATION MODAL ───────────────────────────────────────────── */}
+      {showEscalationModal && (
+        <EscalationModal
+          docId={activeDocId}
+          invoiceId={selectedInvoice?.id || String(selectedInvoiceIndex)}
+          invoiceLabel={`Invoice ${selectedInvoiceIndex + 1}`}
+          onClose={() => setShowEscalationModal(false)}
+          onSuccess={() => {
+            setShowEscalationModal(false);
+            setInvoices(prev => prev.map((inv, i) => i === selectedInvoiceIndex ? { ...inv, status: 'Escalation Required' } : inv));
+          }}
+        />
+      )}
     </main>
   );
 };
+

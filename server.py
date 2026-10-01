@@ -14,6 +14,7 @@ import uuid
 import time
 import base64
 from datetime import datetime
+import io
 
 PORT = 3000
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -311,6 +312,18 @@ class LogisticsAutomationHandler(http.server.BaseHTTPRequestHandler):
         elif path.startswith("/api/documents/") and path.endswith("/file"):
             doc_id = path.split("/")[3]
             return self._serve_document_file(doc_id)
+        elif path.startswith("/api/documents/") and path.endswith("/page-range"):
+            doc_id = path.split("/")[3]
+            query_params = urllib.parse.parse_qs(parsed_url.query)
+            try:
+                start_page = int(query_params.get('start', ['1'])[0])
+            except ValueError:
+                start_page = 1
+            try:
+                end_page = int(query_params.get('end', ['1'])[0])
+            except ValueError:
+                end_page = start_page
+            return self._serve_document_page_range(doc_id, start_page, end_page)
         return self._send_spa_html(path)
 
     def do_POST(self):
@@ -604,6 +617,15 @@ class LogisticsAutomationHandler(http.server.BaseHTTPRequestHandler):
             return self._send_json({"error": str(e)}, 500)
 
     def _handle_get_invoices(self, doc_id):
+        parsed_url = urllib.parse.urlparse(self.path)
+        query_params = urllib.parse.parse_qs(parsed_url.query)
+        ids_param = query_params.get('ids', [''])[0]
+        
+        raw_ids = ids_param if ids_param else doc_id
+        doc_ids = [d.strip() for d in raw_ids.split(',') if d.strip()]
+        if not doc_ids:
+            doc_ids = [doc_id]
+
         conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
         try:
@@ -611,10 +633,17 @@ class LogisticsAutomationHandler(http.server.BaseHTTPRequestHandler):
         except sqlite3.OperationalError:
             pass
 
+        placeholders = ','.join(['?'] * len(doc_ids))
         try:
             cursor.execute(
-                "SELECT id, documentId, invoiceIndex, pageStart, pageEnd, rawOcrText, canonicalJson, confidenceScores, finalSubmittedData, status, overallConfidence, imageQuality FROM DocumentInvoice WHERE documentId = ? ORDER BY invoiceIndex ASC;",
-                (doc_id,)
+                f"""SELECT di.id, di.documentId, di.invoiceIndex, di.pageStart, di.pageEnd, di.rawOcrText, 
+                           di.canonicalJson, di.confidenceScores, di.finalSubmittedData, di.status, 
+                           di.overallConfidence, di.imageQuality, d.fileName 
+                    FROM DocumentInvoice di 
+                    LEFT JOIN Document d ON di.documentId = d.id 
+                    WHERE di.documentId IN ({placeholders}) 
+                    ORDER BY di.documentId ASC, di.invoiceIndex ASC;""",
+                tuple(doc_ids)
             )
             rows = cursor.fetchall()
         except sqlite3.OperationalError:
@@ -632,9 +661,12 @@ class LogisticsAutomationHandler(http.server.BaseHTTPRequestHandler):
             inv_status = r[9]
             inv_quality = r[11] if len(r) > 11 else None
             is_inv_poor = inv_status in ('POOR_IMAGE_QUALITY', 'Poor Image Quality') or (inv_quality is not None and inv_quality < 0.6)
+            file_name = r[12] if (len(r) > 12 and r[12]) else f"Document ({r[1]})"
             invoices.append({
                 "id": r[0],
                 "documentId": r[1],
+                "fileName": file_name,
+                "sourceFileName": file_name,
                 "invoiceIndex": r[2],
                 "pageStart": r[3],
                 "pageEnd": r[4],
@@ -651,7 +683,7 @@ class LogisticsAutomationHandler(http.server.BaseHTTPRequestHandler):
                 "invoiceNumber": header.get('invoiceNumber') or header.get('invoiceId') or header.get('documentNumber') or header.get('invoiceNo')
             })
 
-        return self._send_json({"success": True, "documentId": doc_id, "invoices": invoices})
+        return self._send_json({"success": True, "documentId": doc_id, "documentIds": doc_ids, "invoices": invoices})
     def _handle_get_document_status(self, doc_id):
         conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
@@ -2655,6 +2687,62 @@ class LogisticsAutomationHandler(http.server.BaseHTTPRequestHandler):
         content_type = mime_type or "application/octet-stream"
         if (file_name or "").lower().endswith(".pdf") or content.lstrip().startswith(b"%PDF"):
             content_type = "application/pdf"
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Disposition", f'inline; filename="{file_name or doc_id}"')
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.end_headers()
+        self.wfile.write(content)
+
+    def _serve_document_page_range(self, doc_id, start_page, end_page):
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        cursor.execute("SELECT fileName, mimeType, storagePath FROM Document WHERE id = ?;", (doc_id,))
+        row = cursor.fetchone()
+        conn.close()
+
+        if not row:
+            self.send_response(404)
+            self.end_headers()
+            self.wfile.write(b"File not found")
+            return
+
+        file_name, mime_type, storage_path = row
+        file_path = os.path.normpath(os.path.join(BASE_DIR, storage_path))
+        if not os.path.exists(file_path):
+            self.send_response(404)
+            self.end_headers()
+            self.wfile.write(b"File not found")
+            return
+
+        with open(file_path, "rb") as f:
+            content = f.read()
+
+        is_pdf = (file_name or "").lower().endswith(".pdf") or content.lstrip().startswith(b"%PDF")
+        if is_pdf:
+            try:
+                try:
+                    from pypdf import PdfReader, PdfWriter
+                except ImportError:
+                    from PyPDF2 import PdfReader, PdfWriter
+
+                reader = PdfReader(io.BytesIO(content))
+                total_pages = len(reader.pages)
+
+                start_idx = max(0, min(start_page - 1, total_pages - 1))
+                end_idx = max(start_idx, min(end_page - 1, total_pages - 1))
+
+                writer = PdfWriter()
+                for i in range(start_idx, end_idx + 1):
+                    writer.add_page(reader.pages[i])
+
+                out_stream = io.BytesIO()
+                writer.write(out_stream)
+                content = out_stream.getvalue()
+            except Exception as e:
+                print(f"[PDF Slice Error] Fallback to full document for {doc_id}: {e}")
+
+        self.send_response(200)
+        content_type = "application/pdf" if is_pdf else (mime_type or "application/octet-stream")
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Disposition", f'inline; filename="{file_name or doc_id}"')
         self.send_header("Access-Control-Allow-Origin", "*")
