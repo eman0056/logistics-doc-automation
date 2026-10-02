@@ -2873,7 +2873,8 @@ img {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 1.5rem;
-  min-height: 700px;
+  min-height: min(78vh, 900px);
+  height: min(78vh, 900px);
   align-items: stretch;
 }
 
@@ -2886,6 +2887,8 @@ img {
   flex-direction: column;
   overflow: hidden;
   box-shadow: 0 4px 20px rgba(0, 0, 0, 0.15);
+  min-height: 0;
+  height: 100%;
 }
 
 .emir-card-header {
@@ -2967,17 +2970,115 @@ img {
   flex: 1;
   background: #0b0f19;
   position: relative;
-  min-height: 580px;
+  min-height: 0;
+  height: 100%;
   display: flex;
   flex-direction: column;
+  overflow: hidden;
+}
+
+.emir-doc-fit-stage {
+  flex: 1;
+  min-height: 0;
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  padding: 0.5rem;
+  box-sizing: border-box;
+}
+
+.emir-doc-fit-stage.is-manual-zoom {
+  overflow: auto;
+  align-items: flex-start;
+  justify-content: center;
+}
+
+.emir-doc-fit-media {
+  max-width: 100%;
+  max-height: 100%;
+  width: auto;
+  height: auto;
+  object-fit: contain;
+  display: block;
+  margin: 0 auto;
+  background: #fff;
 }
 
 .emir-doc-iframe {
   width: 100%;
   height: 100%;
-  min-height: 580px;
+  min-height: 0;
   border: none;
   flex: 1;
+  background: #fff;
+}
+
+.emir-doc-fit-stage .emir-doc-iframe {
+  width: 100%;
+  height: 100%;
+  max-width: 100%;
+  max-height: 100%;
+}
+
+/* Professional invoice extraction states */
+.emir-extraction-state {
+  padding: 3rem 1.5rem;
+  text-align: center;
+  background: #0f172a;
+  border-radius: 12px;
+  border: 1px solid #334155;
+  margin: 0.75rem 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.65rem;
+}
+
+.emir-extraction-state__title {
+  color: #fff;
+  font-size: 1.15rem;
+  margin: 0;
+  font-weight: 700;
+}
+
+.emir-extraction-state__desc {
+  color: #94a3b8;
+  font-size: 0.9rem;
+  max-width: 420px;
+  margin: 0;
+  line-height: 1.5;
+}
+
+.emir-extraction-state__icon {
+  font-size: 2.25rem;
+  line-height: 1;
+}
+
+.emir-extraction-state__icon--error {
+  color: #f87171;
+}
+
+.emir-extraction-retry {
+  margin-top: 0.75rem;
+  background: #6366f1 !important;
+  border-color: #4f46e5 !important;
+}
+
+.emir-extraction-spinner {
+  width: 42px;
+  height: 42px;
+  border-radius: 50%;
+  border: 3px solid rgba(99, 102, 241, 0.25);
+  border-top-color: #818cf8;
+  animation: emir-spin 0.85s linear infinite;
+  margin-bottom: 0.35rem;
+}
+
+@keyframes emir-spin {
+  to { transform: rotate(360deg); }
 }
 
 /* RIGHT COLUMN — EXTRACTED INFORMATION PANEL */
@@ -2989,6 +3090,8 @@ img {
   flex-direction: column;
   overflow: hidden;
   box-shadow: 0 4px 20px rgba(0, 0, 0, 0.15);
+  min-height: 0;
+  height: 100%;
 }
 
 /* Extracted Workspace Summary Bar */

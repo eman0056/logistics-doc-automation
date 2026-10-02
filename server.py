@@ -5,6 +5,7 @@ import socketserver
 import json
 import urllib.parse
 import urllib.request
+import urllib.error
 import threading
 import os
 import sys
@@ -126,9 +127,31 @@ def extract_text_from_pdf_pages(pdf_source, start_page, end_page):
     except Exception:
         return ""
 
-def send_to_n8n_webhook(invoice_index, pages, base64_pdf, doc_id=None, raw_ocr_text=None, file_path=None, page_start_for_ocr=None, page_end_for_ocr=None, image_quality=None):
+def _build_multipart_body(fields, files):
+    """Build multipart/form-data body. files: list of (field_name, filename, content_type, bytes)."""
+    boundary = f"----InvoiceBoundary{uuid.uuid4().hex}"
+    chunks = []
+    for key, value in fields.items():
+        if value is None:
+            continue
+        chunks.append(
+            f"--{boundary}\r\nContent-Disposition: form-data; name=\"{key}\"\r\n\r\n{value}\r\n".encode("utf-8")
+        )
+    for field_name, filename, content_type, file_bytes in files:
+        header = (
+            f"--{boundary}\r\n"
+            f'Content-Disposition: form-data; name="{field_name}"; filename="{filename}"\r\n'
+            f"Content-Type: {content_type}\r\n\r\n"
+        ).encode("utf-8")
+        chunks.append(header + file_bytes + b"\r\n")
+    chunks.append(f"--{boundary}--\r\n".encode("utf-8"))
+    return b"".join(chunks), boundary
+
+
+def send_to_n8n_webhook(invoice_index, pages, base64_pdf, doc_id=None, raw_ocr_text=None, file_path=None, page_start_for_ocr=None, page_end_for_ocr=None, image_quality=None, invoice_id=None):
     """
-    Send isolated invoice payload to n8n webhook
+    Send isolated invoice payload to n8n webhook.
+    The attached PDF/file contains ONLY this invoice's pages — never the full multi-invoice document.
     """
     webhook_url = os.getenv('MULTI_INVOICE_N8N_WEBHOOK_URL') or os.getenv('N8N_WEBHOOK_URL') or MULTI_INVOICE_WEBHOOK_URL
     if not webhook_url:
@@ -138,7 +161,9 @@ def send_to_n8n_webhook(invoice_index, pages, base64_pdf, doc_id=None, raw_ocr_t
         }
 
     page_start = pages[0] if isinstance(pages, (list, tuple)) and len(pages) > 0 else 1
-    page_end = pages[1] if isinstance(pages, (list, tuple)) and len(pages) > 1 else page_start
+    page_end = pages[-1] if isinstance(pages, (list, tuple)) and len(pages) > 1 else page_start
+    page_list = list(range(int(page_start), int(page_end) + 1))
+    resolved_invoice_id = invoice_id or f"{doc_id}-invoice-{int(invoice_index) + 1}"
 
     # Extract text from the isolated PDF pages for n8n LLM processing
     if raw_ocr_text is None:
@@ -172,8 +197,8 @@ def send_to_n8n_webhook(invoice_index, pages, base64_pdf, doc_id=None, raw_ocr_t
 
     payload = {
         "invoiceIndex": invoice_index,
-        "invoiceId": f"{doc_id}-invoice-{invoice_index + 1}",
-        "pages": [page_start, page_end],
+        "invoiceId": resolved_invoice_id,
+        "pages": page_list,
         "pageStart": page_start,
         "pageEnd": page_end,
         "pdfBase64": base64_pdf,
@@ -186,25 +211,71 @@ def send_to_n8n_webhook(invoice_index, pages, base64_pdf, doc_id=None, raw_ocr_t
         "timestamp": datetime.now().isoformat()
     }
 
-    print("[n8n] Payload being sent:")
-    print(json.dumps(payload, indent=2))
-    print(f"[n8n] Sending Invoice {invoice_index} (pages {page_start}-{page_end}) to webhook: {webhook_url}")
+    sliced_bytes = None
+    try:
+        sliced_bytes = base64.b64decode(base64_pdf) if base64_pdf else None
+    except Exception:
+        sliced_bytes = None
+    file_name = f"{resolved_invoice_id}.pdf"
+    file_type = "application/pdf"
+    file_size = len(sliced_bytes) if sliced_bytes else 0
+
+    print(
+        f"[n8n] Sending isolated invoice invoiceId={resolved_invoice_id} documentId={doc_id} "
+        f"pageStart={page_start} pageEnd={page_end} pages={page_list} fileSize={file_size} webhook={webhook_url}"
+    )
 
     try:
-        import urllib.request
-        req = urllib.request.Request(
-            webhook_url,
-            data=json.dumps(payload).encode('utf-8'),
-            headers={'Content-Type': 'application/json'},
-            method='POST'
-        )
-        with urllib.request.urlopen(req, timeout=40) as response:
+        if sliced_bytes:
+            fields = {
+                "documentId": str(doc_id or ""),
+                "docId": str(doc_id or ""),
+                "invoiceId": str(resolved_invoice_id),
+                "invoiceIndex": str(invoice_index),
+                "pageStart": str(page_start),
+                "pageEnd": str(page_end),
+                "pages": json.dumps(page_list),
+                "fileName": file_name,
+                "fileType": file_type,
+                "fileSize": str(file_size),
+                "callbackUrl": callback_url,
+                "rawOcrText": raw_ocr_text or "",
+                "imageQuality": str(image_quality),
+                "pdfBase64": base64_pdf,
+                "payload": json.dumps({k: v for k, v in payload.items() if k not in ("pdfBase64", "fileBase64")}),
+            }
+            body, boundary = _build_multipart_body(
+                fields,
+                [
+                    ("file", file_name, file_type, sliced_bytes),
+                    ("data", file_name, file_type, sliced_bytes),
+                ],
+            )
+            req = urllib.request.Request(
+                webhook_url,
+                data=body,
+                headers={"Content-Type": f"multipart/form-data; boundary={boundary}"},
+                method="POST",
+            )
+        else:
+            req = urllib.request.Request(
+                webhook_url,
+                data=json.dumps(payload).encode('utf-8'),
+                headers={'Content-Type': 'application/json'},
+                method='POST'
+            )
+        with urllib.request.urlopen(req, timeout=90) as response:
             resp_body = response.read().decode('utf-8', errors='replace')
-            if response.status != 200:
-                print(f"[n8n] ❌ Error: Status {response.status}")
+            n8n_status = response.status
+            if n8n_status != 200:
+                print(
+                    f"[n8n] ❌ invoiceId={resolved_invoice_id} documentId={doc_id} "
+                    f"pageStart={page_start} pageEnd={page_end} n8nStatus={n8n_status} error={resp_body[:500]}"
+                )
                 return {
                     "success": False,
-                    "error": f"n8n returned status {response.status}",
+                    "status": n8n_status,
+                    "error": f"n8n webhook returned HTTP {n8n_status}: {resp_body[:300]}",
                     "response": resp_body
                 }
             try:
@@ -212,15 +283,35 @@ def send_to_n8n_webhook(invoice_index, pages, base64_pdf, doc_id=None, raw_ocr_t
             except Exception:
                 extracted_data = {"rawResponse": resp_body}
 
-            print(f"[n8n] ✅ Invoice {invoice_index} processed successfully")
+            print(f"[n8n] ✅ Isolated invoice {resolved_invoice_id} processed successfully (status={n8n_status})")
             return {
                 "success": True,
+                "status": n8n_status,
                 "extractedData": extracted_data
             }
-    except Exception as e:
-        print(f"[n8n] ❌ Connection error: {e}")
+    except urllib.error.HTTPError as e:
+        resp_body = ""
+        try:
+            resp_body = e.read().decode("utf-8", errors="replace")
+        except Exception:
+            resp_body = str(e)
+        print(
+            f"[n8n] ❌ invoiceId={resolved_invoice_id} documentId={doc_id} "
+            f"pageStart={page_start} pageEnd={page_end} n8nStatus={e.code} error={resp_body[:500]}"
+        )
         return {
             "success": False,
+            "status": e.code,
+            "error": f"n8n webhook returned HTTP {e.code}: {resp_body[:300]}"
+        }
+    except Exception as e:
+        print(
+            f"[n8n] ❌ invoiceId={resolved_invoice_id} documentId={doc_id} "
+            f"pageStart={page_start} pageEnd={page_end} n8nStatus=0 error={e}"
+        )
+        return {
+            "success": False,
+            "status": 0,
             "error": f"Cannot connect to n8n webhook: {e}"
         }
 
@@ -836,7 +927,8 @@ class LogisticsAutomationHandler(http.server.BaseHTTPRequestHandler):
                 img_quality = get_image_blur_quality(saved_file_path)
                 print(f"[Backend] ✅ Image quality score: {img_quality}")
 
-                # Step 2: Construct payload with calculated imageQuality score
+                # Step 2: Seed invoice rows. For multi-invoice documents do NOT send the
+                # full PDF to n8n — extraction is invoice-specific from the review workspace.
                 payload = {
                     "documentId": res["documentId"],
                     "storagePath": res["storagePath"],
@@ -850,8 +942,11 @@ class LogisticsAutomationHandler(http.server.BaseHTTPRequestHandler):
                     "callbackUrl": f"{app_base_url}/api/documents/{res['documentId']}/extraction/callback"
                 }
                 
-                import threading
-                threading.Thread(target=trigger_webhook, args=(selected_webhook_url, payload), daemon=True).start()
+                if invoice_count < 2:
+                    import threading
+                    threading.Thread(target=trigger_webhook, args=(selected_webhook_url, payload), daemon=True).start()
+                else:
+                    print(f"[Backend] Multi-invoice upload stored without full-document n8n dispatch: doc={res['documentId']} invoices={invoice_count}")
                 
                 conn = sqlite3.connect(DB_PATH)
                 cursor = conn.cursor()
@@ -946,52 +1041,6 @@ class LogisticsAutomationHandler(http.server.BaseHTTPRequestHandler):
                     "invoiceGroups": invoice_groups
                 })
 
-                # ── Trigger n8n extraction webhook ───────────────────────────
-                app_base_url = os.getenv('APP_BASE_URL', 'http://localhost:3000').rstrip('/')
-                selected_webhook_url = (
-                    os.getenv('MULTI_INVOICE_N8N_WEBHOOK_URL') or
-                    os.getenv('N8N_WEBHOOK_URL') or
-                    (MULTI_INVOICE_WEBHOOK_URL if invoice_count >= 2 else SINGLE_INVOICE_WEBHOOK_URL)
-                )
-                if invoice_count >= 2:
-                    selected_webhook_url = (
-                        os.getenv('MULTI_INVOICE_N8N_WEBHOOK_URL') or
-                        os.getenv('N8N_WEBHOOK_URL') or
-                        MULTI_INVOICE_WEBHOOK_URL
-                    )
-                else:
-                    selected_webhook_url = (
-                        os.getenv('SINGLE_INVOICE_N8N_WEBHOOK_URL') or
-                        os.getenv('N8N_WEBHOOK_URL') or
-                        SINGLE_INVOICE_WEBHOOK_URL
-                    )
-                webhook_payload = {
-                    "documentId": res["documentId"],
-                    "storagePath": res["storagePath"],
-                    "fileName": res["fileName"],
-                    "fileBase64": base64.b64encode(file_bytes).decode('ascii'),
-                    "detectedInvoiceCount": invoice_count,
-                    "detectedInvoiceGroups": invoice_groups,
-                    "rawOcrText": "\n\f\n".join(g.get("rawOcrText", "") for g in invoice_groups),
-                    "workflowType": "multi-invoice" if invoice_count >= 2 else "single-invoice",
-                    "imageQuality": img_quality,
-                    "callbackUrl": f"{app_base_url}/api/documents/{res['documentId']}/extraction/callback"
-                }
-
-                def _dispatch_webhook(url, data):
-                    try:
-                        req = urllib.request.Request(
-                            url, data=json.dumps(data).encode('utf-8'),
-                            headers={'Content-Type': 'application/json'}, method='POST'
-                        )
-                        with urllib.request.urlopen(req, timeout=10) as r:
-                            print(f"[webhook] dispatched doc={data.get('documentId')} status={r.status}")
-                    except Exception as ex:
-                        print(f"[webhook] error doc={data.get('documentId')} err={ex}")
-
-                threading.Thread(target=_dispatch_webhook, args=(selected_webhook_url, webhook_payload), daemon=True).start()
-
-
             primary_doc_id = results[0] if results else None
             first_groups = dispatches_list[0]["invoiceGroups"] if dispatches_list else []
             formatted_invoices = [
@@ -1030,10 +1079,11 @@ class LogisticsAutomationHandler(http.server.BaseHTTPRequestHandler):
 
         doc_id = body.get('docId') or body.get('documentId')
         invoice_index = body.get('invoiceIndex', 0)
+        invoice_id = body.get('invoiceId') or body.get('id')
         pages = body.get('pages')
-        if pages and isinstance(pages, list) and len(pages) >= 2:
+        if pages and isinstance(pages, list) and len(pages) >= 1:
             page_start = pages[0]
-            page_end = pages[1]
+            page_end = pages[-1]
         else:
             page_start = body.get('pageStart', 1)
             page_end = body.get('pageEnd', 1)
@@ -1041,7 +1091,7 @@ class LogisticsAutomationHandler(http.server.BaseHTTPRequestHandler):
         if not doc_id:
             return self._send_json({"success": False, "error": "Missing docId parameter"}, 400)
 
-        return self._execute_process_invoice_pages(doc_id, invoice_index, page_start, page_end)
+        return self._execute_process_invoice_pages(doc_id, invoice_index, page_start, page_end, invoice_id=invoice_id)
 
     def _handle_process_single_invoice(self, doc_id, index_str):
         try:
@@ -1050,13 +1100,15 @@ class LogisticsAutomationHandler(http.server.BaseHTTPRequestHandler):
             return self._send_json({"success": False, "error": "Invalid invoice index"}, 400)
             
         content_length = int(self.headers.get('Content-Length', 0))
+        invoice_id = None
         if content_length > 0:
             try:
                 body = json.loads(self.rfile.read(content_length).decode('utf-8'))
+                invoice_id = body.get('invoiceId') or body.get('id')
                 pages = body.get('pages')
-                if pages and isinstance(pages, list) and len(pages) >= 2:
+                if pages and isinstance(pages, list) and len(pages) >= 1:
                     page_start = pages[0]
-                    page_end = pages[1]
+                    page_end = pages[-1]
                 else:
                     page_start = body.get('pageStart', 1)
                     page_end = body.get('pageEnd', 1)
@@ -1065,7 +1117,7 @@ class LogisticsAutomationHandler(http.server.BaseHTTPRequestHandler):
         else:
             page_start, page_end = 1, 1
 
-        return self._execute_process_invoice_pages(doc_id, invoice_index, page_start, page_end)
+        return self._execute_process_invoice_pages(doc_id, invoice_index, page_start, page_end, invoice_id=invoice_id)
 
     def _handle_config_check(self):
         webhook_url = os.getenv('MULTI_INVOICE_N8N_WEBHOOK_URL') or os.getenv('N8N_WEBHOOK_URL') or MULTI_INVOICE_WEBHOOK_URL
@@ -1092,7 +1144,42 @@ class LogisticsAutomationHandler(http.server.BaseHTTPRequestHandler):
             }
         })
 
-    def _execute_process_invoice_pages(self, doc_id, invoice_index, page_start, page_end):
+    def _set_document_invoice_state(self, doc_id, invoice_id, invoice_index, page_start, page_end, status, canonical=None):
+        resolved_id = invoice_id or f"{doc_id}-invoice-{int(invoice_index) + 1}"
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        try:
+            cursor.execute(
+                "SELECT id FROM DocumentInvoice WHERE id = ? OR (documentId = ? AND invoiceIndex = ?)",
+                (resolved_id, doc_id, invoice_index),
+            )
+            row = cursor.fetchone()
+            json_str = json.dumps(canonical) if canonical is not None else None
+            if row:
+                existing_id = row[0]
+                if json_str is not None:
+                    cursor.execute(
+                        "UPDATE DocumentInvoice SET status = ?, canonicalJson = ?, pageStart = COALESCE(?, pageStart), pageEnd = COALESCE(?, pageEnd), updatedAt = CURRENT_TIMESTAMP WHERE id = ?",
+                        (status, json_str, page_start, page_end, existing_id),
+                    )
+                else:
+                    cursor.execute(
+                        "UPDATE DocumentInvoice SET status = ?, pageStart = COALESCE(?, pageStart), pageEnd = COALESCE(?, pageEnd), updatedAt = CURRENT_TIMESTAMP WHERE id = ?",
+                        (status, page_start, page_end, existing_id),
+                    )
+            else:
+                cursor.execute(
+                    "INSERT INTO DocumentInvoice (id, documentId, invoiceIndex, pageStart, pageEnd, canonicalJson, status) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    (resolved_id, doc_id, invoice_index, page_start, page_end, json_str, status),
+                )
+            conn.commit()
+        except Exception as exc:
+            print(f"[Backend] Failed updating invoice state invoiceId={resolved_id} documentId={doc_id}: {exc}")
+        finally:
+            conn.close()
+        return resolved_id
+
+    def _execute_process_invoice_pages(self, doc_id, invoice_index, page_start, page_end, invoice_id=None):
         conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
         cursor.execute("SELECT storagePath, fileName FROM Document WHERE id = ?", (doc_id,))
@@ -1108,52 +1195,81 @@ class LogisticsAutomationHandler(http.server.BaseHTTPRequestHandler):
         if not os.path.exists(file_path):
             return self._send_json({"success": False, "error": f"PDF file not found: {doc_id}"}, 404)
 
-        print(f"[Backend] Processing Invoice {invoice_index} (pages {page_start}-{page_end})")
+        resolved_invoice_id = invoice_id or f"{doc_id}-invoice-{int(invoice_index) + 1}"
+        print(
+            f"[Backend] Processing isolated invoice invoiceId={resolved_invoice_id} documentId={doc_id} "
+            f"pages {page_start}-{page_end}"
+        )
+        self._set_document_invoice_state(doc_id, resolved_invoice_id, invoice_index, page_start, page_end, "EXTRACTING")
 
         ext = os.path.splitext(file_name)[1].lower()
         if ext == ".pdf" or not ext:
             extraction = extract_invoice_pages(file_path, page_start, page_end)
             if not extraction["success"]:
+                self._set_document_invoice_state(doc_id, resolved_invoice_id, invoice_index, page_start, page_end, "FAILED")
                 return self._send_json({"success": False, "error": extraction["error"]}, 400)
             base64_pdf = extraction["base64"]
-            print(f"[Backend] ✅ Extracted pages, size: {extraction['file_size']} bytes")
+            print(f"[Backend] ✅ Isolated invoice PDF size: {extraction['file_size']} bytes (pages {page_start}-{page_end} only)")
         else:
             with open(file_path, "rb") as f:
                 base64_pdf = base64.b64encode(f.read()).decode('utf-8')
-        # Step 1: Analyze image quality FIRST using Python Laplacian variance
-        print(f"[Backend] 🔍 Analyzing image quality FIRST for invoice {invoice_index} ({file_name})...")
+
+        print(f"[Backend] 🔍 Analyzing image quality for invoice {resolved_invoice_id} ({file_name})...")
         image_quality = get_image_blur_quality(file_path)
         print(f"[Backend] ✅ Calculated imageQuality score: {image_quality}")
 
         if image_quality < 0.6:
+            self._set_document_invoice_state(
+                doc_id, resolved_invoice_id, invoice_index, page_start, page_end, "POOR_IMAGE_QUALITY"
+            )
             conn_q = sqlite3.connect(DB_PATH)
             cur_q = conn_q.cursor()
             try:
                 cur_q.execute("ALTER TABLE DocumentInvoice ADD COLUMN imageQuality REAL")
             except sqlite3.OperationalError:
                 pass
-            inv_id = f"{doc_id}-invoice-{invoice_index + 1}"
             cur_q.execute(
-                "INSERT OR REPLACE INTO DocumentInvoice (id, documentId, invoiceIndex, pageStart, pageEnd, imageQuality, status) VALUES (?, ?, ?, ?, ?, ?, 'POOR_IMAGE_QUALITY');",
-                (inv_id, doc_id, invoice_index, page_start, page_end, image_quality)
+                "UPDATE DocumentInvoice SET imageQuality = ? WHERE id = ?;",
+                (image_quality, resolved_invoice_id),
             )
             cur_q.execute("UPDATE Document SET status = 'POOR_IMAGE_QUALITY', imageQuality = ? WHERE id = ?;", (image_quality, doc_id))
             conn_q.commit()
             conn_q.close()
 
-        # Step 2: Send to N8N webhook with calculated imageQuality score
         webhook_result = send_to_n8n_webhook(
-            invoice_index, [page_start, page_end], base64_pdf, doc_id=doc_id,
+            invoice_index, list(range(int(page_start), int(page_end) + 1)), base64_pdf, doc_id=doc_id,
             file_path=file_path, page_start_for_ocr=page_start, page_end_for_ocr=page_end,
-            image_quality=image_quality
+            image_quality=image_quality, invoice_id=resolved_invoice_id
         )
         if not webhook_result["success"]:
-            return self._send_json({"success": False, "error": webhook_result["error"]}, 500)
+            self._set_document_invoice_state(doc_id, resolved_invoice_id, invoice_index, page_start, page_end, "FAILED")
+            return self._send_json({
+                "success": False,
+                "invoiceId": resolved_invoice_id,
+                "documentId": doc_id,
+                "pageStart": page_start,
+                "pageEnd": page_end,
+                "status": webhook_result.get("status"),
+                "error": webhook_result.get("error") or "Extraction failed",
+            }, 500)
 
-        extracted_data = webhook_result["extractedData"]
+        extracted_data = webhook_result.get("extractedData")
+        if isinstance(extracted_data, dict):
+            inner = extracted_data.get("extractedData") if isinstance(extracted_data.get("extractedData"), dict) else extracted_data
+            if isinstance(inner, dict) and any(inner.get(k) for k in (
+                "invoiceHeader", "header", "shipmentDetails", "chargeLineItems", "invoiceNumber", "lineItems"
+            )):
+                self._set_document_invoice_state(
+                    doc_id, resolved_invoice_id, invoice_index, page_start, page_end, "EXTRACTED", canonical=inner
+                )
+
         return self._send_json({
             "success": True,
+            "invoiceId": resolved_invoice_id,
             "invoiceIndex": invoice_index,
+            "documentId": doc_id,
+            "pageStart": page_start,
+            "pageEnd": page_end,
             "imageQuality": image_quality,
             "extractedData": extracted_data
         })
