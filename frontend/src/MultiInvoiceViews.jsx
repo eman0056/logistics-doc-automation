@@ -16,6 +16,26 @@ const FILE_STATUS = {
 
 const MAX_FILE_SIZE_MB = 50;
 
+// Accepted file types: PDFs and common invoice image formats
+const ACCEPTED_IMAGE_EXTENSIONS = new Set(['.jpg', '.jpeg', '.png', '.webp', '.tiff', '.tif', '.bmp', '.gif']);
+const ACCEPTED_EXTENSIONS = new Set(['.pdf', ...ACCEPTED_IMAGE_EXTENSIONS]);
+const ACCEPTED_MIME_TYPES = new Set([
+  'application/pdf',
+  'image/jpeg', 'image/jpg', 'image/png', 'image/webp',
+  'image/tiff', 'image/bmp', 'image/gif',
+]);
+
+/** Returns true if the invoice record represents an image file (not a PDF). */
+const isImageFile = (invoice) => {
+  if (!invoice) return false;
+  const mime = (invoice.mimeType || '').toLowerCase();
+  if (mime.startsWith('image/')) return true;
+  const fname = (invoice.fileName || invoice.sourceFileName || '').toLowerCase();
+  const ext = fname.includes('.') ? '.' + fname.split('.').pop() : '';
+  return ACCEPTED_IMAGE_EXTENSIONS.has(ext);
+};
+
+
 function formatFileSize(bytes) {
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
@@ -63,8 +83,9 @@ export const UploadMultiView = () => {
     const errors = [];
     const toAdd = [];
     Array.from(newFiles).forEach((file) => {
-      if (!file.name.toLowerCase().endsWith('.pdf') && file.type !== 'application/pdf') {
-        errors.push(`"${file.name}" — Invalid PDF file.`);
+      const ext = file.name.includes('.') ? '.' + file.name.split('.').pop().toLowerCase() : '';
+      if (!ACCEPTED_EXTENSIONS.has(ext) && !ACCEPTED_MIME_TYPES.has(file.type.toLowerCase())) {
+        errors.push(`"${file.name}" — Unsupported file type. Please upload a PDF or image file (JPG, PNG, WEBP, etc.).`);
         return;
       }
       if (file.size > MAX_FILE_SIZE_MB * 1024 * 1024) {
@@ -1465,13 +1486,31 @@ export const MultiInvoiceWorkspace = ({ docId: propDocId, docIds: propDocIds }) 
           </div>
 
           <div className="emir-doc-body">
-            <iframe
-              key={`doc-${activeDocId}-inv-${selectedInvoiceIndex}-p-${currentPageNumber}`}
-              className="emir-doc-iframe"
-              src={pdfIframeSrc}
-              title="Original Invoice PDF Viewer"
-              style={{ transform: `scale(${zoomLevel / 100})`, transformOrigin: 'top center' }}
-            />
+            {isImageFile(selectedInvoice) ? (
+              /* Image invoice: render directly as <img> so it displays correctly */
+              <img
+                key={`img-${activeDocId}-inv-${selectedInvoiceIndex}`}
+                src={`${API}/documents/${activeDocId}/file`}
+                alt={`Invoice ${selectedInvoiceIndex + 1} original document`}
+                style={{
+                  maxWidth: `${zoomLevel}%`,
+                  width: `${zoomLevel}%`,
+                  height: 'auto',
+                  display: 'block',
+                  margin: '0 auto',
+                  objectFit: 'contain',
+                }}
+              />
+            ) : (
+              /* PDF invoice: use existing page-range iframe */
+              <iframe
+                key={`doc-${activeDocId}-inv-${selectedInvoiceIndex}-p-${currentPageNumber}`}
+                className="emir-doc-iframe"
+                src={pdfIframeSrc}
+                title="Original Invoice PDF Viewer"
+                style={{ transform: `scale(${zoomLevel / 100})`, transformOrigin: 'top center' }}
+              />
+            )}
           </div>
         </section>
 

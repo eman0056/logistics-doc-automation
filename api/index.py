@@ -1797,6 +1797,9 @@ def _parse_invoice_json(value):
 def _serialize_invoice_row(row):
   extracted_data = _parse_invoice_json(row[6] or row[8] or {})
   confidence_scores = _parse_invoice_json(row[7]) if row[7] else {}
+  # row[11] = fileName (from JOIN), row[12] = mimeType (from JOIN) — optional
+  file_name = row[11] if len(row) > 11 and row[11] else None
+  mime_type = row[12] if len(row) > 12 and row[12] else 'application/octet-stream'
   return {
     "id": row[0],
     "invoiceId": row[0],
@@ -1813,6 +1816,9 @@ def _serialize_invoice_row(row):
     "extractionStatus": row[9] or "PENDING",
     "overallConfidence": row[10],
     "extractionComplete": bool(row[6] or row[8]),
+    "fileName": file_name,
+    "sourceFileName": file_name,
+    "mimeType": mime_type,
   }
 
 
@@ -1825,7 +1831,17 @@ def get_document_invoices(doc_id: str, ids: str = None):
     doc_ids = [doc_id]
 
   placeholders = ','.join(['?'] * len(doc_ids))
-  cursor = execute_query(conn, f"SELECT id, documentId, invoiceIndex, pageStart, pageEnd, rawOcrText, canonicalJson, confidenceScores, finalSubmittedData, status, overallConfidence FROM DocumentInvoice WHERE documentId IN ({placeholders}) ORDER BY documentId ASC, invoiceIndex ASC", tuple(doc_ids))
+  cursor = execute_query(
+    conn,
+    f"""SELECT di.id, di.documentId, di.invoiceIndex, di.pageStart, di.pageEnd,
+               di.rawOcrText, di.canonicalJson, di.confidenceScores, di.finalSubmittedData,
+               di.status, di.overallConfidence, d.fileName, d.mimeType
+        FROM DocumentInvoice di
+        LEFT JOIN Document d ON di.documentId = d.id
+        WHERE di.documentId IN ({placeholders})
+        ORDER BY di.documentId ASC, di.invoiceIndex ASC""",
+    tuple(doc_ids)
+  )
   invoices = [_serialize_invoice_row(row) for row in cursor.fetchall()]
   conn.close()
   return {"success": True, "documentId": doc_id, "documentIds": doc_ids, "invoiceCount": len(invoices), "invoices": invoices}

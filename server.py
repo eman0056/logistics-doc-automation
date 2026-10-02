@@ -644,7 +644,7 @@ class LogisticsAutomationHandler(http.server.BaseHTTPRequestHandler):
             cursor.execute(
                 f"""SELECT di.id, di.documentId, di.invoiceIndex, di.pageStart, di.pageEnd, di.rawOcrText, 
                            di.canonicalJson, di.confidenceScores, di.finalSubmittedData, di.status, 
-                           di.overallConfidence, di.imageQuality, d.fileName 
+                           di.overallConfidence, di.imageQuality, d.fileName, d.mimeType 
                     FROM DocumentInvoice di 
                     LEFT JOIN Document d ON di.documentId = d.id 
                     WHERE di.documentId IN ({placeholders}) 
@@ -668,11 +668,13 @@ class LogisticsAutomationHandler(http.server.BaseHTTPRequestHandler):
             inv_quality = r[11] if len(r) > 11 else None
             is_inv_poor = inv_status in ('POOR_IMAGE_QUALITY', 'Poor Image Quality') or (inv_quality is not None and inv_quality < 0.6)
             file_name = r[12] if (len(r) > 12 and r[12]) else f"Document ({r[1]})"
+            mime_type = r[13] if (len(r) > 13 and r[13]) else 'application/octet-stream'
             invoices.append({
                 "id": r[0],
                 "documentId": r[1],
                 "fileName": file_name,
                 "sourceFileName": file_name,
+                "mimeType": mime_type,
                 "invoiceIndex": r[2],
                 "pageStart": r[3],
                 "pageEnd": r[4],
@@ -943,6 +945,52 @@ class LogisticsAutomationHandler(http.server.BaseHTTPRequestHandler):
                     "invoiceCount": invoice_count,
                     "invoiceGroups": invoice_groups
                 })
+
+                # ── Trigger n8n extraction webhook ───────────────────────────
+                app_base_url = os.getenv('APP_BASE_URL', 'http://localhost:3000').rstrip('/')
+                selected_webhook_url = (
+                    os.getenv('MULTI_INVOICE_N8N_WEBHOOK_URL') or
+                    os.getenv('N8N_WEBHOOK_URL') or
+                    (MULTI_INVOICE_WEBHOOK_URL if invoice_count >= 2 else SINGLE_INVOICE_WEBHOOK_URL)
+                )
+                if invoice_count >= 2:
+                    selected_webhook_url = (
+                        os.getenv('MULTI_INVOICE_N8N_WEBHOOK_URL') or
+                        os.getenv('N8N_WEBHOOK_URL') or
+                        MULTI_INVOICE_WEBHOOK_URL
+                    )
+                else:
+                    selected_webhook_url = (
+                        os.getenv('SINGLE_INVOICE_N8N_WEBHOOK_URL') or
+                        os.getenv('N8N_WEBHOOK_URL') or
+                        SINGLE_INVOICE_WEBHOOK_URL
+                    )
+                webhook_payload = {
+                    "documentId": res["documentId"],
+                    "storagePath": res["storagePath"],
+                    "fileName": res["fileName"],
+                    "fileBase64": base64.b64encode(file_bytes).decode('ascii'),
+                    "detectedInvoiceCount": invoice_count,
+                    "detectedInvoiceGroups": invoice_groups,
+                    "rawOcrText": "\n\f\n".join(g.get("rawOcrText", "") for g in invoice_groups),
+                    "workflowType": "multi-invoice" if invoice_count >= 2 else "single-invoice",
+                    "imageQuality": img_quality,
+                    "callbackUrl": f"{app_base_url}/api/documents/{res['documentId']}/extraction/callback"
+                }
+
+                def _dispatch_webhook(url, data):
+                    try:
+                        req = urllib.request.Request(
+                            url, data=json.dumps(data).encode('utf-8'),
+                            headers={'Content-Type': 'application/json'}, method='POST'
+                        )
+                        with urllib.request.urlopen(req, timeout=10) as r:
+                            print(f"[webhook] dispatched doc={data.get('documentId')} status={r.status}")
+                    except Exception as ex:
+                        print(f"[webhook] error doc={data.get('documentId')} err={ex}")
+
+                threading.Thread(target=_dispatch_webhook, args=(selected_webhook_url, webhook_payload), daemon=True).start()
+
 
             primary_doc_id = results[0] if results else None
             first_groups = dispatches_list[0]["invoiceGroups"] if dispatches_list else []

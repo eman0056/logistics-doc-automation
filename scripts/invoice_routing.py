@@ -9,6 +9,9 @@ INVOICE_BOUNDARY = re.compile(
     re.IGNORECASE,
 )
 
+# Image file extensions — each image file is exactly 1 invoice (1 page)
+IMAGE_EXTENSIONS = {'.jpg', '.jpeg', '.png', '.webp', '.tiff', '.tif', '.bmp', '.gif'}
+
 
 def _docx_pages(file_bytes):
     try:
@@ -38,6 +41,9 @@ def _plain_pages(file_bytes):
 
 def extract_invoice_pages(file_bytes, file_name=""):
     extension = Path(file_name or "").suffix.lower()
+    if extension in IMAGE_EXTENSIONS:
+        # Each image is a single-page, single-invoice document — no text extraction needed
+        return ["__image__"]
     if extension == ".pdf" or file_bytes.startswith(b"%PDF"):
         pages = _pdf_pages(file_bytes)
     elif extension == ".docx" or file_bytes.startswith(b"PK"):
@@ -52,11 +58,16 @@ def extract_invoice_pages(file_bytes, file_name=""):
 
 
 def detect_invoice_groups(file_bytes, file_name=""):
+    extension = Path(file_name or "").suffix.lower()
+    if extension in IMAGE_EXTENSIONS:
+        # Image files: exactly 1 invoice per image file, occupying page 1
+        return [{"invoiceIndex": 0, "invoiceCount": 1, "pageStart": 1, "pageEnd": 1, "rawOcrText": ""}]
+
     pages = extract_invoice_pages(file_bytes, file_name)
     if not pages:
         return [{"invoiceIndex": 0, "invoiceCount": 1, "pageStart": 1, "pageEnd": 1, "rawOcrText": ""}]
 
-    # If ALL pages are empty (image/scanned PDF — pypdf extracts no text),
+    # If ALL pages are empty (scanned/image-based PDF — pypdf extracts no text),
     # fall back to 1 invoice per page so the sidebar shows the correct count.
     if all(not page_text.strip() for page_text in pages):
         invoice_count = len(pages)
