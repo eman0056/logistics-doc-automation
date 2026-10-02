@@ -506,7 +506,7 @@ function App() {
           <td>{((doc.fileSize || 0) / 1024).toFixed(1)} KB</td>
           <td>{new Date(doc.createdAt).toLocaleDateString()}</td>
           <td style={{ textAlign: 'right' }}>
-            <a href={doc.invoiceCount > 1 ? `/documents/${doc.id}/invoices` : `/documents/${doc.id}/review`} className="nav-link" style={{ padding: '0.4rem 0.6rem', display: 'inline-flex' }}>
+            <a href={(doc.invoiceCount > 1 || (doc.invoices || []).length > 1) ? `/documents/${doc.id}/multi-workspace` : `/documents/${doc.id}/review`} className="nav-link" style={{ padding: '0.4rem 0.6rem', display: 'inline-flex' }}>
               Review & Edit
             </a>
             <button
@@ -751,7 +751,7 @@ function App() {
             }
 
             const target = invoiceCount > 1
-              ? `/documents/${completedId}/invoices`
+              ? `/documents/${completedId}/multi-workspace`
               : `/documents/${completedId}/review`;
 
             setUploading(false);
@@ -1435,37 +1435,10 @@ function App() {
     }, [docId]);
 
     useEffect(() => {
-      if (!doc || (doc.invoices || []).length > 0 || ['EXTRACTED', 'APPROVED', 'INVOICE_GENERATED', 'FAILED'].includes(doc.status)) {
-        setProcessing(false);
-        return undefined;
-      }
-      let cancelled = false;
-      let timeout;
-      const poll = async () => {
-        try {
-          const [documentResponse, invoiceResponse] = await Promise.all([
-            fetchJson(`${API}/documents?refresh=${Date.now()}`),
-            fetchJson(`${API}/documents/${docId}/invoices?refresh=${Date.now()}`),
-          ]);
-          const json = await documentResponse.json();
-          const invoiceJson = await invoiceResponse.json();
-          const latest = (json.documents || []).find((item) => item.id === docId);
-          if (!cancelled && latest) {
-            setDoc(latest);
-            if (invoiceResponse.ok) setInvoices(Array.isArray(invoiceJson.invoices) ? invoiceJson.invoices : []);
-          }
-        } catch (error) {
-          if (!cancelled) console.error(error);
-        }
-        if (!cancelled) timeout = window.setTimeout(poll, 1500);
-      };
-      setProcessing(true);
-      poll();
-      return () => {
-        cancelled = true;
-        window.clearTimeout(timeout);
-      };
-    }, [doc, docId]);
+      // Never skip the multi-invoice workspace because of status or empty invoices.
+      // Extraction is triggered from MultiInvoiceWorkspace with the actual document file.
+      setProcessing(false);
+    }, [doc, invoices]);
 
     if (loadingDoc) return <RouteSkeleton label="Loading invoices..." />;
     if (!doc) return <main className="page"><div className="card upload-panel">Document not found.</div></main>;
@@ -1787,7 +1760,7 @@ function App() {
     case 'preview': renderedRoute = <PreviewRange />; break;
     case 'upload': renderedRoute = <UploadView />; break;
     case 'upload-multi': renderedRoute = <UploadMultiView />; break;
-    case 'multi-workspace': renderedRoute = <MultiInvoiceWorkspace />; break;
+    case 'multi-workspace': renderedRoute = <MultiInvoiceWorkspace docId={path.split('/')[2]} />; break;
     case 'batch-workspace': renderedRoute = <MultiInvoiceWorkspace />; break;
     case 'review': renderedRoute = <ReviewView />; break;
     case 'review-multi': renderedRoute = <MultiInvoiceListView />; break;

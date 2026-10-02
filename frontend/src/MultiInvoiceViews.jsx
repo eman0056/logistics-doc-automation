@@ -41,6 +41,147 @@ function formatFileSize(bytes) {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
+export const MULTI_INVOICE_N8N_WEBHOOK_URL = 'https://n8n.provelopers.net/webhook/cfc18821-b562-4b0f-8d34-457f83e03f2e';
+
+const localMultiInvoiceFiles = new Map();
+const autoTriggeredDocIds = new Set();
+
+export const rememberMultiInvoiceFile = (docId, fileObject) => {
+  if (docId && fileObject) localMultiInvoiceFiles.set(docId, fileObject);
+};
+
+const parseFilenameFromDisposition = (disposition, fallback) => {
+  if (!disposition) return fallback;
+  const match = disposition.match(/filename\*?=(?:UTF-8'')?"?([^";]+)"?/i);
+  if (!match || !match[1]) return fallback;
+  try {
+    return decodeURIComponent(match[1]);
+  } catch {
+    return match[1];
+  }
+};
+
+const resolveMultiInvoiceWebhookUrl = async () => {
+  let webhookUrl = MULTI_INVOICE_N8N_WEBHOOK_URL;
+  try {
+    const configRes = await fetch(`${API}/config`);
+    if (!configRes.ok) return webhookUrl;
+    const configData = await configRes.json();
+    const candidates = [
+      configData.multiInvoiceN8nWebhookUrl,
+      configData.multiInvoiceWebhookUrl,
+      configData.n8nWebhookUrl,
+    ].filter((url) => typeof url === 'string' && url && !url.includes('NOT SET'));
+    const multiInvoiceCandidate = candidates.find((url) => url.includes('cfc18821-b562-4b0f-8d34-457f83e03f2e'));
+    if (multiInvoiceCandidate) webhookUrl = multiInvoiceCandidate;
+  } catch {
+    // Keep the dedicated Multi-Invoice webhook constant.
+  }
+  return webhookUrl;
+};
+
+/**
+ * Triggers Multi-Invoice extraction by sending the ACTUAL uploaded PDF/document file
+ * directly to the configured Multi-Invoice n8n webhook URL using FormData/multipart.
+ *
+ * @param {string} docId - Document identifier
+ * @param {File|Blob|null} [fileObject=null] - Browser File object if available in memory
+ * @returns {Promise<{success: boolean, status: number, body: string}>}
+ */
+export const triggerMultiInvoiceExtraction = async (docId, fileObject = null) => {
+  const requestMethod = 'POST';
+  let targetFile = fileObject || localMultiInvoiceFiles.get(docId) || null;
+  let fileName = targetFile?.name || '';
+  let fileType = targetFile?.type || '';
+  let fileSize = targetFile?.size || 0;
+
+  if (!targetFile) {
+    try {
+      const fileRes = await fetch(`${API}/documents/${docId}/file`);
+      if (!fileRes.ok) {
+        throw new Error(`Failed fetching document binary from backend: HTTP ${fileRes.status}`);
+      }
+      const contentType = (fileRes.headers.get('content-type') || '').toLowerCase();
+      if (contentType.includes('application/json')) {
+        const errBody = await fileRes.json().catch(() => ({}));
+        throw new Error(errBody.error || 'Document file endpoint did not return a binary file');
+      }
+      const blob = await fileRes.blob();
+      if (!blob || blob.size === 0) {
+        throw new Error('Document file from backend was empty');
+      }
+      fileName = parseFilenameFromDisposition(fileRes.headers.get('content-disposition'), `${docId}.pdf`);
+      fileType = blob.type || contentType || 'application/pdf';
+      fileSize = blob.size;
+      targetFile = new File([blob], fileName, { type: fileType });
+      rememberMultiInvoiceFile(docId, targetFile);
+    } catch (err) {
+      console.error('[Multi-Invoice n8n Trigger] Failed retrieving document file from backend:', err);
+      throw err;
+    }
+  } else {
+    fileName = targetFile.name || fileName || `${docId}.pdf`;
+    fileType = targetFile.type || fileType || 'application/pdf';
+    fileSize = targetFile.size || fileSize || 0;
+    rememberMultiInvoiceFile(docId, targetFile);
+  }
+
+  const webhookUrl = await resolveMultiInvoiceWebhookUrl();
+  const resolvedName = fileName || targetFile.name || `${docId}.pdf`;
+  const resolvedType = fileType || targetFile.type || 'application/pdf';
+  const resolvedSize = fileSize || targetFile.size || 0;
+
+  const formData = new FormData();
+  formData.append('file', targetFile, resolvedName);
+  formData.append('data', targetFile, resolvedName);
+  formData.append('documentId', String(docId));
+  formData.append('fileName', resolvedName);
+  formData.append('fileType', resolvedType);
+  formData.append('fileSize', String(resolvedSize));
+
+  console.log('[Multi-Invoice n8n Trigger] Pre-request details:', {
+    documentId: docId,
+    fileName: resolvedName,
+    fileType: resolvedType,
+    fileSize: resolvedSize,
+    webhookUrl,
+    requestMethod,
+  });
+
+  let response;
+  let responseText = '';
+  let success = false;
+  try {
+    response = await fetch(webhookUrl, {
+      method: requestMethod,
+      body: formData,
+    });
+    responseText = await response.text();
+    success = response.ok;
+  } catch (fetchErr) {
+    console.error('[Multi-Invoice n8n Trigger] Network/CORS error calling n8n webhook:', fetchErr);
+    console.log('[Multi-Invoice n8n Trigger] Post-request details:', {
+      httpStatus: 0,
+      responseBody: String(fetchErr?.message || fetchErr),
+      success: false,
+    });
+    throw fetchErr;
+  }
+
+  console.log('[Multi-Invoice n8n Trigger] Post-request details:', {
+    httpStatus: response ? response.status : 0,
+    responseBody: responseText,
+    success,
+  });
+
+  if (!success) {
+    throw new Error(`n8n webhook returned HTTP ${response?.status}: ${responseText}`);
+  }
+
+  return { success: true, status: response.status, body: responseText };
+};
+
+
 function buildFileEntry(file) {
   return {
     file,
@@ -150,6 +291,13 @@ export const UploadMultiView = () => {
     const docId = data.docId || (data.documentIds && data.documentIds[0]);
     const invoiceCount = data.totalInvoices || data.invoices?.length || 1;
     updateEntry(entry.id, { status: FILE_STATUS.EXTRACTING, documentId: docId, invoiceCount });
+    rememberMultiInvoiceFile(docId, entry.file);
+
+    try {
+      await triggerMultiInvoiceExtraction(docId, entry.file);
+    } catch (trigErr) {
+      console.warn('[UploadMultiView] n8n extraction trigger notice:', trigErr.message);
+    }
 
     // Poll for extraction completion (max 90 seconds)
     const startTime = Date.now();
@@ -522,6 +670,10 @@ export const extractRealInvoiceObject = (raw) => {
 
   return null;
 };
+
+export const invoiceHasRealExtraction = (invoice) => Boolean(
+  extractRealInvoiceObject(invoice?.extractedData || invoice?.canonicalJson)
+);
 
 // Data extractor helpers
 const getInvoiceHeaderFields = (data) => {
@@ -1095,6 +1247,8 @@ export const MultiInvoiceWorkspace = ({ docId: propDocId, docIds: propDocIds }) 
   const [saving, setSaving] = useState(false);
   const [saveSuccess, setSaveSuccess] = useState(false);
   const [saveError, setSaveError] = useState('');
+  const [extractingN8n, setExtractingN8n] = useState(false);
+  const [extractionError, setExtractionError] = useState('');
   const [showDiscardModal, setShowDiscardModal] = useState(false);
   const [showEscalationModal, setShowEscalationModal] = useState(false);
   const [pageOffset, setPageOffset] = useState(0);
@@ -1103,6 +1257,61 @@ export const MultiInvoiceWorkspace = ({ docId: propDocId, docIds: propDocIds }) 
   const [filterDoc, setFilterDoc] = useState('all');
   const [filterStatus, setFilterStatus] = useState('all');
   const [searchQuery, setSearchQuery] = useState('');
+
+  const handleTriggerExtraction = async (targetDocId) => {
+    const idToExtract = targetDocId || selectedInvoice?.documentId || primaryDocId;
+    if (!idToExtract) return;
+    setExtractingN8n(true);
+    setExtractionError('');
+    try {
+      await triggerMultiInvoiceExtraction(idToExtract, null);
+      setInvoices((prev) =>
+        prev.map((inv) =>
+          inv.documentId === idToExtract || !inv.documentId
+            ? { ...inv, status: 'EXTRACTING' }
+            : inv
+        )
+      );
+      pollExtractionResults(idToExtract);
+    } catch (err) {
+      console.error('Failed triggering n8n extraction:', err);
+      setExtractionError(err.message || 'Failed triggering extraction request.');
+      setExtractingN8n(false);
+    }
+  };
+
+  const pollExtractionResults = (targetDocId) => {
+    let count = 0;
+    const timer = setInterval(async () => {
+      count += 1;
+      try {
+        const invRes = await fetch(`${API}/documents/${targetDocId}/invoices?refresh=${Date.now()}`);
+        if (invRes.ok) {
+          const invData = await invRes.json();
+          if (Array.isArray(invData.invoices) && invData.invoices.length > 0) {
+            const extractedFound = invData.invoices.some((inv) => invoiceHasRealExtraction(inv));
+            if (extractedFound) {
+              clearInterval(timer);
+              setInvoices(invData.invoices);
+              const newDrafts = {};
+              invData.invoices.forEach((inv, idx) => {
+                newDrafts[idx] = extractRealInvoiceObject(inv.extractedData || inv.canonicalJson) || {};
+              });
+              setDrafts(newDrafts);
+              setExtractingN8n(false);
+              return;
+            }
+          }
+        }
+      } catch (e) {
+        // Polling error, continue
+      }
+      if (count >= 45) {
+        clearInterval(timer);
+        setExtractingN8n(false);
+      }
+    }, 2000);
+  };
 
   useEffect(() => {
     let active = true;
@@ -1147,14 +1356,29 @@ export const MultiInvoiceWorkspace = ({ docId: propDocId, docIds: propDocIds }) 
                   invoiceIndex: grp.invoiceIndex !== undefined ? grp.invoiceIndex : idx,
                   pageStart: grp.pageStart || 1,
                   pageEnd: grp.pageEnd || grp.pageStart || 1,
-                  status: 'Ready for Review',
-                  overallConfidence: 0.95,
-                  extractedData: {}
+                  status: 'Waiting for extraction',
+                  overallConfidence: null,
+                  extractedData: null
                 }));
               }
             } catch (e) {
               console.warn('Invoice detection fallback error:', e);
             }
+          }
+
+          if (invoiceList.length === 0) {
+            invoiceList = [{
+              id: `${docId}-pending`,
+              documentId: docId,
+              sourceFileName: foundDoc?.fileName || docId,
+              fileName: foundDoc?.fileName || docId,
+              invoiceIndex: 0,
+              pageStart: 1,
+              pageEnd: 1,
+              status: 'Waiting for extraction',
+              overallConfidence: null,
+              extractedData: null
+            }];
           }
         }
 
@@ -1169,7 +1393,7 @@ export const MultiInvoiceWorkspace = ({ docId: propDocId, docIds: propDocIds }) 
 
           const initialDrafts = {};
           invoiceList.forEach((inv, idx) => {
-            const realObj = extractRealInvoiceObject(inv.extractedData || inv.canonicalJson || inv) || {};
+            const realObj = extractRealInvoiceObject(inv.extractedData || inv.canonicalJson) || {};
             initialDrafts[idx] = realObj;
           });
           setDrafts(initialDrafts);
@@ -1183,6 +1407,18 @@ export const MultiInvoiceWorkspace = ({ docId: propDocId, docIds: propDocIds }) 
     load();
     return () => { active = false; };
   }, [primaryDocId]);
+
+  useEffect(() => {
+    if (loading || !primaryDocId) return;
+    const ids = isBatchMode && Array.isArray(docIds) && docIds.length ? docIds : [primaryDocId];
+    ids.forEach((id) => {
+      if (!id || autoTriggeredDocIds.has(id)) return;
+      const related = invoices.filter((inv) => !inv.documentId || inv.documentId === id);
+      if (related.some((inv) => invoiceHasRealExtraction(inv))) return;
+      autoTriggeredDocIds.add(id);
+      handleTriggerExtraction(id);
+    });
+  }, [loading, invoices, primaryDocId]);
 
   useEffect(() => {
     setPageOffset(0);
@@ -1245,7 +1481,7 @@ export const MultiInvoiceWorkspace = ({ docId: propDocId, docIds: propDocIds }) 
 
   const handleConfirmDiscard = () => {
     if (!selectedInvoice) return;
-    const originalExtracted = extractRealInvoiceObject(selectedInvoice.extractedData || selectedInvoice.canonicalJson || selectedInvoice) || {};
+    const originalExtracted = extractRealInvoiceObject(selectedInvoice.extractedData || selectedInvoice.canonicalJson) || {};
     setDrafts((prev) => ({ ...prev, [selectedInvoiceIndex]: originalExtracted }));
     setShowDiscardModal(false);
   };
@@ -1293,10 +1529,17 @@ export const MultiInvoiceWorkspace = ({ docId: propDocId, docIds: propDocIds }) 
   const filteredWithIndex = filteredInvoices.map(inv => ({ inv, globalIdx: invoices.indexOf(inv) }));
 
   const headerObj = currentDraft.invoiceHeader || currentDraft.header || currentDraft || {};
-  const rawInvNum = headerObj.invoiceNumber || headerObj.invoice_number || currentDraft.invoiceNumber || selectedInvoice?.invoiceNumber;
+  const hasExtractedData = invoiceHasRealExtraction(selectedInvoice);
+  const rawInvNum = hasExtractedData
+    ? (headerObj.invoiceNumber || headerObj.invoice_number || currentDraft.invoiceNumber || selectedInvoice?.invoiceNumber)
+    : null;
   const extractedInvNum = rawInvNum ? String(rawInvNum) : 'Not extracted';
-  const confidencePercent = Math.round(((selectedInvoice?.overallConfidence ?? 0.95) * 100));
-  const invoiceStatus = selectedInvoice?.status || selectedInvoice?.extractionStatus || 'Ready for Review';
+  
+  const hasConfidence = hasExtractedData && selectedInvoice?.overallConfidence != null;
+  const confidencePercent = hasConfidence ? Math.round(selectedInvoice.overallConfidence * 100) : null;
+
+  const invoiceStatus = selectedInvoice?.status || selectedInvoice?.extractionStatus || 'Waiting for extraction';
+  const isWaitingForExtraction = extractingN8n || !hasExtractedData || ['Waiting for extraction', 'EXTRACTING', 'PREPROCESSED', 'UPLOADING'].includes(invoiceStatus);
   const isPoorQuality = selectedInvoice?.poorImageQuality || invoiceStatus === 'Poor Image Quality' || invoiceStatus === 'POOR_IMAGE_QUALITY';
   // Use selected invoice's own documentId for PDF preview
   const activeDocId = selectedInvoice?.documentId || primaryDocId;
@@ -1381,7 +1624,18 @@ export const MultiInvoiceWorkspace = ({ docId: propDocId, docIds: propDocIds }) 
         <div className="emir-header-actions">
           {saveSuccess && <span style={{ color: 'var(--success, #1FC991)', fontWeight: 600, fontSize: '0.88rem' }}>✓ Saved & Approved</span>}
           {saveError && <span style={{ color: 'var(--danger, #EA6A6A)', fontSize: '0.85rem' }}>{saveError}</span>}
-          
+          {extractionError && <span style={{ color: 'var(--danger, #EA6A6A)', fontSize: '0.85rem' }}>{extractionError}</span>}
+
+          <button
+            type="button"
+            className="emir-btn-save"
+            style={{ background: '#3b82f6', borderColor: '#2563eb' }}
+            onClick={() => handleTriggerExtraction(primaryDocId)}
+            disabled={extractingN8n}
+          >
+            {extractingN8n ? '🔄 Sending to n8n...' : '⚡ Trigger n8n Extraction'}
+          </button>
+
           {isPoorQuality && (
             <button
               type="button"
@@ -1525,11 +1779,17 @@ export const MultiInvoiceWorkspace = ({ docId: propDocId, docIds: propDocIds }) 
             </div>
 
             <div className="emir-summary-meta">
-              <span className={`emir-confidence-badge ${confidencePercent < 80 ? 'warning' : ''}`}>
-                🎯 Confidence {confidencePercent}%
-              </span>
-              <span className={`status-pill ${isPoorQuality ? 'warning-strong' : invoiceStatus === 'APPROVED' ? 'success' : 'primary'}`}>
-                {isPoorQuality ? '⚠ Poor Image Quality' : invoiceStatus}
+              {hasConfidence ? (
+                <span className={`emir-confidence-badge ${confidencePercent < 80 ? 'warning' : ''}`}>
+                  🎯 Confidence {confidencePercent}%
+                </span>
+              ) : (
+                <span className="emir-confidence-badge warning" style={{ background: '#334155', color: '#94a3b8' }}>
+                  🎯 Confidence N/A
+                </span>
+              )}
+              <span className={`status-pill ${isPoorQuality ? 'warning-strong' : invoiceStatus === 'APPROVED' ? 'success' : isWaitingForExtraction ? 'warning' : 'primary'}`}>
+                {isPoorQuality ? '⚠ Poor Image Quality' : isWaitingForExtraction ? '⏳ Waiting for extraction' : invoiceStatus}
               </span>
             </div>
           </div>
@@ -1578,6 +1838,25 @@ export const MultiInvoiceWorkspace = ({ docId: propDocId, docIds: propDocIds }) 
 
           {/* TAB CONTENT PANEL */}
           <div className="emir-tab-panel">
+            {isWaitingForExtraction ? (
+              <div className="emir-waiting-box" style={{ padding: '3rem 1.5rem', textAlign: 'center', background: '#0f172a', borderRadius: '12px', border: '1px dashed #334155', margin: '0.5rem 0' }}>
+                <div style={{ fontSize: '2.5rem', marginBottom: '0.75rem' }}>⏳</div>
+                <h3 style={{ color: '#fff', fontSize: '1.15rem', margin: '0 0 0.5rem', fontWeight: 700 }}>Waiting for Extraction</h3>
+                <p style={{ color: '#94a3b8', fontSize: '0.88rem', maxWidth: '480px', margin: '0 auto 1.25rem', lineHeight: '1.5' }}>
+                  The document has not been processed by n8n yet. Click the button below to send the uploaded document to the Multi-Invoice n8n webhook.
+                </p>
+                <button
+                  type="button"
+                  className="emir-btn-save"
+                  style={{ display: 'inline-flex', alignItems: 'center', gap: '0.5rem', background: '#6366f1', borderColor: '#4f46e5', margin: '0 auto' }}
+                  onClick={() => handleTriggerExtraction(activeDocId)}
+                  disabled={extractingN8n}
+                >
+                  {extractingN8n ? '🔄 Sending Document to n8n...' : '⚡ Trigger n8n Extraction Now'}
+                </button>
+              </div>
+            ) : (
+              <>
             {/* 1. INVOICE HEADER TAB */}
             {activeTab === 'header' && (
               <>
@@ -1871,7 +2150,7 @@ export const MultiInvoiceWorkspace = ({ docId: propDocId, docIds: propDocIds }) 
                   </div>
                   <div className="emir-field-group">
                     <label className="emir-field-label">Overall Confidence Score</label>
-                    <input className="emir-field-input" value={`${confidencePercent}%`} readOnly style={{ opacity: 0.8 }} />
+                    <input className="emir-field-input" value={confidencePercent != null ? `${confidencePercent}%` : 'N/A'} readOnly style={{ opacity: 0.8 }} />
                   </div>
                   <div className="emir-field-group">
                     <label className="emir-field-label">Image Quality Flag</label>
@@ -1884,8 +2163,10 @@ export const MultiInvoiceWorkspace = ({ docId: propDocId, docIds: propDocIds }) 
                 </div>
               </div>
             )}
-          </div>
-        </section>
+            </>
+          )}
+        </div>
+      </section>
       </div>
 
       {/* ── C. INVOICE NAVIGATOR with Filters & Document Grouping ────────── */}
@@ -1954,10 +2235,13 @@ export const MultiInvoiceWorkspace = ({ docId: propDocId, docIds: propDocIds }) 
             const isSelected = selectedInvoiceIndex === globalIdx;
             const invDraft = drafts[globalIdx] || {};
             const invHeader = invDraft.invoiceHeader || invDraft.header || {};
-            const invNumberVal = invHeader.invoiceNumber || invDraft.invoiceNumber || inv.invoiceNumber;
+            const hasReal = invoiceHasRealExtraction(inv);
+            const invNumberVal = hasReal ? (invHeader.invoiceNumber || invDraft.invoiceNumber || inv.invoiceNumber) : null;
             const displayNum = invNumberVal ? String(invNumberVal) : 'Not extracted';
-            const conf = Math.round(((inv.overallConfidence ?? 0.95) * 100));
-            const status = inv.status || inv.extractionStatus || 'Ready for Review';
+            const conf = hasReal && inv.overallConfidence != null ? Math.round(inv.overallConfidence * 100) : null;
+            const status = hasReal
+              ? (inv.status || inv.extractionStatus || 'EXTRACTED')
+              : (extractingN8n ? 'EXTRACTING' : 'Waiting for extraction');
             const poor = inv.poorImageQuality || status === 'Poor Image Quality' || status === 'POOR_IMAGE_QUALITY';
             const srcName = inv.sourceFileName || inv.fileName || '';
 
@@ -1984,7 +2268,7 @@ export const MultiInvoiceWorkspace = ({ docId: propDocId, docIds: propDocIds }) 
 
                 <div className="emir-card-meta">
                   <span>Pages {inv.pageStart || 1}–{inv.pageEnd ?? inv.pageStart ?? 1}</span>
-                  <span>{conf}% confidence</span>
+                  <span>{conf != null ? `${conf}% confidence` : 'Confidence N/A'}</span>
                 </div>
 
                 <div className="emir-card-footer">
