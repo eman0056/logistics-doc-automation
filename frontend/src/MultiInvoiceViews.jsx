@@ -1,6 +1,10 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
+import * as pdfjsLib from 'pdfjs-dist';
+import pdfWorkerUrl from 'pdfjs-dist/build/pdf.worker.min.js?url';
 import { apiGetJson, normalizeApiCacheUrl } from './dataCache.js';
 import { EscalationModal } from './EscalationModal.jsx';
+
+pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorkerUrl || `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js`;
 
 const API = '/api';
 
@@ -725,7 +729,387 @@ export const InvoiceList = ({ invoiceGroups, selectedIndex, extractedData, proce
   );
 };
 
+export const PdfPageViewer = ({ pdfUrl, pageNumber = 1, zoomMode = 'fit', zoomLevel = 100, containerRef }) => {
+  const canvasRef = useRef(null);
+  const renderTaskRef = useRef(null);
+  const loadingTaskRef = useRef(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+  const [pdfDoc, setPdfDoc] = useState(null);
+
+  useEffect(() => {
+    let active = true;
+    setLoading(true);
+    setError(null);
+    setPdfDoc(null);
+
+    if (loadingTaskRef.current) {
+      try {
+        loadingTaskRef.current.destroy();
+      } catch (e) {}
+    }
+
+    const task = pdfjsLib.getDocument({
+      url: pdfUrl,
+      cMapUrl: 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/cmaps/',
+      cMapPacked: true,
+    });
+    loadingTaskRef.current = task;
+
+    task.promise
+      .then((doc) => {
+        if (active) {
+          setPdfDoc(doc);
+          setLoading(false);
+        }
+      })
+      .catch((err) => {
+        if (active && err?.name !== 'RenderingCancelledException') {
+          console.error('PDF loading error:', err);
+          setError('Unable to load document preview');
+          setLoading(false);
+        }
+      });
+
+    return () => {
+      active = false;
+      if (loadingTaskRef.current) {
+        try {
+          loadingTaskRef.current.destroy();
+        } catch (e) {}
+      }
+    };
+  }, [pdfUrl]);
+
+  const renderPage = useCallback(() => {
+    if (!pdfDoc || !canvasRef.current || !containerRef?.current) return;
+
+    const targetPageNum = Math.min(Math.max(1, pageNumber), pdfDoc.numPages);
+
+    pdfDoc.getPage(targetPageNum).then((page) => {
+      if (!canvasRef.current || !containerRef?.current) return;
+
+      if (renderTaskRef.current) {
+        try {
+          renderTaskRef.current.cancel();
+        } catch (e) {}
+        renderTaskRef.current = null;
+      }
+
+      const container = containerRef.current;
+      const padding = 24;
+      const availWidth = Math.max(100, container.clientWidth - padding);
+      const availHeight = Math.max(100, container.clientHeight - padding);
+
+      const unscaledViewport = page.getViewport({ scale: 1.0 });
+      const scaleX = availWidth / unscaledViewport.width;
+      const scaleY = availHeight / unscaledViewport.height;
+      const fitScale = Math.min(scaleX, scaleY);
+
+      let finalScale = fitScale;
+      if (zoomMode === 'manual') {
+        finalScale = fitScale * (zoomLevel / 100);
+      }
+
+      const dpr = Math.max(2, window.devicePixelRatio || 1);
+      const displayWidth = unscaledViewport.width * finalScale;
+      const displayHeight = unscaledViewport.height * finalScale;
+
+      const canvas = canvasRef.current;
+      canvas.width = Math.floor(displayWidth * dpr);
+      canvas.height = Math.floor(displayHeight * dpr);
+      canvas.style.width = `${Math.floor(displayWidth)}px`;
+      canvas.style.height = `${Math.floor(displayHeight)}px`;
+      canvas.style.maxWidth = 'none'; // allow horizontal scrolling when zoomed
+      canvas.style.maxHeight = 'none'; // scroll wrapper handles overflow; never clip the canvas
+      canvas.style.objectFit = 'contain';
+      canvas.style.display = 'block';
+      canvas.style.margin = '0 auto';
+      canvas.style.flexShrink = '0';
+
+      const ctx = canvas.getContext('2d');
+      ctx.imageSmoothingEnabled = true;
+      ctx.imageSmoothingQuality = 'high';
+
+      const renderViewport = page.getViewport({ scale: finalScale * dpr });
+      const renderTask = page.render({
+        canvasContext: ctx,
+        viewport: renderViewport,
+      });
+      renderTaskRef.current = renderTask;
+
+      renderTask.promise
+        .then(() => {
+          renderTaskRef.current = null;
+        })
+        .catch((err) => {
+          if (err?.name !== 'RenderingCancelledException') {
+            console.error('PDF rendering error:', err);
+          }
+        });
+    }).catch(err => console.error('getPage error:', err));
+  }, [pdfDoc, pageNumber, zoomMode, zoomLevel, containerRef]);
+
+  useEffect(() => {
+    renderPage();
+  }, [renderPage]);
+
+  useEffect(() => {
+    const el = containerRef?.current;
+    if (!el || typeof ResizeObserver === 'undefined') return undefined;
+
+    let timer = null;
+    const ro = new ResizeObserver(() => {
+      clearTimeout(timer);
+      timer = setTimeout(() => {
+        renderPage();
+      }, 50);
+    });
+    ro.observe(el);
+
+    return () => {
+      ro.disconnect();
+      clearTimeout(timer);
+    };
+  }, [containerRef, renderPage]);
+
+  if (loading) {
+    return (
+      <div className="pdf-viewer-status-box">
+        <div style={{ fontSize: '24px' }}>🔄</div>
+        <div style={{ fontSize: '13px', color: '#94a3b8' }}>Loading page...</div>
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="pdf-viewer-status-box" style={{ color: '#ef4444' }}>
+        <div style={{ fontSize: '24px' }}>⚠️</div>
+        <div style={{ fontSize: '13px' }}>{error}</div>
+        <a href={pdfUrl} target="_blank" rel="noopener noreferrer" style={{ color: '#60a5fa', textDecoration: 'underline', fontSize: '12px', marginTop: '6px' }}>
+          Open PDF in new tab
+        </a>
+      </div>
+    );
+  }
+
+  return (
+    <div
+      className="pdf-viewer-wrapper"
+      style={{
+        display: 'flex',
+        flexDirection: 'column',
+        alignItems: 'center',
+        justifyContent: 'flex-start',
+        width: '100%',
+        height: '100%',
+        maxHeight: '100%',
+        overflowY: 'auto',
+        overflowX: 'auto',
+        boxSizing: 'border-box',
+        padding: '16px',
+      }}
+    >
+      <canvas ref={canvasRef} className="pdf-viewer-canvas" />
+    </div>
+  );
+};
+
+// ── MULTI-INVOICE DEDICATED PDF VIEWER ──────────────────────────────────────
+// NOTE: This component is used EXCLUSIVELY inside MultiInvoiceWorkspace.
+// Do NOT use for the single-invoice viewer (DocumentViewer uses PdfPageViewer above).
+//
+// Rendering rules (per product spec):
+//  1. Viewport is built at fitScale — no DPR multiplication on the viewport itself.
+//  2. Canvas width/height are set directly from viewport.width / viewport.height.
+//  3. renderContext receives a clean identity transform [1, 0, 0, 1, 0, 0] so no
+//     negative offsets or hardcoded restrictions can clip the top of the invoice.
+export const MultiInvoicePageViewer = ({ pdfUrl, pageNumber = 1, zoomMode = 'fit', zoomLevel = 100, containerRef }) => {
+  const canvasRef = useRef(null);
+  const renderTaskRef = useRef(null);
+  const loadingTaskRef = useRef(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+  const [pdfDoc, setPdfDoc] = useState(null);
+
+  // ── Load document ──────────────────────────────────────────────────────────
+  useEffect(() => {
+    let active = true;
+    setLoading(true);
+    setError(null);
+    setPdfDoc(null);
+
+    if (loadingTaskRef.current) {
+      try { loadingTaskRef.current.destroy(); } catch (e) {}
+    }
+
+    const task = pdfjsLib.getDocument({
+      url: pdfUrl,
+      cMapUrl: 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/cmaps/',
+      cMapPacked: true,
+    });
+    loadingTaskRef.current = task;
+
+    task.promise
+      .then((doc) => { if (active) { setPdfDoc(doc); setLoading(false); } })
+      .catch((err) => {
+        if (active && err?.name !== 'RenderingCancelledException') {
+          console.error('[MultiInvoicePageViewer] PDF load error:', err);
+          setError('Unable to load document preview');
+          setLoading(false);
+        }
+      });
+
+    return () => {
+      active = false;
+      if (loadingTaskRef.current) {
+        try { loadingTaskRef.current.destroy(); } catch (e) {}
+      }
+    };
+  }, [pdfUrl]);
+
+  // ── Render page ───────────────────────────────────────────────────────────
+  const renderPage = useCallback(() => {
+    if (!pdfDoc || !canvasRef.current || !containerRef?.current) return;
+
+    const targetPageNum = Math.min(Math.max(1, pageNumber), pdfDoc.numPages);
+
+    pdfDoc.getPage(targetPageNum).then((page) => {
+      if (!canvasRef.current || !containerRef?.current) return;
+
+      // Cancel any in-flight render before starting a new one
+      if (renderTaskRef.current) {
+        try { renderTaskRef.current.cancel(); } catch (e) {}
+        renderTaskRef.current = null;
+      }
+
+      const container = containerRef.current;
+      const padding = 32;
+      // FIT-TO-WIDTH: only constrain by available width so the full page height
+      // is reachable by vertical scrolling. Using Math.min(scaleX, scaleY)
+      // (fit-to-box) would shrink the page to fill the viewport, making it
+      // impossible to scroll and showing a blurry small image.
+      const availWidth = Math.max(100, container.clientWidth - padding);
+
+      // Step 1 — calculate fitScale based on WIDTH only
+      const unscaledViewport = page.getViewport({ scale: 1.0 });
+      const fitScale = availWidth / unscaledViewport.width;
+
+      // Step 2 — apply manual zoom on top of fit, if requested
+      const finalScale = zoomMode === 'manual'
+        ? fitScale * (zoomLevel / 100)
+        : fitScale;
+
+      // Step 3 — use DPR for a sharp (non-blurry) canvas backing store (minimum 2x DPR)
+      const dpr = Math.max(2, window.devicePixelRatio || 1);
+      const viewport = page.getViewport({ scale: finalScale });
+
+      // Step 4 — canvas backing store is at device-pixel resolution
+      const canvas = canvasRef.current;
+      canvas.width  = Math.floor(viewport.width  * dpr);
+      canvas.height = Math.floor(viewport.height * dpr);
+
+      // CSS display size is at CSS-pixel resolution (no DPR)
+      canvas.style.width    = `${Math.floor(viewport.width)}px`;
+      canvas.style.height   = `${Math.floor(viewport.height)}px`;
+      canvas.style.maxWidth = 'none'; // allow horizontal scrolling when zoomed
+      canvas.style.maxHeight = 'none'; // scroll wrapper owns overflow — never clip
+      canvas.style.display  = 'block';
+      canvas.style.margin   = '0 auto';
+      canvas.style.flexShrink = '0';
+      canvas.style.background = '#ffffff';
+      canvas.style.boxShadow  = '0 8px 30px rgba(0,0,0,0.45)';
+      canvas.style.borderRadius = '4px';
+
+      const ctx = canvas.getContext('2d');
+      ctx.imageSmoothingEnabled  = true;
+      ctx.imageSmoothingQuality  = 'high';
+
+      // Step 5 — render at DPR scale with standard viewport matrix
+      const renderViewport = page.getViewport({ scale: finalScale * dpr });
+      const renderTask = page.render({
+        canvasContext: ctx,
+        viewport:      renderViewport,
+      });
+      renderTaskRef.current = renderTask;
+
+      renderTask.promise
+        .then(() => { renderTaskRef.current = null; })
+        .catch((err) => {
+          if (err?.name !== 'RenderingCancelledException') {
+            console.error('[MultiInvoicePageViewer] Render error:', err);
+          }
+        });
+    }).catch((err) => console.error('[MultiInvoicePageViewer] getPage error:', err));
+  }, [pdfDoc, pageNumber, zoomMode, zoomLevel, containerRef]);
+
+  useEffect(() => { renderPage(); }, [renderPage]);
+
+  // Re-render on container resize
+  useEffect(() => {
+    const el = containerRef?.current;
+    if (!el || typeof ResizeObserver === 'undefined') return undefined;
+    let timer = null;
+    const ro = new ResizeObserver(() => {
+      clearTimeout(timer);
+      timer = setTimeout(() => { renderPage(); }, 50);
+    });
+    ro.observe(el);
+    return () => { ro.disconnect(); clearTimeout(timer); };
+  }, [containerRef, renderPage]);
+
+  if (loading) {
+    return (
+      <div className="pdf-viewer-status-box">
+        <div style={{ fontSize: '24px' }}>🔄</div>
+        <div style={{ fontSize: '13px', color: '#94a3b8' }}>Loading page...</div>
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="pdf-viewer-status-box" style={{ color: '#ef4444' }}>
+        <div style={{ fontSize: '24px' }}>⚠️</div>
+        <div style={{ fontSize: '13px' }}>{error}</div>
+        <a href={pdfUrl} target="_blank" rel="noopener noreferrer"
+          style={{ color: '#60a5fa', textDecoration: 'underline', fontSize: '12px', marginTop: '6px' }}>
+          Open PDF in new tab
+        </a>
+      </div>
+    );
+  }
+
+  return (
+    <div
+      className="multi-invoice-pdf-wrapper"
+      style={{
+        /* Fill the positioned parent (emir-doc-body) completely */
+        position: 'absolute',
+        inset: 0,
+        display: 'flex',
+        flexDirection: 'column',
+        /* flex-start so the top of the canvas is always at scrollTop=0 */
+        alignItems: 'center',
+        justifyContent: 'flex-start',
+        overflowY: 'auto',
+        /* auto so zoomed pages can scroll horizontally */
+        overflowX: 'auto',
+        padding: '16px',
+        boxSizing: 'border-box',
+        width: '100%',
+        height: '100%',
+      }}
+    >
+      <canvas ref={canvasRef} />
+    </div>
+  );
+};
+// ── END MultiInvoicePageViewer ───────────────────────────────────────────────
+
 export const DocumentViewer = ({ docId, selectedGroup }) => {
+  const containerRef = useRef(null);
   const pageStart = selectedGroup?.pageStart || (selectedGroup?.pages ? selectedGroup.pages[0] : 1);
   return (
     <div className="multi-viewer-panel" style={{ flex: 1, padding: 0, border: 'none', background: 'transparent' }}>
@@ -735,11 +1119,13 @@ export const DocumentViewer = ({ docId, selectedGroup }) => {
           <p style={{ margin: '2px 0 0 0', fontSize: '12px', color: 'var(--text-muted, #94a3b8)' }}>{selectedGroup ? `Invoice Pages ${pageStart}${selectedGroup?.pageEnd !== pageStart ? `–${selectedGroup?.pageEnd}` : ''}` : 'Complete PDF'}</p>
         </div>
       </div>
-      <div className="document-viewer-container">
-        <iframe 
-          className="pdf-viewer-iframe"
-          src={`${API}/documents/${docId}/file#page=${pageStart}`}
-          title="Original Document"
+      <div className="document-viewer-container" ref={containerRef} style={{ position: 'relative', flex: 1, display: 'flex', flexDirection: 'column', width: '100%', height: '100%', overflowY: 'auto', boxSizing: 'border-box' }}>
+        <PdfPageViewer
+          pdfUrl={`${API}/documents/${docId}/file`}
+          pageNumber={pageStart}
+          zoomMode="fit"
+          zoomLevel={100}
+          containerRef={containerRef}
         />
       </div>
     </div>
@@ -1686,8 +2072,8 @@ export const MultiInvoiceWorkspace = ({ docId: propDocId, docIds: propDocIds }) 
   const relativePageLabel = relativePage;
   // Isolated invoice pages only — never the full multi-invoice document
   const pdfSourceUrl = `${API}/documents/${activeDocId}/page-range?start=${pageStart}&end=${pageEnd}`;
-  // Use chrome viewer params for fit-to-page when available; still wrap in a contain container
-  const pdfIframeSrc = `${pdfSourceUrl}#page=${relativePage}&zoom=page-fit`;
+  // Append #view=FitH so the browser native/PDF.js viewer initializes in Fit Height mode
+  const pdfIframeSrc = `${pdfSourceUrl}#page=${relativePage}&view=FitH&zoom=page-fit`;
   const fitZoomPercent = zoomMode === 'fit' ? 100 : zoomLevel;
 
   return (
@@ -1814,7 +2200,7 @@ export const MultiInvoiceWorkspace = ({ docId: propDocId, docIds: propDocIds }) 
                 Fit
               </button>
               <a
-                href={pdfSourceUrl}
+                href={`${pdfSourceUrl}#view=FitH`}
                 target="_blank"
                 rel="noopener noreferrer"
                 className="emir-tb-btn"
@@ -1825,37 +2211,66 @@ export const MultiInvoiceWorkspace = ({ docId: propDocId, docIds: propDocIds }) 
             </div>
           </div>
 
-          <div className="emir-doc-body" ref={viewerBodyRef}>
+          <div
+            className="emir-doc-body"
+            ref={viewerBodyRef}
+            style={{
+              height: '100%',
+              maxHeight: '100%',
+              overflowY: 'auto',
+              /* auto (not hidden) so zoomed pages can be scrolled horizontally */
+              overflowX: 'auto',
+            }}
+          >
             {isImageFile(selectedInvoice) ? (
-              <div className="emir-doc-fit-stage">
+              <div
+                className="emir-doc-fit-stage"
+                style={{
+                  width: '100%',
+                  height: '100%',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  alignItems: 'center',
+                  /* Always flex-start: centering an overflowing image makes its
+                     top unreachable because the browser anchors overflow at the
+                     end in a flex container. */
+                  justifyContent: 'flex-start',
+                  overflowY: 'auto',
+                  overflowX: 'auto',
+                  boxSizing: 'border-box',
+                  padding: '16px',
+                }}
+              >
                 <img
                   key={`img-${activeDocId}-inv-${selectedInvoiceIndex}`}
                   className="emir-doc-fit-media"
                   src={`${API}/documents/${activeDocId}/file`}
                   alt={`${selectedInvoiceLabel} original document`}
-                  style={zoomMode === 'manual' ? {
-                    maxWidth: `${zoomLevel}%`,
-                    maxHeight: `${zoomLevel}%`,
-                    width: 'auto',
+                  style={{
+                    /* Fit-to-width: let the image fill the container width and
+                       grow naturally in height — the parent scrolls vertically. */
+                    width: zoomMode === 'fit' ? '100%' : `${zoomLevel}%`,
                     height: 'auto',
-                  } : undefined}
+                    maxWidth: 'none',
+                    /* Never constrain height — that crops the top/bottom */
+                    maxHeight: 'none',
+                    display: 'block',
+                    /* margin: 0 auto avoids the flex centering top-crop issue */
+                    margin: '0 auto',
+                    boxShadow: '0 4px 12px rgba(0, 0, 0, 0.3)',
+                    flexShrink: 0,
+                  }}
                 />
               </div>
             ) : (
-              <div
-                className={`emir-doc-fit-stage${zoomMode === 'manual' ? ' is-manual-zoom' : ''}`}
-                style={zoomMode === 'manual' ? {
-                  transform: `scale(${zoomLevel / 100})`,
-                  transformOrigin: 'center center',
-                } : undefined}
-              >
-                <iframe
-                  key={`doc-${activeDocId}-inv-${selectedInvoiceIndex}-p-${relativePage}-w-${viewerSize.width}-h-${viewerSize.height}`}
-                  className="emir-doc-iframe emir-doc-fit-media"
-                  src={pdfIframeSrc}
-                  title={`${selectedInvoiceLabel} original pages`}
-                />
-              </div>
+              <MultiInvoicePageViewer
+                key={`multi-doc-${activeDocId}-inv-${selectedInvoiceIndex}`}
+                pdfUrl={pdfSourceUrl}
+                pageNumber={relativePage}
+                zoomMode={zoomMode}
+                zoomLevel={zoomLevel}
+                containerRef={viewerBodyRef}
+              />
             )}
           </div>
         </section>

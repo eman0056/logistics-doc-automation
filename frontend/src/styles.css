@@ -872,8 +872,11 @@ img {
 
 .preview-box img {
   width: 100%;
-  height: 100%;
-  object-fit: contain;
+  max-width: 100%;
+  height: auto;
+  max-height: none;
+  display: block;
+  margin: 0 auto;
   background: #111827;
 }
 
@@ -1723,8 +1726,11 @@ img {
   flex-direction: column;
   background: #ffffff;
   border-radius: 6px;
-  overflow: hidden;
+  overflow-y: auto;
   margin-top: 10px;
+  position: relative;
+  width: 100%;
+  height: 100%;
 }
 
 .pdf-viewer-iframe {
@@ -2974,59 +2980,91 @@ img {
 
 .emir-doc-body {
   flex: 1;
-  background: #0b0f19;
+  background: #0f172a;
   position: relative;
   min-height: 0;
-  height: 100%;
+  overflow-y: auto;
+  /* auto not hidden: zoomed pages must scroll horizontally */
+  overflow-x: auto;
   display: flex;
   flex-direction: column;
-  overflow: hidden;
-}
-
-.emir-doc-fit-stage {
-  flex: 1;
-  min-height: 0;
+  align-items: center;
+  /* flex-start so the top of the canvas is at scrollTop=0, never hidden */
+  justify-content: flex-start;
   width: 100%;
   height: 100%;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  overflow: hidden;
-  padding: 0.5rem;
+  max-height: 100%;
   box-sizing: border-box;
 }
 
-.emir-doc-fit-stage.is-manual-zoom {
-  overflow: auto;
-  align-items: flex-start;
+.pdf-viewer-wrapper {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-start;
+  overflow-y: auto;
+  overflow-x: auto;
+  padding: 16px;
+  box-sizing: border-box;
+  width: 100%;
+  height: 100%;
+  max-height: 100%;
+}
+
+.pdf-viewer-canvas {
+  margin: 0 auto;
+  max-width: 100%;
+  /* max-height intentionally unset — let the canvas fill its natural size */
+  /* height is set inline by PdfPageViewer based on fit/zoom calculation */
+  object-fit: contain;
+  box-shadow: 0 8px 30px rgba(0, 0, 0, 0.45);
+  border-radius: 4px;
+  background: #ffffff;
+  display: block;
+  flex-shrink: 0;
+}
+
+.pdf-viewer-status-box {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
   justify-content: center;
+  height: 100%;
+  width: 100%;
+  gap: 8px;
+  padding: 20px;
+  text-align: center;
+}
+
+.emir-doc-fit-stage {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  /* flex-start always: centering an overflowing image hides its top edge */
+  justify-content: flex-start;
+  overflow-y: auto;
+  overflow-x: auto;
+  padding: 16px;
+  box-sizing: border-box;
+  width: 100%;
+  height: 100%;
 }
 
 .emir-doc-fit-media {
-  max-width: 100%;
-  max-height: 100%;
-  width: auto;
-  height: auto;
-  object-fit: contain;
   display: block;
+  /* Fill container width so the full page is visible; parent scrolls vertically */
+  width: 100%;
+  max-width: none;
+  height: auto;
+  /* Never constrain max-height — that crops the top/bottom of the page */
+  max-height: none;
   margin: 0 auto;
+  flex-shrink: 0;
   background: #fff;
-}
-
-.emir-doc-iframe {
-  width: 100%;
-  height: 100%;
-  min-height: 0;
-  border: none;
-  flex: 1;
-  background: #fff;
-}
-
-.emir-doc-fit-stage .emir-doc-iframe {
-  width: 100%;
-  height: 100%;
-  max-width: 100%;
-  max-height: 100%;
 }
 
 /* Professional invoice extraction states */
