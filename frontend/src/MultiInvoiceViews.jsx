@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import * as pdfjsLib from 'pdfjs-dist';
+import * as pdfjsLib from 'pdfjs-dist/build/pdf.js';
 import pdfWorkerUrl from 'pdfjs-dist/build/pdf.worker.min.js?url';
 import { apiGetJson, normalizeApiCacheUrl } from './dataCache.js';
 import { EscalationModal } from './EscalationModal.jsx';
