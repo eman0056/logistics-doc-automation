@@ -1,5 +1,5 @@
 {
-  "buildCommand": "npm --prefix frontend install && npm --prefix frontend run build",
+  "buildCommand": "cd frontend 2>/dev/null || true; npm install && npm run build",
   "outputDirectory": "frontend/dist",
   "rewrites": [
     {
