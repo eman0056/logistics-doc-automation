@@ -1,6 +1,6 @@
 import React, { Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { apiGetJson, normalizeApiCacheUrl } from './dataCache.js';
-import { UploadMultiView, MultiInvoiceWorkspace, ExtractionProcessingPanel } from './MultiInvoiceViews.jsx';
+import { UploadMultiView, MultiInvoiceWorkspace, ExtractionProcessingPanel, triggerInvoiceExtraction } from './MultiInvoiceViews.jsx';
 import { Escalations } from './Escalations.jsx';
 import { EscalationModal } from './EscalationModal.jsx';
 import { PreviewRange } from './PreviewRange.jsx';
@@ -702,7 +702,7 @@ function App() {
       }
 
       setUploading(true);
-      setStatusText('Uploading & running AI extraction pipeline for all files...');
+      setStatusText('Uploading document(s) and storing them securely...');
 
       const formData = new FormData();
       selectedFiles.forEach((file) => formData.append('file', file));
@@ -978,6 +978,11 @@ function App() {
     const [savingInvoice, setSavingInvoice] = useState(false);
     const [discarding, setDiscarding] = useState(false);
     const pollingRef = useRef({ cancelled: false, timeout: null, controller: null });
+    const extractionTriggeredRef = useRef(false);
+
+    useEffect(() => {
+      extractionTriggeredRef.current = false;
+    }, [docId]);
 
     useEffect(() => {
       let isMounted = true;
@@ -1001,90 +1006,113 @@ function App() {
     }, [docId]);
 
     useEffect(() => {
+      if (loadingDoc || !doc) {
+        return undefined;
+      }
+
       const hasRealExtraction = Object.keys(getSingleInvoiceData(doc)).length > 0;
-      const invoicesPending = doc?.invoices?.some((invoice) => !hasStoredInvoiceData(invoice) && invoice.extractionStatus !== 'EXTRACTED');
-      const isDocReady = doc && hasRealExtraction;
+      if (hasRealExtraction || doc.status === 'FAILED') {
+        setProcessing(false);
+      }
+      return undefined;
+    }, [doc, loadingDoc]);
+
+    const startSingleInvoiceExtraction = async () => {
+      if (!doc) return;
+
+      const hasRealExtraction = Object.keys(getSingleInvoiceData(doc)).length > 0;
+      if (hasRealExtraction) {
+        setProcessing(false);
+        return;
+      }
+
+      const invoiceRecord = doc.invoices?.[0] || {};
+      const invoiceId = invoiceRecord.id || invoiceRecord.invoiceId || `${docId}-invoice-1`;
+      const pageStart = Number(invoiceRecord.pageStart || 1);
+      const pageEnd = Number(invoiceRecord.pageEnd || doc.pageCount || pageStart);
       const terminalStatuses = new Set(['FAILED', 'EXTRACTED', 'APPROVED', 'INVOICE_GENERATED', 'IN_REVIEW']);
 
-      if (!doc) {
-        setProcessing(false);
-        return undefined;
+      pollingRef.current.cancelled = false;
+      setProcessing(true);
+      extractionTriggeredRef.current = true;
+
+      try {
+        console.log('[Single Invoice] User-triggered n8n extraction for review:', docId);
+        await triggerInvoiceExtraction({
+          documentId: docId,
+          id: invoiceId,
+          invoiceId: invoiceId,
+          invoiceIndex: invoiceRecord.invoiceIndex ?? 0,
+          pageStart,
+          pageEnd,
+          pages: Array.from({ length: Math.max(1, pageEnd - pageStart + 1) }, (_, i) => pageStart + i),
+        });
+      } catch (error) {
+        console.error('[Single Invoice] Extraction trigger failed:', error);
+        if (!pollingRef.current.cancelled) setProcessing(false);
+        return;
       }
 
-      if (terminalStatuses.has(doc.status)) {
-        setProcessing(false);
-        return undefined;
-      }
-
-      if (!isDocReady && !invoicesPending) {
-        pollingRef.current.cancelled = false;
-        const poll = async () => {
+      const poll = async () => {
+        if (pollingRef.current.cancelled) return;
+        pollingRef.current.controller?.abort();
+        pollingRef.current.controller = new AbortController();
+        try {
+          const requestOptions = { signal: pollingRef.current.controller.signal };
+          const statusRes = await fetchJson(`${API}/documents/${docId}/status?refresh=${Date.now()}`, requestOptions);
+          const status = await statusRes.json();
+          const documentsRes = await fetchJson(`${API}/documents?refresh=${Date.now()}`, requestOptions);
+          const documentsJson = await documentsRes.json();
+          const latestDoc = (documentsJson.documents || []).find((item) => item.id === docId);
           if (pollingRef.current.cancelled) return;
-          pollingRef.current.controller?.abort();
-          pollingRef.current.controller = new AbortController();
-          try {
-            const requestOptions = { signal: pollingRef.current.controller.signal };
-            const statusRes = await fetchJson(`${API}/documents/${docId}/status?refresh=${Date.now()}`, requestOptions);
-            const status = await statusRes.json();
-            const documentsRes = await fetchJson(`${API}/documents?refresh=${Date.now()}`, requestOptions);
-            const documentsJson = await documentsRes.json();
-            const latestDoc = (documentsJson.documents || []).find((item) => item.id === docId);
-            if (pollingRef.current.cancelled) return;
 
-            // Fix: status endpoint now returns extractedData — merge into doc to stop the spinner
-            if (latestDoc && status.extractedData && Object.keys(status.extractedData).length > 0) {
-              latestDoc.extraction = {
-                ...(latestDoc.extraction || {}),
+          if (latestDoc && status.extractedData && Object.keys(status.extractedData).length > 0) {
+            latestDoc.extraction = {
+              ...(latestDoc.extraction || {}),
+              extractedData: status.extractedData,
+              canonicalJson: JSON.stringify(status.extractedData),
+            };
+            if (Array.isArray(latestDoc.invoices) && latestDoc.invoices.length > 0) {
+              latestDoc.invoices[0] = {
+                ...latestDoc.invoices[0],
                 extractedData: status.extractedData,
                 canonicalJson: JSON.stringify(status.extractedData),
+                status: 'EXTRACTED',
+                extractionStatus: 'EXTRACTED',
               };
-              // Also hydrate the first invoice record when present
-              if (Array.isArray(latestDoc.invoices) && latestDoc.invoices.length > 0) {
-                latestDoc.invoices[0] = {
-                  ...latestDoc.invoices[0],
-                  extractedData: status.extractedData,
-                  canonicalJson: JSON.stringify(status.extractedData),
-                  status: 'EXTRACTED',
-                  extractionStatus: 'EXTRACTED',
-                };
-              }
             }
-            if (latestDoc) setDoc(latestDoc);
+          }
+          if (latestDoc) setDoc(latestDoc);
 
-            const terminalApiStatus = status?.status || '';
-            // Stop polling if isExtracted flag is set OR if we just got extractedData back
-            const stopPolling = Boolean(
-              status?.isExtracted ||
-              terminalStatuses.has(terminalApiStatus) ||
-              (status.extractedData && Object.keys(status.extractedData).length > 0)
-            );
-            if (stopPolling) {
-              setProcessing(false);
-              return;
-            }
-
-            if (status.status === 'FAILED') setProcessing(false);
-          } catch (error) {
-            if (error.name !== 'AbortError' && !pollingRef.current.cancelled) console.error(error);
+          const terminalApiStatus = status?.status || '';
+          const stopPolling = Boolean(
+            status?.isExtracted ||
+            terminalStatuses.has(terminalApiStatus) ||
+            (status.extractedData && Object.keys(status.extractedData).length > 0) ||
+            Object.keys(getSingleInvoiceData(latestDoc)).length > 0
+          );
+          if (stopPolling) {
             setProcessing(false);
             return;
           }
-          if (!pollingRef.current.cancelled) {
-            if (pollingRef.current.controller?.signal?.aborted) return;
-            pollingRef.current.timeout = window.setTimeout(poll, 1500);
+
+          if (status.status === 'FAILED') {
+            setProcessing(false);
+            return;
           }
-        };
-        poll();
-        setProcessing(true);
-        return () => {
-          pollingRef.current.cancelled = true;
-          if (pollingRef.current.timeout) window.clearTimeout(pollingRef.current.timeout);
-          pollingRef.current.controller?.abort();
-        };
-      }
-      setProcessing(false);
-      return undefined;
-    }, [doc, docId]);
+        } catch (error) {
+          if (error.name !== 'AbortError' && !pollingRef.current.cancelled) console.error(error);
+          setProcessing(false);
+          return;
+        }
+        if (!pollingRef.current.cancelled) {
+          if (pollingRef.current.controller?.signal?.aborted) return;
+          pollingRef.current.timeout = window.setTimeout(poll, 1500);
+        }
+      };
+
+      poll();
+    };
 
     useEffect(() => () => {
       pollingRef.current.cancelled = true;
@@ -1353,6 +1381,9 @@ function App() {
               <p className="subtle-copy mt-2">Edit the exact extracted key-value pairs before final generation.</p>
             </div>
             <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap' }}>
+              <button type="button" className="primary-btn" onClick={startSingleInvoiceExtraction} disabled={processing || !doc || Object.keys(getSingleInvoiceData(doc)).length > 0}>
+                {processing ? 'Extracting...' : 'Extract Invoice Data'}
+              </button>
               <button type="button" className="secondary-btn" onClick={discardDocument} disabled={discarding}>
                 {discarding ? 'Discarding...' : 'Discard'}
               </button>

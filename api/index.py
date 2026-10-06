@@ -165,16 +165,57 @@ def _build_multipart_body(fields, files):
     return b"".join(chunks), boundary
 
 
+def _document_invoice_count(doc_id):
+    """Return how many invoice rows exist for a document (defaults to 1)."""
+    if not doc_id:
+        return 1
+    conn = None
+    try:
+        conn = get_db()
+        cursor = execute_query(conn, "SELECT COUNT(*) FROM DocumentInvoice WHERE documentId = ?", (doc_id,))
+        row = cursor.fetchone()
+        count = int(row[0] or 0) if row else 0
+        return count if count > 0 else 1
+    except Exception as exc:
+        print(f"[n8n] Warning: could not resolve invoice count for documentId={doc_id}: {exc}")
+        return 1
+    finally:
+        if conn:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+
+def _resolve_extraction_webhook(doc_id):
+    """Pick Single vs Multiple Invoice n8n webhook from document invoice count."""
+    invoice_count = _document_invoice_count(doc_id)
+    if invoice_count >= 2:
+        webhook_url = (
+            os.getenv('MULTI_INVOICE_N8N_WEBHOOK_URL')
+            or os.getenv('N8N_WEBHOOK_URL')
+            or MULTI_INVOICE_WEBHOOK_URL
+        )
+        return webhook_url, 'multi-invoice', invoice_count
+    webhook_url = (
+        os.getenv('N8N_WEBHOOK_URL')
+        or os.getenv('SINGLE_INVOICE_N8N_WEBHOOK_URL')
+        or SINGLE_INVOICE_WEBHOOK_URL
+    )
+    return webhook_url, 'single-invoice', invoice_count
+
+
 def send_to_n8n_webhook(invoice_index, pages, base64_pdf, doc_id=None, raw_ocr_text=None, file_bytes=None, page_start_for_ocr=None, page_end_for_ocr=None, image_quality=None, invoice_id=None):
     """
     Send isolated invoice payload to n8n webhook.
     The attached PDF/file contains ONLY this invoice's pages — never the full multi-invoice document.
+    Routes to the Single Invoice workflow for 1-invoice docs, otherwise Multiple Invoice.
     """
-    webhook_url = os.getenv('MULTI_INVOICE_N8N_WEBHOOK_URL') or os.getenv('N8N_WEBHOOK_URL') or MULTI_INVOICE_WEBHOOK_URL
+    webhook_url, workflow_type, invoice_count = _resolve_extraction_webhook(doc_id)
     if not webhook_url:
         return {
             "success": False,
-            "error": "MULTI_INVOICE_N8N_WEBHOOK_URL not set in environment"
+            "error": "n8n webhook URL not set in environment"
         }
 
     page_start = pages[0] if isinstance(pages, (list, tuple)) and len(pages) > 0 else 1
@@ -209,8 +250,16 @@ def send_to_n8n_webhook(invoice_index, pages, base64_pdf, doc_id=None, raw_ocr_t
         else:
             image_quality = 0.5
 
-    # Build callback URL so n8n can POST extracted data back to us
-    app_base_url = os.getenv('APP_BASE_URL', 'https://logistics-doc-automation.vercel.app').rstrip('/')
+    # Build callback URL so n8n can POST extracted data back to us.
+    # Respect an explicit APP_BASE_URL. Only fall back to the production default
+    # when the app itself is running in a Vercel environment.
+    app_base_url = os.getenv('APP_BASE_URL')
+    if app_base_url and app_base_url.strip():
+        app_base_url = app_base_url.strip().rstrip('/')
+    elif os.getenv('VERCEL') or os.getenv('VERCEL_ENV') or os.getenv('VERCEL_URL'):
+        app_base_url = 'https://logistics-doc-automation.vercel.app'
+    else:
+        app_base_url = 'http://localhost:3000'
     callback_url = f"{app_base_url}/api/documents/{doc_id}/extraction/callback"
 
     payload = {
@@ -226,6 +275,8 @@ def send_to_n8n_webhook(invoice_index, pages, base64_pdf, doc_id=None, raw_ocr_t
         "rawOcrText": raw_ocr_text,
         "callbackUrl": callback_url,
         "imageQuality": image_quality,
+        "workflowType": workflow_type,
+        "detectedInvoiceCount": invoice_count,
         "timestamp": datetime.now().isoformat()
     }
 
@@ -240,6 +291,7 @@ def send_to_n8n_webhook(invoice_index, pages, base64_pdf, doc_id=None, raw_ocr_t
 
     print(
         f"[n8n] Sending isolated invoice invoiceId={resolved_invoice_id} documentId={doc_id} "
+        f"workflowType={workflow_type} invoiceCount={invoice_count} "
         f"pageStart={page_start} pageEnd={page_end} pages={page_list} fileSize={file_size} webhook={webhook_url}"
     )
 
@@ -259,6 +311,8 @@ def send_to_n8n_webhook(invoice_index, pages, base64_pdf, doc_id=None, raw_ocr_t
                 "callbackUrl": callback_url,
                 "rawOcrText": raw_ocr_text or "",
                 "imageQuality": str(image_quality),
+                "workflowType": workflow_type,
+                "detectedInvoiceCount": str(invoice_count),
                 "pdfBase64": base64_pdf,
                 "payload": json.dumps({k: v for k, v in payload.items() if k not in ("pdfBase64", "fileBase64")}),
             }

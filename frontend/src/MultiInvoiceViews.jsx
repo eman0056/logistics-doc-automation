@@ -1930,6 +1930,9 @@ export const MultiInvoiceWorkspace = ({ docId: propDocId, docIds: propDocIds }) 
     }
   };
 
+  // Upload must not trigger n8n automatically. Extraction begins only when the
+  // reviewer explicitly clicks the extraction action from the review workspace.
+
   useEffect(() => {
     let active = true;
     const load = async () => {
@@ -2532,7 +2535,16 @@ export const MultiInvoiceWorkspace = ({ docId: propDocId, docIds: propDocIds }) 
               </div>
             </div>
 
-            <div className="emir-summary-meta">
+            <div className="emir-summary-meta" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
+              {!hasExtractedData && !isPreparing && !isExtracting && (
+                <button
+                  type="button"
+                  className="primary-btn"
+                  onClick={() => runInvoiceExtraction(selectedInvoiceIndex, { force: true })}
+                >
+                  Extract Invoice Data
+                </button>
+              )}
               <span className={`status-pill ${isPoorQuality ? 'warning-strong' : selectedInvoice?.status === 'APPROVED' ? 'success' : isExtractionFailed ? 'danger' : (isPreparing || isExtracting) ? 'warning' : 'primary'}`}>
                 {isPoorQuality ? '⚠ Poor Image Quality' : invoiceStatusLabel}
               </span>
