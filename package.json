@@ -3,6 +3,6 @@
   "private": true,
   "version": "1.0.0",
   "scripts": {
-    "build": "cd frontend 2>/dev/null || true; npm install && npm run build"
+    "build": "npm install --prefix frontend && npm run --prefix frontend build"
   }
 }
