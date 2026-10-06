@@ -414,7 +414,7 @@ function App() {
           <a href="/documents" className="nav-link">Documents</a>
           <a href="/escalations" className="nav-link">Escalations</a>
           <a href="/preview" className="nav-link">Preview</a>
-          <a href="/documents/upload" className="nav-link">Upload Invoice</a>
+          <a href="/documents/upload" className="nav-link">Invoice Intake</a>
           <a href="/review-queue" className="nav-link">Review Queue</a>
           <a href="/invoices" className="nav-link">Invoices</a>
         </nav>
@@ -659,7 +659,7 @@ function App() {
               <h1 className="page-title">Documents Repository</h1>
               <p className="subtle-copy mt-2">View and manage ingested logistics paperwork.</p>
             </div>
-            <a href="/documents/upload" className="primary-btn">+ Upload New Document</a>
+            <a href="/documents/upload" className="primary-btn">+ Invoice Intake</a>
           </div>
 
           <div className="card table-card">
@@ -1526,7 +1526,7 @@ function App() {
               <h1 className="page-title">Generated Invoices Dashboard</h1>
               <p className="subtle-copy mt-2">Browse, print, and download generated billing invoices.</p>
             </div>
-            <a href="/documents/upload" className="primary-btn">+ New Invoice Upload</a>
+            <a href="/documents/upload" className="primary-btn">+ Invoice Intake</a>
           </div>
 
           <div className="card table-card">
@@ -1755,8 +1755,8 @@ function App() {
     case 'escalations': renderedRoute = <Escalations />; break;
     case 'flagged': renderedRoute = <FlaggedInvoicesView documents={documents} />; break;
     case 'preview': renderedRoute = <PreviewRange />; break;
-    case 'upload': renderedRoute = <UploadView />; break;
-    case 'upload-multi': renderedRoute = <UploadView />; break;
+    case 'upload': renderedRoute = <UploadMultiView />; break;
+    case 'upload-multi': renderedRoute = <UploadMultiView />; break;
     case 'multi-workspace': renderedRoute = <MultiInvoiceWorkspace docId={path.split('/')[2]} />; break;
     case 'batch-workspace': renderedRoute = <MultiInvoiceWorkspace />; break;
     case 'review': renderedRoute = <ReviewView />; break;

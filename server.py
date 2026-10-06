@@ -1033,11 +1033,50 @@ class LogisticsAutomationHandler(http.server.BaseHTTPRequestHandler):
                     )
                 conn.commit()
                 conn.close()
+
+                if invoice_count < 2:
+                    app_base_url = os.getenv("APP_BASE_URL", "https://logistics-doc-automation.vercel.app").rstrip('/')
+                    single_webhook_url = SINGLE_INVOICE_WEBHOOK_URL
+                    env_file = os.path.join(BASE_DIR, ".env.local")
+                    if os.path.exists(env_file):
+                        with open(env_file, "r") as ef:
+                            for line in ef:
+                                if line.startswith("N8N_WEBHOOK_URL="):
+                                    single_webhook_url = line.split("=", 1)[1].strip().strip('"')
+                                if line.startswith("APP_BASE_URL="):
+                                    app_base_url = line.split("=", 1)[1].strip().strip('"')
+                    
+                    def trigger_webhook_multi(url, data):
+                        import urllib.request
+                        import json
+                        req = urllib.request.Request(url, data=json.dumps(data).encode('utf-8'), headers={'Content-Type': 'application/json'})
+                        try:
+                            with urllib.request.urlopen(req, timeout=10) as response:
+                                response_body = response.read().decode('utf-8', errors='replace')
+                                print(f"Invoice routing: document={data.get('documentId')} count={data.get('detectedInvoiceCount')} workflow={data.get('workflowType')} webhook={url} response_status={response.status}")
+                        except Exception as e:
+                            print(f"Invoice routing webhook error: {e}")
+
+                    payload = {
+                        "documentId": res["documentId"],
+                        "storagePath": res["storagePath"],
+                        "fileName": res["fileName"],
+                        "fileBase64": base64.b64encode(file_bytes).decode('ascii'),
+                        "detectedInvoiceCount": invoice_count,
+                        "detectedInvoiceGroups": invoice_groups,
+                        "rawOcrText": "\n\f\n".join(group.get("rawOcrText", "") for group in invoice_groups),
+                        "workflowType": "single-invoice",
+                        "imageQuality": img_quality,
+                        "callbackUrl": f"{app_base_url}/api/documents/{res['documentId']}/extraction/callback"
+                    }
+                    import threading
+                    threading.Thread(target=trigger_webhook_multi, args=(single_webhook_url, payload), daemon=True).start()
                 
                 results.append(res["documentId"])
                 dispatches_list.append({
                     "documentId": res["documentId"],
                     "invoiceCount": invoice_count,
+                    "workflowType": "single-invoice" if invoice_count < 2 else "multi-invoice",
                     "invoiceGroups": invoice_groups
                 })
 
@@ -1711,7 +1750,7 @@ class LogisticsAutomationHandler(http.server.BaseHTTPRequestHandler):
               <nav class="flex items-center space-x-2 text-sm font-medium text-slate-600">
                 <a href="/" class="nav-link">Dashboard</a>
                 <a href="/documents" class="nav-link">Documents</a>
-                <a href="/documents/upload" class="nav-link">Upload</a>
+                <a href="/documents/upload" class="nav-link">Invoice Intake</a>
                 <a href="/review-queue" class="nav-link">Review Queue</a>
                 <a href="/invoices" class="nav-link">Invoices</a>
               </nav>
@@ -1876,7 +1915,7 @@ class LogisticsAutomationHandler(http.server.BaseHTTPRequestHandler):
                 <h1 class="text-2xl md:text-3xl font-bold tracking-tight text-slate-900">Documents Repository</h1>
                 <p class="text-sm text-slate-600 mt-2">View and manage ingested logistics paperwork.</p>
               </div>
-              <a href="/documents/upload" class="soft-button text-sm font-bold text-white px-5 py-3 rounded-2xl" style="background: linear-gradient(135deg, ${primaryColor}, ${primaryColor}dd);">+ Upload New Document</a>
+              <a href="/documents/upload" class="soft-button text-sm font-bold text-white px-5 py-3 rounded-2xl" style="background: linear-gradient(135deg, ${primaryColor}, ${primaryColor}dd);">+ Invoice Intake</a>
             </div>
           </div>
 
@@ -2775,7 +2814,7 @@ class LogisticsAutomationHandler(http.server.BaseHTTPRequestHandler):
               <h1 class="text-2xl font-bold text-white">Generated Invoices Dashboard</h1>
               <p class="text-sm text-slate-400">Browse, print, and download generated billing invoices.</p>
             </div>
-            <a href="/documents/upload" class="px-5 py-2.5 rounded-xl text-white font-bold text-sm" style="background-color: ${primaryColor}">+ New Invoice Upload</a>
+            <a href="/documents/upload" class="px-5 py-2.5 rounded-xl text-white font-bold text-sm" style="background-color: ${primaryColor}">+ Invoice Intake</a>
           </div>
 
           <div class="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden shadow-2xl">

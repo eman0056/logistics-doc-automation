@@ -321,12 +321,13 @@ export const UploadMultiView = () => {
     }
 
     const docId = data.docId || (data.documentIds && data.documentIds[0]);
-    const invoiceCount = data.totalInvoices || data.invoices?.length || 1;
-    updateEntry(entry.id, { status: FILE_STATUS.COMPLETED, documentId: docId, invoiceCount });
+    const dispatch = (data.dispatches && data.dispatches[0]) || {};
+    const invoiceCount = dispatch.invoiceCount || data.totalInvoices || data.invoices?.length || 1;
+    const workflowType = dispatch.workflowType || (invoiceCount > 1 ? 'multi-invoice' : 'single-invoice');
+
+    updateEntry(entry.id, { status: FILE_STATUS.COMPLETED, documentId: docId, invoiceCount, workflowType });
     rememberMultiInvoiceFile(docId, entry.file);
-    // Extraction is invoice-specific and starts automatically when the user selects an invoice
-    // in the Multi-Invoice Review Workspace — do not send the full document to n8n here.
-    return { success: true, docId, invoiceCount };
+    return { success: true, docId, invoiceCount, workflowType };
   };
 
   const handleProcessAll = async () => {
@@ -345,7 +346,7 @@ export const UploadMultiView = () => {
     for (let i = 0; i < readyEntries.length; i += CONCURRENCY) {
       const batch = readyEntries.slice(i, i + CONCURRENCY);
       const results = await Promise.all(batch.map((e) => processFile(e)));
-      results.forEach((r, idx) => {
+      results.forEach((r) => {
         if (r.success) {
           if (r.needsReview) { needsReview++; poorQuality++; }
           else { completed++; }
@@ -372,11 +373,27 @@ export const UploadMultiView = () => {
     updateEntry(entry.id, { status: FILE_STATUS.READY, error: null });
   };
 
-  const handleReviewInvoices = () => {
+  const handleReviewInvoices = async () => {
     const { docIds } = batchResults;
     if (docIds.length === 0) return;
     if (docIds.length === 1) {
-      window.location.assign(`/documents/${docIds[0]}/multi-workspace`);
+      const targetDocId = docIds[0];
+      try {
+        const res = await fetch(`${API}/documents/${targetDocId}`);
+        const data = await res.json();
+        const doc = data.document || data;
+        const invCount = Number(doc.invoiceCount ?? (doc.invoices ? doc.invoices.length : 1));
+        const isPoor = doc.status === 'POOR_IMAGE_QUALITY' || doc.status === 'Poor Image Quality' || doc.poorImageQuality;
+        if (isPoor) {
+          window.location.assign('/escalations');
+        } else if (invCount > 1) {
+          window.location.assign(`/documents/${targetDocId}/multi-workspace`);
+        } else {
+          window.location.assign(`/documents/${targetDocId}/review`);
+        }
+      } catch (e) {
+        window.location.assign(`/documents/${targetDocId}/review`);
+      }
     } else {
       window.location.assign(`/batch-workspace?ids=${docIds.join(',')}`);
     }
@@ -460,7 +477,7 @@ export const UploadMultiView = () => {
       <div className="section-header">
         <div>
           <div className="eyebrow">Workflow</div>
-          <h1 className="page-title">Upload Multiple Documents</h1>
+          <h1 className="page-title">Invoice Intake</h1>
           <p className="subtle-copy mt-2">Upload multiple PDF documents at once. Each document can contain one or multiple invoices.</p>
         </div>
       </div>
