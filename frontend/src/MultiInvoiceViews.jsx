@@ -1856,18 +1856,6 @@ export const MultiInvoiceWorkspace = ({ docId: propDocId, docIds: propDocIds }) 
     return () => { active = false; };
   }, [primaryDocId]);
 
-  // Auto-extract the selected invoice (invoice-specific, never full document)
-  useEffect(() => {
-    if (loading || !invoices.length) return;
-    const inv = invoices[selectedInvoiceIndex];
-    if (!inv) return;
-    if (invoiceHasRealExtraction(inv)) return;
-    const ui = normalizeInvoiceExtractionUi(inv);
-    if (ui !== EXTRACTION_UI.IDLE) return;
-    runInvoiceExtraction(selectedInvoiceIndex, { force: false });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [loading, selectedInvoiceIndex, invoices]);
-
   useEffect(() => {
     setPageOffset(0);
     setZoomMode('fit');
@@ -2784,7 +2772,10 @@ export const MultiInvoiceWorkspace = ({ docId: propDocId, docIds: propDocIds }) 
               <div
                 key={inv.id || globalIdx}
                 className={`emir-card ${isSelected ? 'is-selected' : ''}`}
-                onClick={() => setSelectedInvoiceIndex(globalIdx)}
+                onClick={() => {
+                  setSelectedInvoiceIndex(globalIdx);
+                  runInvoiceExtraction(globalIdx, { force: false });
+                }}
               >
                 <div className="emir-card-top">
                   <span className="emir-card-tag">{invLabel.toUpperCase()}</span>
