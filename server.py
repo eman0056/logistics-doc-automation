@@ -944,13 +944,25 @@ class LogisticsAutomationHandler(http.server.BaseHTTPRequestHandler):
         def trigger_webhook(url, data):
             import urllib.request
             import json
-            req = urllib.request.Request(url, data=json.dumps(data).encode('utf-8'), headers={'Content-Type': 'application/json'})
+            doc_id_log = data.get('documentId', '?')
+            workflow_log = data.get('workflowType', '?')
+            count_log = data.get('detectedInvoiceCount', '?')
+            print(f"[n8n] → Dispatching to webhook URL={url} documentId={doc_id_log} workflowType={workflow_log} invoiceCount={count_log}")
+            req = urllib.request.Request(
+                url,
+                data=json.dumps(data).encode('utf-8'),
+                headers={'Content-Type': 'application/json'},
+                method='POST'
+            )
             try:
-                with urllib.request.urlopen(req, timeout=10) as response:
-                  response_body = response.read().decode('utf-8', errors='replace')
-                  print(f"Invoice routing: document={data.get('documentId')} count={data.get('detectedInvoiceCount')} workflow={data.get('workflowType')} webhook={url} response_status={response.status} response={response_body[:500]}")
+                with urllib.request.urlopen(req, timeout=60) as response:
+                    response_body = response.read().decode('utf-8', errors='replace')
+                    print(f"[n8n] ✅ n8n accepted: documentId={doc_id_log} workflowType={workflow_log} status={response.status} response={response_body[:300]}")
+            except urllib.error.HTTPError as e:
+                body = e.read().decode('utf-8', errors='replace') if hasattr(e, 'read') else str(e)
+                print(f"[n8n] ❌ HTTP error dispatching to n8n: documentId={doc_id_log} url={url} status={e.code} body={body[:300]}")
             except Exception as e:
-                print(f"Invoice routing webhook error: document={data.get('documentId')} count={data.get('detectedInvoiceCount')} workflow={data.get('workflowType')} webhook={url} error={e}")
+                print(f"[n8n] ❌ Network error dispatching to n8n: documentId={doc_id_log} url={url} error={type(e).__name__}: {e}")
 
         results = []
         dispatches_list = []
@@ -991,11 +1003,27 @@ class LogisticsAutomationHandler(http.server.BaseHTTPRequestHandler):
                     "callbackUrl": f"{app_base_url}/api/documents/{res['documentId']}/extraction/callback"
                 }  # app_base_url already resolved via get_effective_base_url() above
                 
+                # Dispatch ALL documents to n8n (single and multi-invoice alike).
+                # For multi-invoice docs each invoice group is sent as a separate webhook call
+                # so n8n can process each invoice independently.
+                import threading
                 if invoice_count < 2:
-                    import threading
                     threading.Thread(target=trigger_webhook, args=(selected_webhook_url, payload), daemon=True).start()
                 else:
-                    print(f"[Backend] Multi-invoice upload stored without full-document n8n dispatch: doc={res['documentId']} invoices={invoice_count}")
+                    # Multi-invoice: dispatch each invoice group individually
+                    for grp_idx, grp in enumerate(invoice_groups):
+                        grp_payload = {
+                            **payload,
+                            "invoiceIndex": grp_idx,
+                            "invoiceId": f"{res['documentId']}-invoice-{grp_idx + 1}",
+                            "pageStart": grp.get("pageStart", 1),
+                            "pageEnd": grp.get("pageEnd", 1),
+                            "pages": list(range(int(grp.get("pageStart", 1)), int(grp.get("pageEnd", 1)) + 1)),
+                            "rawOcrText": grp.get("rawOcrText", ""),
+                            "workflowType": "multi-invoice",
+                        }
+                        threading.Thread(target=trigger_webhook, args=(selected_webhook_url, grp_payload), daemon=True).start()
+                    print(f"[Backend] Multi-invoice: dispatched {invoice_count} invoices to n8n for doc={res['documentId']}")
                 
                 conn = sqlite3.connect(DB_PATH)
                 cursor = conn.cursor()
@@ -1083,41 +1111,77 @@ class LogisticsAutomationHandler(http.server.BaseHTTPRequestHandler):
                 conn.commit()
                 conn.close()
 
-                if invoice_count < 2:
-                    app_base_url = get_effective_base_url()
-                    # Prefer MULTI_INVOICE_N8N_WEBHOOK_URL (what .env.local actually sets),
-                    # then N8N_WEBHOOK_URL, then the hardcoded single-invoice constant.
-                    single_webhook_url = (
-                        os.getenv('MULTI_INVOICE_N8N_WEBHOOK_URL')
-                        or os.getenv('N8N_WEBHOOK_URL')
-                        or SINGLE_INVOICE_WEBHOOK_URL
-                    )
-                    
-                    def trigger_webhook_multi(url, data):
-                        import urllib.request
-                        import json
-                        req = urllib.request.Request(url, data=json.dumps(data).encode('utf-8'), headers={'Content-Type': 'application/json'})
-                        try:
-                            with urllib.request.urlopen(req, timeout=10) as response:
-                                response_body = response.read().decode('utf-8', errors='replace')
-                                print(f"Invoice routing: document={data.get('documentId')} count={data.get('detectedInvoiceCount')} workflow={data.get('workflowType')} webhook={url} response_status={response.status}")
-                        except Exception as e:
-                            print(f"Invoice routing webhook error: {e}")
+                app_base_url = get_effective_base_url()
+                # Use MULTI_INVOICE_N8N_WEBHOOK_URL (set in .env.local), then N8N_WEBHOOK_URL, then hardcoded fallbacks.
+                single_webhook_url = (
+                    os.getenv('MULTI_INVOICE_N8N_WEBHOOK_URL')
+                    or os.getenv('N8N_WEBHOOK_URL')
+                    or SINGLE_INVOICE_WEBHOOK_URL
+                )
+                multi_webhook_url_resolved = (
+                    os.getenv('MULTI_INVOICE_N8N_WEBHOOK_URL')
+                    or os.getenv('N8N_WEBHOOK_URL')
+                    or MULTI_INVOICE_WEBHOOK_URL
+                )
 
-                    payload = {
-                        "documentId": res["documentId"],
-                        "storagePath": res["storagePath"],
-                        "fileName": res["fileName"],
-                        "fileBase64": base64.b64encode(file_bytes).decode('ascii'),
-                        "detectedInvoiceCount": invoice_count,
-                        "detectedInvoiceGroups": invoice_groups,
+                def trigger_webhook_multi(url, data):
+                    doc_id_log = data.get('documentId', '?')
+                    workflow_log = data.get('workflowType', '?')
+                    print(f"[n8n] → Dispatching to webhook URL={url} documentId={doc_id_log} workflowType={workflow_log}")
+                    req = urllib.request.Request(
+                        url,
+                        data=json.dumps(data).encode('utf-8'),
+                        headers={'Content-Type': 'application/json'},
+                        method='POST'
+                    )
+                    try:
+                        with urllib.request.urlopen(req, timeout=60) as response:
+                            response_body = response.read().decode('utf-8', errors='replace')
+                            print(f"[n8n] ✅ n8n accepted: documentId={doc_id_log} workflowType={workflow_log} status={response.status} response={response_body[:300]}")
+                    except urllib.error.HTTPError as e:
+                        body = e.read().decode('utf-8', errors='replace') if hasattr(e, 'read') else str(e)
+                        print(f"[n8n] ❌ HTTP error: documentId={doc_id_log} url={url} status={e.code} body={body[:300]}")
+                    except Exception as e:
+                        print(f"[n8n] ❌ Network error: documentId={doc_id_log} url={url} error={type(e).__name__}: {e}")
+
+                base_payload = {
+                    "documentId": res["documentId"],
+                    "storagePath": res["storagePath"],
+                    "fileName": res["fileName"],
+                    "fileBase64": base64.b64encode(file_bytes).decode('ascii'),
+                    "detectedInvoiceCount": invoice_count,
+                    "detectedInvoiceGroups": invoice_groups,
+                    "imageQuality": img_quality,
+                    "callbackUrl": f"{app_base_url}/api/documents/{res['documentId']}/extraction/callback"
+                }
+
+                import threading
+                if invoice_count < 2:
+                    # Single invoice: dispatch full document payload
+                    single_payload = {
+                        **base_payload,
                         "rawOcrText": "\n\f\n".join(group.get("rawOcrText", "") for group in invoice_groups),
                         "workflowType": "single-invoice",
-                        "imageQuality": img_quality,
-                        "callbackUrl": f"{app_base_url}/api/documents/{res['documentId']}/extraction/callback"  # app_base_url via get_effective_base_url()
+                        "invoiceIndex": 0,
+                        "pageStart": invoice_groups[0].get("pageStart", 1) if invoice_groups else 1,
+                        "pageEnd": invoice_groups[0].get("pageEnd", 1) if invoice_groups else 1,
                     }
-                    import threading
-                    threading.Thread(target=trigger_webhook_multi, args=(single_webhook_url, payload), daemon=True).start()
+                    threading.Thread(target=trigger_webhook_multi, args=(single_webhook_url, single_payload), daemon=True).start()
+                else:
+                    # Multi-invoice: dispatch each invoice group independently to n8n
+                    for grp_idx, grp in enumerate(invoice_groups):
+                        grp_payload = {
+                            **base_payload,
+                            "invoiceIndex": grp_idx,
+                            "invoiceId": f"{res['documentId']}-invoice-{grp_idx + 1}",
+                            "pageStart": grp.get("pageStart", 1),
+                            "pageEnd": grp.get("pageEnd", 1),
+                            "pages": list(range(int(grp.get("pageStart", 1)), int(grp.get("pageEnd", 1)) + 1)),
+                            "rawOcrText": grp.get("rawOcrText", ""),
+                            "workflowType": "multi-invoice",
+                        }
+                        threading.Thread(target=trigger_webhook_multi, args=(multi_webhook_url_resolved, grp_payload), daemon=True).start()
+                    print(f"[Backend] Multi-invoice: dispatched {invoice_count} invoices to n8n for doc={res['documentId']}")
                 
                 results.append(res["documentId"])
                 dispatches_list.append({
@@ -1322,47 +1386,44 @@ class LogisticsAutomationHandler(http.server.BaseHTTPRequestHandler):
             conn_q.commit()
             conn_q.close()
 
-        webhook_result = send_to_n8n_webhook(
-            invoice_index, list(range(int(page_start), int(page_end) + 1)), base64_pdf, doc_id=doc_id,
-            file_path=file_path, page_start_for_ocr=page_start, page_end_for_ocr=page_end,
-            image_quality=image_quality, invoice_id=resolved_invoice_id
-        )
-        if not webhook_result["success"]:
-            self._set_document_invoice_state(doc_id, resolved_invoice_id, invoice_index, page_start, page_end, "FAILED")
-            return self._send_json({
-                "success": False,
-                "invoiceId": resolved_invoice_id,
-                "documentId": doc_id,
-                "pageStart": page_start,
-                "pageEnd": page_end,
-                "status": webhook_result.get("status"),
-                "error": webhook_result.get("error") or "Extraction failed",
-            }, 500)
-
-        extracted_data = webhook_result.get("extractedData")
-        saved_synchronously = False
-        if isinstance(extracted_data, dict):
-            inner = extracted_data.get("extractedData") if isinstance(extracted_data.get("extractedData"), dict) else extracted_data
-            if isinstance(inner, dict) and any(inner.get(k) for k in (
-                "invoiceHeader", "header", "shipmentDetails", "chargeLineItems", "invoiceNumber", "lineItems"
-            )):
-                self._set_document_invoice_state(
-                    doc_id, resolved_invoice_id, invoice_index, page_start, page_end, "EXTRACTED", canonical=inner
-                )
-                # Fix: also mark the parent Document as EXTRACTED so status polling resolves
-                try:
-                    conn_sync = sqlite3.connect(DB_PATH)
-                    cur_sync = conn_sync.cursor()
-                    cur_sync.execute(
-                        "UPDATE Document SET status = 'EXTRACTED' WHERE id = ? AND status NOT IN ('POOR_IMAGE_QUALITY', 'IN_REVIEW', 'APPROVED', 'INVOICE_GENERATED');",
-                        (doc_id,)
+        # Dispatch to n8n in a background thread so the HTTP response is returned
+        # to the frontend immediately. The frontend polls /api/documents/<id>/status
+        # until status becomes EXTRACTED. n8n posts back to callbackUrl when done.
+        def _dispatch_to_n8n():
+            result = send_to_n8n_webhook(
+                invoice_index, list(range(int(page_start), int(page_end) + 1)), base64_pdf, doc_id=doc_id,
+                file_path=file_path, page_start_for_ocr=page_start, page_end_for_ocr=page_end,
+                image_quality=image_quality, invoice_id=resolved_invoice_id
+            )
+            if not result["success"]:
+                print(f"[Backend] ❌ n8n dispatch failed: invoiceId={resolved_invoice_id} error={result.get('error')}")
+                self._set_document_invoice_state(doc_id, resolved_invoice_id, invoice_index, page_start, page_end, "FAILED")
+                return
+            # If n8n responded synchronously with extracted data, save it immediately.
+            extracted = result.get("extractedData")
+            if isinstance(extracted, dict):
+                inner = extracted.get("extractedData") if isinstance(extracted.get("extractedData"), dict) else extracted
+                if isinstance(inner, dict) and any(inner.get(k) for k in (
+                    "invoiceHeader", "header", "shipmentDetails", "chargeLineItems", "invoiceNumber", "lineItems"
+                )):
+                    self._set_document_invoice_state(
+                        doc_id, resolved_invoice_id, invoice_index, page_start, page_end, "EXTRACTED", canonical=inner
                     )
-                    conn_sync.commit()
-                    conn_sync.close()
-                except Exception as sync_exc:
-                    print(f"[Backend] Warning: could not update Document status synchronously: {sync_exc}")
-                saved_synchronously = True
+                    try:
+                        conn_sync = sqlite3.connect(DB_PATH)
+                        cur_sync = conn_sync.cursor()
+                        cur_sync.execute(
+                            "UPDATE Document SET status = 'EXTRACTED' WHERE id = ? AND status NOT IN ('POOR_IMAGE_QUALITY', 'IN_REVIEW', 'APPROVED', 'INVOICE_GENERATED');",
+                            (doc_id,)
+                        )
+                        conn_sync.commit()
+                        conn_sync.close()
+                    except Exception as sync_exc:
+                        print(f"[Backend] Warning: could not update Document status: {sync_exc}")
 
+        threading.Thread(target=_dispatch_to_n8n, daemon=True).start()
+
+        # Respond immediately — frontend will poll /status until EXTRACTED
         return self._send_json({
             "success": True,
             "invoiceId": resolved_invoice_id,
@@ -1371,8 +1432,8 @@ class LogisticsAutomationHandler(http.server.BaseHTTPRequestHandler):
             "pageStart": page_start,
             "pageEnd": page_end,
             "imageQuality": image_quality,
-            "savedSynchronously": saved_synchronously,
-            "extractedData": extracted_data
+            "status": "EXTRACTING",
+            "message": "Extraction dispatched to n8n. Poll /status for completion."
         })
             
     def _handle_batch_generate(self):

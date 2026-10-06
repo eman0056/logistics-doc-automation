@@ -45,7 +45,47 @@ function formatFileSize(bytes) {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
-export const MULTI_INVOICE_N8N_WEBHOOK_URL = 'https://n8n.provelopers.net/webhook/cfc18821-b562-4b0f-8d34-457f83e03f2e';
+/** Production n8n webhook URL (hard-coded fallback). Never use /webhook-test/ in production. */
+const N8N_WEBHOOK_PROD = 'https://n8n.provelopers.net/webhook/cfc18821-b562-4b0f-8d34-457f83e03f2e';
+
+/**
+ * Resolve the n8n webhook URL to call.
+ *
+ * Priority:
+ *   1. VITE_N8N_WEBHOOK_URL env var  (set in frontend/.env.local)
+ *   2. Hard-coded production fallback (N8N_WEBHOOK_PROD)
+ *
+ * In development the Vite proxy rewrites /api/n8n → https://n8n.provelopers.net
+ * so the browser never calls n8n cross-origin (avoids CORS pre-flight failures).
+ */
+function resolveN8nWebhookUrl() {
+  const envUrl = import.meta.env.VITE_N8N_WEBHOOK_URL;
+  const baseUrl = (envUrl || N8N_WEBHOOK_PROD).trim();
+
+  // Guard: never use /webhook-test/ in production builds.
+  if (import.meta.env.PROD && baseUrl.includes('/webhook-test/')) {
+    console.warn('[n8n] VITE_N8N_WEBHOOK_URL contains /webhook-test/ — switching to /webhook/ for production.');
+    return baseUrl.replace('/webhook-test/', '/webhook/');
+  }
+
+  // In dev mode: route through Vite proxy (/api/n8n → n8n host) to avoid CORS.
+  // Extract only the path portion after the host so the proxy can prefix it.
+  if (import.meta.env.DEV) {
+    try {
+      const parsed = new URL(baseUrl);
+      // e.g. /webhook/cfc18821-b562-4b0f-8d34-457f83e03f2e
+      return `/api/n8n${parsed.pathname}${parsed.search}`;
+    } catch {
+      // baseUrl is already a relative path — use as-is
+      return baseUrl;
+    }
+  }
+
+  return baseUrl;
+}
+
+/** @deprecated Use resolveN8nWebhookUrl() — kept for any legacy imports. */
+export const MULTI_INVOICE_N8N_WEBHOOK_URL = N8N_WEBHOOK_PROD;
 
 const localMultiInvoiceFiles = new Map();
 
@@ -302,21 +342,108 @@ export const UploadMultiView = () => {
   const processFile = async (entry) => {
     updateEntry(entry.id, { status: FILE_STATUS.UPLOADING, error: null });
 
-    const formData = new FormData();
-    formData.append('file', entry.file);
+    // ── Step 1: Upload file to backend ──────────────────────────────────────
+    const uploadFormData = new FormData();
+    // Do NOT set Content-Type manually — the browser sets it with the correct
+    // multipart boundary when FormData is the fetch body.
+    uploadFormData.append('file', entry.file);
+
+    const uploadUrl = `${API}/documents/upload-multi`;
+    const uploadMethod = 'POST';
+    console.log('[n8n Upload] Sending file to backend:', { url: uploadUrl, method: uploadMethod, fileName: entry.file.name });
+
+    const uploadController = new AbortController();
+    const uploadTimeout = setTimeout(() => uploadController.abort(), 120_000); // 120 s
 
     let data;
     try {
-      let res = await fetch(`${API}/upload-multi-invoice`, { method: 'POST', body: formData });
-      if (!res.ok) res = await fetch(`${API}/documents/upload-multi`, { method: 'POST', body: formData });
+      const res = await fetch(uploadUrl, {
+        method: uploadMethod,
+        body: uploadFormData,
+        signal: uploadController.signal,
+        // ⚠ No Content-Type header — let the browser set multipart/form-data with boundary
+      });
+      clearTimeout(uploadTimeout);
+
+      if (!res.ok) {
+        const errText = await res.text().catch(() => `HTTP ${res.status}`);
+        const errorMsg = `Cannot reach n8n server — backend responded ${res.status}: ${errText}`;
+        console.error('[n8n Upload] Non-OK response:', { url: uploadUrl, status: res.status, body: errText });
+        updateEntry(entry.id, { status: FILE_STATUS.FAILED, error: errorMsg });
+        return { success: false };
+      }
+
       data = await res.json();
-    } catch (netErr) {
-      updateEntry(entry.id, { status: FILE_STATUS.FAILED, error: 'Network error — could not reach server.' });
+    } catch (fetchErr) {
+      clearTimeout(uploadTimeout);
+      const isTimeout = fetchErr.name === 'AbortError';
+      const errorMsg = isTimeout
+        ? 'Cannot reach n8n server — request timed out after 120 seconds.'
+        : `Cannot reach n8n server — ${fetchErr.message}`;
+      console.error('[n8n Upload] Fetch error:', {
+        url: uploadUrl,
+        method: uploadMethod,
+        errorName: fetchErr.name,
+        errorMessage: fetchErr.message,
+        isTimeout,
+      });
+      updateEntry(entry.id, { status: FILE_STATUS.FAILED, error: errorMsg });
       return { success: false };
     }
 
     if (!data.success) {
-      updateEntry(entry.id, { status: FILE_STATUS.FAILED, error: data.error || 'Upload failed.' });
+      const errorMsg = data.error || 'Upload failed — backend returned success: false.';
+      console.error('[n8n Upload] Backend failure:', { url: uploadUrl, response: data });
+      updateEntry(entry.id, { status: FILE_STATUS.FAILED, error: errorMsg });
+      return { success: false };
+    }
+
+    // ── Step 2: Dispatch to n8n directly ────────────────────────────────────
+    const n8nUrl = resolveN8nWebhookUrl();
+    const n8nMethod = 'POST';
+    console.log('[n8n Dispatch] Sending to n8n webhook:', { url: n8nUrl, method: n8nMethod, fileName: entry.file.name });
+
+    const n8nFormData = new FormData();
+    n8nFormData.append('file', entry.file);
+    // Pass the backend docId so n8n can correlate the record
+    const docIdEarly = data.docId || (data.documentIds && data.documentIds[0]);
+    if (docIdEarly) n8nFormData.append('docId', String(docIdEarly));
+
+    const n8nController = new AbortController();
+    const n8nTimeout = setTimeout(() => n8nController.abort(), 120_000); // 120 s
+
+    try {
+      const n8nRes = await fetch(n8nUrl, {
+        method: n8nMethod,
+        body: n8nFormData,
+        signal: n8nController.signal,
+        // ⚠ No Content-Type — browser sets multipart/form-data with boundary
+      });
+      clearTimeout(n8nTimeout);
+
+      if (!n8nRes.ok) {
+        const errText = await n8nRes.text().catch(() => `HTTP ${n8nRes.status}`);
+        const errorMsg = `Cannot reach n8n server — n8n responded ${n8nRes.status}: ${errText}`;
+        console.error('[n8n Dispatch] Non-OK response from n8n:', { url: n8nUrl, status: n8nRes.status, body: errText });
+        updateEntry(entry.id, { status: FILE_STATUS.FAILED, error: errorMsg });
+        return { success: false };
+      }
+
+      console.log('[n8n Dispatch] n8n accepted the request:', { url: n8nUrl, status: n8nRes.status });
+    } catch (n8nErr) {
+      clearTimeout(n8nTimeout);
+      const isTimeout = n8nErr.name === 'AbortError';
+      const errorMsg = isTimeout
+        ? 'Cannot reach n8n server — n8n request timed out after 120 seconds.'
+        : `Cannot reach n8n server — ${n8nErr.message}`;
+      console.error('[n8n Dispatch] Fetch error:', {
+        url: n8nUrl,
+        method: n8nMethod,
+        errorName: n8nErr.name,
+        errorMessage: n8nErr.message,
+        isTimeout,
+      });
+      updateEntry(entry.id, { status: FILE_STATUS.FAILED, error: errorMsg });
       return { success: false };
     }
 
