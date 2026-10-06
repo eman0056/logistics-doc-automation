@@ -1031,17 +1031,33 @@ function App() {
             const latestDoc = (documentsJson.documents || []).find((item) => item.id === docId);
             if (pollingRef.current.cancelled) return;
 
+            // Fix: status endpoint now returns extractedData — merge into doc to stop the spinner
             if (latestDoc && status.extractedData && Object.keys(status.extractedData).length > 0) {
               latestDoc.extraction = {
                 ...(latestDoc.extraction || {}),
                 extractedData: status.extractedData,
                 canonicalJson: JSON.stringify(status.extractedData),
               };
+              // Also hydrate the first invoice record when present
+              if (Array.isArray(latestDoc.invoices) && latestDoc.invoices.length > 0) {
+                latestDoc.invoices[0] = {
+                  ...latestDoc.invoices[0],
+                  extractedData: status.extractedData,
+                  canonicalJson: JSON.stringify(status.extractedData),
+                  status: 'EXTRACTED',
+                  extractionStatus: 'EXTRACTED',
+                };
+              }
             }
             if (latestDoc) setDoc(latestDoc);
 
             const terminalApiStatus = status?.status || '';
-            const stopPolling = Boolean(status?.isExtracted || terminalStatuses.has(terminalApiStatus));
+            // Stop polling if isExtracted flag is set OR if we just got extractedData back
+            const stopPolling = Boolean(
+              status?.isExtracted ||
+              terminalStatuses.has(terminalApiStatus) ||
+              (status.extractedData && Object.keys(status.extractedData).length > 0)
+            );
             if (stopPolling) {
               setProcessing(false);
               return;

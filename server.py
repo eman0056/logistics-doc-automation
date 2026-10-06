@@ -45,6 +45,32 @@ def load_environment():
 
 load_environment()
 
+VERCEL_DEFAULT_URL = "https://logistics-doc-automation.vercel.app"
+
+def get_effective_base_url():
+    """Return the base URL used to construct n8n callback URLs.
+
+    When APP_BASE_URL is still pointing at the Vercel production domain and the
+    server is running locally (port 3000), n8n callbacks will never reach this
+    process.  We warn loudly and fall back to http://localhost:3000 so that at
+    least local-to-local testing works.
+
+    For production or tunnel setups, set APP_BASE_URL to the publicly reachable
+    URL (e.g. https://your-ngrok-id.ngrok-free.app) in .env.local.
+    """
+    base = os.getenv('APP_BASE_URL', VERCEL_DEFAULT_URL).rstrip('/')
+    if base == VERCEL_DEFAULT_URL.rstrip('/'):
+        # Running locally but APP_BASE_URL still points to Vercel — callbacks
+        # will be sent to production and never reach this server.
+        print(
+            "[WARNING] APP_BASE_URL is set to the Vercel production URL. "
+            "n8n callbacks will NOT reach this local server. "
+            "Set APP_BASE_URL to your ngrok/tunnel URL in .env.local for local extraction to work. "
+            "Falling back to http://localhost:3000 for callbacks."
+        )
+        base = f"http://localhost:{PORT}"
+    return base
+
 def extract_invoice_pages(pdf_source, start_page, end_page):
     """
     Extract ONLY specific pages from PDF (1-indexed start_page and end_page)
@@ -184,7 +210,7 @@ def send_to_n8n_webhook(invoice_index, pages, base64_pdf, doc_id=None, raw_ocr_t
                 raw_ocr_text = ""
 
     # Build callback URL so n8n can POST extracted data back to us
-    app_base_url = os.getenv('APP_BASE_URL', 'https://logistics-doc-automation.vercel.app').rstrip('/')
+    app_base_url = get_effective_base_url()
     callback_url = f"{app_base_url}/api/documents/{doc_id}/extraction/callback"
 
     if image_quality is None:
@@ -807,9 +833,31 @@ class LogisticsAutomationHandler(http.server.BaseHTTPRequestHandler):
         if is_poor:
             review_url = "/escalations"
         elif invoice_count > 1:
-            review_url = f"/documents/{row[0]}/invoices"
+            review_url = f"/documents/{row[0]}/multi-workspace"
         else:
             review_url = f"/documents/{row[0]}/review"
+
+        # Fix: include extractedData in status response so frontend polling can
+        # hydrate the review view directly without a second documents fetch.
+        # (Original conn was already closed above — open a fresh one.)
+        extracted_data_payload = None
+        try:
+            conn2 = sqlite3.connect(DB_PATH)
+            cursor2 = conn2.cursor()
+            cursor2.execute(
+                "SELECT canonicalJson FROM DocumentInvoice WHERE documentId = ? ORDER BY invoiceIndex ASC LIMIT 1;",
+                (row[0],)
+            )
+            inv_row = cursor2.fetchone()
+            conn2.close()
+            if inv_row and inv_row[0]:
+                try:
+                    extracted_data_payload = json.loads(inv_row[0])
+                except (TypeError, ValueError):
+                    extracted_data_payload = None
+        except Exception:
+            pass
+
         self._send_json({
             "success": True,
             "documentId": row[0],
@@ -818,7 +866,8 @@ class LogisticsAutomationHandler(http.server.BaseHTTPRequestHandler):
             "isPoorImageQuality": is_poor,
             "isExtracted": is_extracted,
             "overallConfidence": row[3],
-            "reviewUrl": review_url
+            "reviewUrl": review_url,
+            "extractedData": extracted_data_payload
         })
 
     def _handle_delete_document(self, doc_id):
@@ -878,7 +927,7 @@ class LogisticsAutomationHandler(http.server.BaseHTTPRequestHandler):
         temp_dir = os.path.join(BASE_DIR, "tmp_uploads")
         os.makedirs(temp_dir, exist_ok=True)
         
-        app_base_url = os.getenv("APP_BASE_URL", "https://logistics-doc-automation.vercel.app").rstrip('/')
+        app_base_url = get_effective_base_url()
         single_webhook_url = SINGLE_INVOICE_WEBHOOK_URL
         multi_webhook_url = MULTI_INVOICE_WEBHOOK_URL
         env_file = os.path.join(BASE_DIR, ".env.local")
@@ -940,7 +989,7 @@ class LogisticsAutomationHandler(http.server.BaseHTTPRequestHandler):
                     "workflowType": workflow_type,
                     "imageQuality": img_quality,
                     "callbackUrl": f"{app_base_url}/api/documents/{res['documentId']}/extraction/callback"
-                }
+                }  # app_base_url already resolved via get_effective_base_url() above
                 
                 if invoice_count < 2:
                     import threading
@@ -1035,16 +1084,14 @@ class LogisticsAutomationHandler(http.server.BaseHTTPRequestHandler):
                 conn.close()
 
                 if invoice_count < 2:
-                    app_base_url = os.getenv("APP_BASE_URL", "https://logistics-doc-automation.vercel.app").rstrip('/')
-                    single_webhook_url = SINGLE_INVOICE_WEBHOOK_URL
-                    env_file = os.path.join(BASE_DIR, ".env.local")
-                    if os.path.exists(env_file):
-                        with open(env_file, "r") as ef:
-                            for line in ef:
-                                if line.startswith("N8N_WEBHOOK_URL="):
-                                    single_webhook_url = line.split("=", 1)[1].strip().strip('"')
-                                if line.startswith("APP_BASE_URL="):
-                                    app_base_url = line.split("=", 1)[1].strip().strip('"')
+                    app_base_url = get_effective_base_url()
+                    # Prefer MULTI_INVOICE_N8N_WEBHOOK_URL (what .env.local actually sets),
+                    # then N8N_WEBHOOK_URL, then the hardcoded single-invoice constant.
+                    single_webhook_url = (
+                        os.getenv('MULTI_INVOICE_N8N_WEBHOOK_URL')
+                        or os.getenv('N8N_WEBHOOK_URL')
+                        or SINGLE_INVOICE_WEBHOOK_URL
+                    )
                     
                     def trigger_webhook_multi(url, data):
                         import urllib.request
@@ -1067,7 +1114,7 @@ class LogisticsAutomationHandler(http.server.BaseHTTPRequestHandler):
                         "rawOcrText": "\n\f\n".join(group.get("rawOcrText", "") for group in invoice_groups),
                         "workflowType": "single-invoice",
                         "imageQuality": img_quality,
-                        "callbackUrl": f"{app_base_url}/api/documents/{res['documentId']}/extraction/callback"
+                        "callbackUrl": f"{app_base_url}/api/documents/{res['documentId']}/extraction/callback"  # app_base_url via get_effective_base_url()
                     }
                     import threading
                     threading.Thread(target=trigger_webhook_multi, args=(single_webhook_url, payload), daemon=True).start()
@@ -1293,6 +1340,7 @@ class LogisticsAutomationHandler(http.server.BaseHTTPRequestHandler):
             }, 500)
 
         extracted_data = webhook_result.get("extractedData")
+        saved_synchronously = False
         if isinstance(extracted_data, dict):
             inner = extracted_data.get("extractedData") if isinstance(extracted_data.get("extractedData"), dict) else extracted_data
             if isinstance(inner, dict) and any(inner.get(k) for k in (
@@ -1301,6 +1349,19 @@ class LogisticsAutomationHandler(http.server.BaseHTTPRequestHandler):
                 self._set_document_invoice_state(
                     doc_id, resolved_invoice_id, invoice_index, page_start, page_end, "EXTRACTED", canonical=inner
                 )
+                # Fix: also mark the parent Document as EXTRACTED so status polling resolves
+                try:
+                    conn_sync = sqlite3.connect(DB_PATH)
+                    cur_sync = conn_sync.cursor()
+                    cur_sync.execute(
+                        "UPDATE Document SET status = 'EXTRACTED' WHERE id = ? AND status NOT IN ('POOR_IMAGE_QUALITY', 'IN_REVIEW', 'APPROVED', 'INVOICE_GENERATED');",
+                        (doc_id,)
+                    )
+                    conn_sync.commit()
+                    conn_sync.close()
+                except Exception as sync_exc:
+                    print(f"[Backend] Warning: could not update Document status synchronously: {sync_exc}")
+                saved_synchronously = True
 
         return self._send_json({
             "success": True,
@@ -1310,6 +1371,7 @@ class LogisticsAutomationHandler(http.server.BaseHTTPRequestHandler):
             "pageStart": page_start,
             "pageEnd": page_end,
             "imageQuality": image_quality,
+            "savedSynchronously": saved_synchronously,
             "extractedData": extracted_data
         })
             

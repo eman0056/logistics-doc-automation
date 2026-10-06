@@ -1210,10 +1210,12 @@ export const DocumentViewer = ({ docId, selectedGroup }) => {
 export const ExtractionProcessingPanel = ({ invoiceIndex, pageStart, pageEnd, isSingleInvoice = false }) => {
   const [currentStep, setCurrentStep] = useState(1);
   const [progress, setProgress] = useState(25);
+  const [timedOut, setTimedOut] = useState(false);
 
   useEffect(() => {
     setCurrentStep(1);
     setProgress(25);
+    setTimedOut(false);
 
     const t1 = setTimeout(() => {
       setCurrentStep(2);
@@ -1229,10 +1231,17 @@ export const ExtractionProcessingPanel = ({ invoiceIndex, pageStart, pageEnd, is
       setProgress(94);
     }, 5500);
 
+    // After 90 seconds stuck at 94%, show a graceful "still processing" fallback
+    // instead of hanging indefinitely (occurs when callback URL is misconfigured).
+    const tTimeout = setTimeout(() => {
+      setTimedOut(true);
+    }, 90000);
+
     return () => {
       clearTimeout(t1);
       clearTimeout(t2);
       clearTimeout(t3);
+      clearTimeout(tTimeout);
     };
   }, [invoiceIndex]);
 
@@ -1257,23 +1266,27 @@ export const ExtractionProcessingPanel = ({ invoiceIndex, pageStart, pageEnd, is
         </div>
         <div className="processing-status-tag">
           <span className="processing-live-dot" />
-          <span>Processing</span>
+          <span>{timedOut ? 'Waiting' : 'Processing'}</span>
         </div>
       </div>
 
       <div className="processing-card-body">
         <div className="processing-title-section">
-          <h3 className="processing-title">Extracting Invoice Data</h3>
+          <h3 className="processing-title">
+            {timedOut ? 'Still Processing…' : 'Extracting Invoice Data'}
+          </h3>
           <p className="processing-subtitle">
-            {isSingleInvoice
-              ? 'AI is analyzing your invoice and preparing the extracted information.'
-              : 'AI is analyzing your document and preparing the extracted information.'}
+            {timedOut
+              ? 'This is taking longer than expected. The AI engine is still working — results will appear automatically once ready. You can leave this page and come back.'
+              : isSingleInvoice
+                ? 'AI is analyzing your invoice and preparing the extracted information.'
+                : 'AI is analyzing your document and preparing the extracted information.'}
           </p>
         </div>
 
         <div className="processing-bar-wrapper">
           <div className="processing-bar-background">
-            <div 
+            <div
               className="processing-bar-fill"
               style={{ width: `${progress}%` }}
             >
@@ -1286,40 +1299,56 @@ export const ExtractionProcessingPanel = ({ invoiceIndex, pageStart, pageEnd, is
           </div>
         </div>
 
-        <div className="processing-steps-container">
-          {steps.map((step) => {
-            const isDone = step.id < currentStep;
-            const isActive = step.id === currentStep;
-            const isPending = step.id > currentStep;
+        {timedOut ? (
+          <div style={{
+            marginTop: '1.25rem',
+            padding: '0.75rem 1rem',
+            background: 'rgba(251,191,36,0.08)',
+            border: '1px solid rgba(251,191,36,0.25)',
+            borderRadius: '8px',
+            fontSize: '13px',
+            color: 'var(--text-muted, #94a3b8)',
+            lineHeight: 1.5,
+          }}>
+            ⏳ <strong style={{ color: '#fbbf24' }}>Taking longer than expected.</strong>
+            {' '}If you configured a tunnel URL in <code>.env.local</code>, try reloading. Otherwise check that <code>APP_BASE_URL</code> is set to your ngrok URL so n8n can call back to this server.
+          </div>
+        ) : (
+          <div className="processing-steps-container">
+            {steps.map((step) => {
+              const isDone = step.id < currentStep;
+              const isActive = step.id === currentStep;
+              const isPending = step.id > currentStep;
 
-            return (
-              <div 
-                key={step.id}
-                className={`proc-step-row ${isDone ? 'is-done' : ''} ${isActive ? 'is-active' : ''} ${isPending ? 'is-pending' : ''}`}
-              >
-                <div className="proc-step-indicator">
-                  {isDone && (
-                    <span className="proc-icon proc-icon-check">✓</span>
-                  )}
-                  {isActive && (
-                    <span className="proc-icon proc-icon-dot">
-                      <span className="proc-dot-pulse" />
-                      ●
-                    </span>
-                  )}
-                  {isPending && (
-                    <span className="proc-icon proc-icon-circle">○</span>
-                  )}
-                </div>
+              return (
+                <div
+                  key={step.id}
+                  className={`proc-step-row ${isDone ? 'is-done' : ''} ${isActive ? 'is-active' : ''} ${isPending ? 'is-pending' : ''}`}
+                >
+                  <div className="proc-step-indicator">
+                    {isDone && (
+                      <span className="proc-icon proc-icon-check">✓</span>
+                    )}
+                    {isActive && (
+                      <span className="proc-icon proc-icon-dot">
+                        <span className="proc-dot-pulse" />
+                        ●
+                      </span>
+                    )}
+                    {isPending && (
+                      <span className="proc-icon proc-icon-circle">○</span>
+                    )}
+                  </div>
 
-                <div className="proc-step-text">
-                  <div className="proc-step-title">{step.label}</div>
-                  <div className="proc-step-desc">{step.detail}</div>
+                  <div className="proc-step-text">
+                    <div className="proc-step-title">{step.label}</div>
+                    <div className="proc-step-desc">{step.detail}</div>
+                  </div>
                 </div>
-              </div>
-            );
-          })}
-        </div>
+              );
+            })}
+          </div>
+        )}
       </div>
     </div>
   );
