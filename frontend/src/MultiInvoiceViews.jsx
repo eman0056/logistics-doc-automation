@@ -985,38 +985,35 @@ export const MultiInvoicePageViewer = ({ pdfUrl, pageNumber = 1, zoomMode = 'fit
       }
 
       const container = containerRef.current;
-      const padding = 32;
-      // FIT-TO-WIDTH: only constrain by available width so the full page height
-      // is reachable by vertical scrolling. Using Math.min(scaleX, scaleY)
-      // (fit-to-box) would shrink the page to fill the viewport, making it
-      // impossible to scroll and showing a blurry small image.
-      const availWidth = Math.max(100, container.clientWidth - padding);
+      const padding = 24;
+      const availWidth = Math.max(100, (container.clientWidth || 600) - padding);
+      const availHeight = Math.max(100, (container.clientHeight || 700) - padding);
 
-      // Step 1 — calculate fitScale based on WIDTH only
       const unscaledViewport = page.getViewport({ scale: 1.0 });
-      const fitScale = availWidth / unscaledViewport.width;
+      const scaleX = availWidth / unscaledViewport.width;
+      const scaleY = availHeight / unscaledViewport.height;
+      const fitScale = Math.min(scaleX, scaleY);
 
-      // Step 2 — apply manual zoom on top of fit, if requested
+      // Apply manual zoom on top of fit scale, if requested
       const finalScale = zoomMode === 'manual'
         ? fitScale * (zoomLevel / 100)
         : fitScale;
 
-      // Step 3 — use DPR for a sharp (non-blurry) canvas backing store (minimum 2x DPR)
-      const dpr = Math.max(2, window.devicePixelRatio || 1);
+      // Use high DPR for ultra-sharp canvas backing store
+      const dpr = Math.max(2.5, window.devicePixelRatio || 1);
       const viewport = page.getViewport({ scale: finalScale });
 
-      // Step 4 — canvas backing store is at device-pixel resolution
       const canvas = canvasRef.current;
       canvas.width  = Math.floor(viewport.width  * dpr);
       canvas.height = Math.floor(viewport.height * dpr);
 
-      // CSS display size is at CSS-pixel resolution (no DPR)
+      // CSS display size at CSS-pixel resolution
       canvas.style.width    = `${Math.floor(viewport.width)}px`;
       canvas.style.height   = `${Math.floor(viewport.height)}px`;
-      canvas.style.maxWidth = 'none'; // allow horizontal scrolling when zoomed
-      canvas.style.maxHeight = 'none'; // scroll wrapper owns overflow — never clip
+      canvas.style.maxWidth = 'none';
+      canvas.style.maxHeight = 'none';
       canvas.style.display  = 'block';
-      canvas.style.margin   = '0 auto';
+      canvas.style.margin   = zoomMode === 'fit' ? 'auto' : '0 auto';
       canvas.style.flexShrink = '0';
       canvas.style.background = '#ffffff';
       canvas.style.boxShadow  = '0 8px 30px rgba(0,0,0,0.45)';
@@ -1026,7 +1023,6 @@ export const MultiInvoicePageViewer = ({ pdfUrl, pageNumber = 1, zoomMode = 'fit
       ctx.imageSmoothingEnabled  = true;
       ctx.imageSmoothingQuality  = 'high';
 
-      // Step 5 — render at DPR scale with standard viewport matrix
       const renderViewport = page.getViewport({ scale: finalScale * dpr });
       const renderTask = page.render({
         canvasContext: ctx,
@@ -1085,16 +1081,13 @@ export const MultiInvoicePageViewer = ({ pdfUrl, pageNumber = 1, zoomMode = 'fit
     <div
       className="multi-invoice-pdf-wrapper"
       style={{
-        /* Fill the positioned parent (emir-doc-body) completely */
         position: 'absolute',
         inset: 0,
         display: 'flex',
         flexDirection: 'column',
-        /* flex-start so the top of the canvas is always at scrollTop=0 */
         alignItems: 'center',
-        justifyContent: 'flex-start',
+        justifyContent: zoomMode === 'fit' ? 'center' : 'flex-start',
         overflowY: 'auto',
-        /* auto so zoomed pages can scroll horizontally */
         overflowX: 'auto',
         padding: '16px',
         boxSizing: 'border-box',
@@ -2219,10 +2212,7 @@ export const MultiInvoiceWorkspace = ({ docId: propDocId, docIds: propDocIds }) 
                   display: 'flex',
                   flexDirection: 'column',
                   alignItems: 'center',
-                  /* Always flex-start: centering an overflowing image makes its
-                     top unreachable because the browser anchors overflow at the
-                     end in a flex container. */
-                  justifyContent: 'flex-start',
+                  justifyContent: zoomMode === 'fit' ? 'center' : 'flex-start',
                   overflowY: 'auto',
                   overflowX: 'auto',
                   boxSizing: 'border-box',
@@ -2235,16 +2225,13 @@ export const MultiInvoiceWorkspace = ({ docId: propDocId, docIds: propDocIds }) 
                   src={`${API}/documents/${activeDocId}/file`}
                   alt={`${selectedInvoiceLabel} original document`}
                   style={{
-                    /* Fit-to-width: let the image fill the container width and
-                       grow naturally in height — the parent scrolls vertically. */
-                    width: zoomMode === 'fit' ? '100%' : `${zoomLevel}%`,
-                    height: 'auto',
-                    maxWidth: 'none',
-                    /* Never constrain height — that crops the top/bottom */
-                    maxHeight: 'none',
+                    width: zoomMode === 'fit' ? 'auto' : `${zoomLevel}%`,
+                    height: zoomMode === 'fit' ? 'auto' : 'auto',
+                    maxWidth: zoomMode === 'fit' ? '100%' : 'none',
+                    maxHeight: zoomMode === 'fit' ? '100%' : 'none',
+                    objectFit: 'contain',
                     display: 'block',
-                    /* margin: 0 auto avoids the flex centering top-crop issue */
-                    margin: '0 auto',
+                    margin: zoomMode === 'fit' ? 'auto' : '0 auto',
                     boxShadow: '0 4px 12px rgba(0, 0, 0, 0.3)',
                     flexShrink: 0,
                   }}
