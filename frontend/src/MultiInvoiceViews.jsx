@@ -398,54 +398,11 @@ export const UploadMultiView = () => {
       return { success: false };
     }
 
-    // ── Step 2: Dispatch to n8n directly ────────────────────────────────────
-    const n8nUrl = resolveN8nWebhookUrl();
-    const n8nMethod = 'POST';
-    console.log('[n8n Dispatch] Sending to n8n webhook:', { url: n8nUrl, method: n8nMethod, fileName: entry.file.name });
-
-    const n8nFormData = new FormData();
-    n8nFormData.append('file', entry.file);
-    // Pass the backend docId so n8n can correlate the record
-    const docIdEarly = data.docId || (data.documentIds && data.documentIds[0]);
-    if (docIdEarly) n8nFormData.append('docId', String(docIdEarly));
-
-    const n8nController = new AbortController();
-    const n8nTimeout = setTimeout(() => n8nController.abort(), 120_000); // 120 s
-
-    try {
-      const n8nRes = await fetch(n8nUrl, {
-        method: n8nMethod,
-        body: n8nFormData,
-        signal: n8nController.signal,
-        // ⚠ No Content-Type — browser sets multipart/form-data with boundary
-      });
-      clearTimeout(n8nTimeout);
-
-      if (!n8nRes.ok) {
-        const errText = await n8nRes.text().catch(() => `HTTP ${n8nRes.status}`);
-        const errorMsg = `Cannot reach n8n server — n8n responded ${n8nRes.status}: ${errText}`;
-        console.error('[n8n Dispatch] Non-OK response from n8n:', { url: n8nUrl, status: n8nRes.status, body: errText });
-        updateEntry(entry.id, { status: FILE_STATUS.FAILED, error: errorMsg });
-        return { success: false };
-      }
-
-      console.log('[n8n Dispatch] n8n accepted the request:', { url: n8nUrl, status: n8nRes.status });
-    } catch (n8nErr) {
-      clearTimeout(n8nTimeout);
-      const isTimeout = n8nErr.name === 'AbortError';
-      const errorMsg = isTimeout
-        ? 'Cannot reach n8n server — n8n request timed out after 120 seconds.'
-        : `Cannot reach n8n server — ${n8nErr.message}`;
-      console.error('[n8n Dispatch] Fetch error:', {
-        url: n8nUrl,
-        method: n8nMethod,
-        errorName: n8nErr.name,
-        errorMessage: n8nErr.message,
-        isTimeout,
-      });
-      updateEntry(entry.id, { status: FILE_STATUS.FAILED, error: errorMsg });
-      return { success: false };
-    }
+    // ── Step 2: n8n is NOT called here ──────────────────────────────────────
+    // n8n extraction is triggered explicitly by the user from the review
+    // workspace. Calling it automatically here caused documents to appear as
+    // "Failed" whenever n8n was unavailable or returned an error.
+    console.log('[Upload] Document stored successfully. n8n extraction will be triggered by the user.');
 
     const docId = data.docId || (data.documentIds && data.documentIds[0]);
     const dispatch = (data.dispatches && data.dispatches[0]) || {};
