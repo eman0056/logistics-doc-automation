@@ -226,6 +226,32 @@ export const UploadMultiView = () => {
   const fileInputRef = useRef(null);
   const addMoreRef = useRef(null);
 
+  const objectUrlsRef = useRef(new Map());
+
+  const getObjectUrl = useCallback((file) => {
+    if (!file) return '';
+    if (!objectUrlsRef.current.has(file)) {
+      objectUrlsRef.current.set(file, URL.createObjectURL(file));
+    }
+    return objectUrlsRef.current.get(file);
+  }, []);
+
+  useEffect(() => {
+    const map = objectUrlsRef.current;
+    return () => {
+      map.forEach((url) => URL.revokeObjectURL(url));
+      map.clear();
+    };
+  }, []);
+
+  const checkIsImage = (file) => {
+    if (!file) return false;
+    if (file.type && file.type.startsWith('image/')) return true;
+    const fname = (file.name || '').toLowerCase();
+    const ext = fname.includes('.') ? '.' + fname.split('.').pop() : '';
+    return ACCEPTED_IMAGE_EXTENSIONS.has('.' + ext.replace(/^\./, ''));
+  };
+
   const validateAndAddFiles = (newFiles) => {
     const errors = [];
     const toAdd = [];
@@ -517,38 +543,77 @@ export const UploadMultiView = () => {
 
           {/* File list */}
           <div className="bq-file-list">
-            {fileEntries.map((entry) => (
-              <div key={entry.id} className={`bq-file-row${entry.status === FILE_STATUS.FAILED ? ' bq-file-row--failed' : ''}`}>
-                <div className="bq-file-icon">
-                  <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#6366f1" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-                    <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" /><polyline points="14 2 14 8 20 8" /><line x1="9" y1="13" x2="15" y2="13" /><line x1="9" y1="17" x2="13" y2="17" />
-                  </svg>
-                </div>
-                <div className="bq-file-info">
-                  <div className="bq-file-name">{entry.file.name}</div>
-                  <div className="bq-file-meta">
-                    {formatFileSize(entry.file.size)}
-                    {entry.invoiceCount > 0 && ` · ${entry.invoiceCount} invoice${entry.invoiceCount !== 1 ? 's' : ''} detected`}
-                    {entry.error && <span className="bq-file-error-msg"> · {entry.error}</span>}
+            {fileEntries.map((entry) => {
+              const isImg = checkIsImage(entry.file);
+              const previewUrl = getObjectUrl(entry.file);
+
+              return (
+                <div key={entry.id} className={`bq-file-row${entry.status === FILE_STATUS.FAILED ? ' bq-file-row--failed' : ''}`}>
+                  <div className="bq-file-icon" style={{ width: '48px', height: '48px', borderRadius: '8px', overflow: 'hidden', background: 'rgba(15, 23, 42, 0.6)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                    {isImg ? (
+                      <img
+                        src={previewUrl}
+                        alt={entry.file.name}
+                        style={{
+                          width: '100%',
+                          height: '100%',
+                          objectFit: 'contain',
+                          objectPosition: 'center',
+                          display: 'block',
+                        }}
+                      />
+                    ) : (
+                      <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#6366f1" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                        <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" /><polyline points="14 2 14 8 20 8" /><line x1="9" y1="13" x2="15" y2="13" /><line x1="9" y1="17" x2="13" y2="17" />
+                      </svg>
+                    )}
+                  </div>
+                  <div className="bq-file-info">
+                    <div className="bq-file-name">{entry.file.name}</div>
+                    <div className="bq-file-meta">
+                      {formatFileSize(entry.file.size)}
+                      {entry.invoiceCount > 0 && ` · ${entry.invoiceCount} invoice${entry.invoiceCount !== 1 ? 's' : ''} detected`}
+                      {entry.error && <span className="bq-file-error-msg"> · {entry.error}</span>}
+                    </div>
+
+                    {/* High-quality sharp document preview (object-fit: contain, no cropping) */}
+                    {isImg && (
+                      <div style={{ marginTop: '8px', maxWidth: '320px', maxHeight: '200px', width: 'auto', height: 'auto', background: 'rgba(2, 6, 23, 0.7)', borderRadius: '6px', padding: '6px', display: 'flex', justifyContent: 'center', alignItems: 'center', border: '1px solid rgba(255,255,255,0.08)' }}>
+                        <img
+                          src={previewUrl}
+                          alt={`${entry.file.name} preview`}
+                          style={{
+                            maxWidth: '100%',
+                            maxHeight: '180px',
+                            width: 'auto',
+                            height: 'auto',
+                            objectFit: 'contain',
+                            objectPosition: 'center',
+                            display: 'block',
+                            borderRadius: '4px',
+                          }}
+                        />
+                      </div>
+                    )}
+                  </div>
+                  <div className="bq-file-status">
+                    <StatusBadge status={entry.status} />
+                  </div>
+                  <div className="bq-file-actions">
+                    {entry.status === FILE_STATUS.FAILED && !isProcessing && (
+                      <button type="button" className="bq-retry-btn secondary-btn" onClick={() => handleRetry(entry)} title="Retry this document">
+                        ↺ Retry
+                      </button>
+                    )}
+                    {!isProcessing && entry.status === FILE_STATUS.READY && (
+                      <button type="button" className="bq-remove-btn" onClick={() => removeEntry(entry.id)} title="Remove file" aria-label="Remove file">
+                        ×
+                      </button>
+                    )}
                   </div>
                 </div>
-                <div className="bq-file-status">
-                  <StatusBadge status={entry.status} />
-                </div>
-                <div className="bq-file-actions">
-                  {entry.status === FILE_STATUS.FAILED && !isProcessing && (
-                    <button type="button" className="bq-retry-btn secondary-btn" onClick={() => handleRetry(entry)} title="Retry this document">
-                      ↺ Retry
-                    </button>
-                  )}
-                  {!isProcessing && entry.status === FILE_STATUS.READY && (
-                    <button type="button" className="bq-remove-btn" onClick={() => removeEntry(entry.id)} title="Remove file" aria-label="Remove file">
-                      ×
-                    </button>
-                  )}
-                </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
 
           {/* Process button */}
