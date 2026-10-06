@@ -2044,15 +2044,12 @@ export const MultiInvoiceWorkspace = ({ docId: propDocId, docIds: propDocIds }) 
   // Map filtered back to global indices for selection
   const filteredWithIndex = filteredInvoices.map(inv => ({ inv, globalIdx: invoices.indexOf(inv) }));
 
-  const headerObj = currentDraft.invoiceHeader || currentDraft.header || currentDraft || {};
   const hasExtractedData = invoiceHasRealExtraction(selectedInvoice) || Boolean(extractRealInvoiceObject(currentDraft));
+  const headerObjForNum = currentDraft.invoiceHeader || currentDraft.header || currentDraft || {};
   const rawInvNum = hasExtractedData
-    ? (headerObj.invoiceNumber || headerObj.invoice_number || currentDraft.invoiceNumber || selectedInvoice?.invoiceNumber)
+    ? (headerObjForNum.invoiceNumber || headerObjForNum.invoice_number || currentDraft.invoiceNumber || selectedInvoice?.invoiceNumber)
     : null;
   const extractedInvNum = rawInvNum ? String(rawInvNum) : 'Not extracted';
-  
-  const hasConfidence = hasExtractedData && selectedInvoice?.overallConfidence != null;
-  const confidencePercent = hasConfidence ? Math.round(selectedInvoice.overallConfidence * 100) : null;
 
   const selectedExtractionUi = normalizeInvoiceExtractionUi(selectedInvoice);
   const isPreparing = selectedExtractionUi === EXTRACTION_UI.PREPARING;
@@ -2065,55 +2062,130 @@ export const MultiInvoiceWorkspace = ({ docId: propDocId, docIds: propDocIds }) 
   // Use selected invoice's own documentId for PDF preview
   const activeDocId = selectedInvoice?.documentId || primaryDocId;
 
-  const invoiceInfoFields = [
-    { label: 'Invoice Number', key: 'invoiceNumber', value: headerObj.invoiceNumber || currentDraft.invoiceNumber },
-    { label: 'Invoice Date', key: 'invoiceDate', value: headerObj.invoiceDate || currentDraft.invoiceDate },
-    { label: 'Due Date', key: 'dueDate', value: headerObj.dueDate || currentDraft.dueDate },
-    { label: 'Payment Terms', key: 'paymentTerms', value: headerObj.paymentTerms || currentDraft.paymentTerms },
-    { label: 'PO / Ref Number', key: 'poNumber', value: headerObj.poNumber || currentDraft.poNumber || headerObj.purchaseOrderNumber }
+  const sectionDefinitions = [
+    { id: 'header', label: 'Invoice Header' },
+    { id: 'shipment', label: 'Shipment Details' },
+    { id: 'charges', label: 'Charge Line Items' },
   ];
 
-  const carrierInfoFields = [
-    { label: 'Carrier / Vendor Name', key: 'vendorName', value: headerObj.vendorName || currentDraft.vendorName || headerObj.carrierName },
-    { label: 'SCAC Code', key: 'carrierScacCode', value: headerObj.carrierScacCode || currentDraft.scac || headerObj.scac },
-    { label: 'Transport Mode', key: 'mode', value: headerObj.mode || currentDraft.transportMode },
-    { label: 'Service Level', key: 'serviceLevel', value: headerObj.serviceLevel || currentDraft.serviceLevel }
+  const canonical = currentDraft || {};
+  const shipmentKey = Array.isArray(canonical.shipmentDetails) ? 'shipmentDetails' : 'shipmentDetail';
+  const shipmentRecords = Array.isArray(canonical[shipmentKey]) ? canonical[shipmentKey] : [];
+  const chargeRecords = [
+    ...shipmentRecords.flatMap((shipment, shipmentIndex) => (
+      Array.isArray(shipment?.chargeLineItems)
+        ? shipment.chargeLineItems.map((charge, chargeIndex) => ({ charge, path: [shipmentKey, shipmentIndex, 'chargeLineItems', chargeIndex], label: `Shipment ${shipmentIndex + 1} Charge ${chargeIndex + 1}` }))
+        : []
+    )),
+    ...(Array.isArray(canonical.chargeLineItems)
+      ? canonical.chargeLineItems.map((charge, chargeIndex) => ({ charge, path: ['chargeLineItems', chargeIndex], label: `Charge ${chargeIndex + 1}` }))
+      : []),
   ];
+  const knownKeys = ['invoiceHeader', 'shipmentDetails', 'shipmentDetail', 'shipments', 'shipment', 'chargeLineItems', 'chargeLineItem', 'status', 'poorImageQuality', 'error', 'invoiceIndex', 'documentId'];
+  const headerObj = canonical.invoiceHeader && typeof canonical.invoiceHeader === 'object' && !Array.isArray(canonical.invoiceHeader) ? canonical.invoiceHeader : {};
+  const extraTopKeys = Object.keys(canonical || {}).filter(k => !knownKeys.includes(k));
+  const extraTopObj = {};
+  extraTopKeys.forEach(k => {
+    if (typeof canonical[k] !== 'object' || canonical[k] === null) extraTopObj[k] = canonical[k];
+  });
 
-  const billingInfoFields = [
-    { label: 'Customer / Bill To Name', key: 'customerName', value: headerObj.customerName || currentDraft.customerName || headerObj.billTo },
-    { label: 'Account Number', key: 'accountNumber', value: headerObj.accountNumber || currentDraft.accountNumber },
-    { label: 'Billing Address', key: 'billToAddress', value: headerObj.billToAddress || currentDraft.billToAddress }
-  ];
+  const renderEditableNode = (value, path, label, options = {}) => {
+    if (Array.isArray(value)) {
+      return (
+        <div className="section-block" key={path.join('.') || label}>
+          {label && <div className="section-title">{label}</div>}
+          {value.length === 0 && <div className="subtle-copy">No records found</div>}
+          {value.map((item, index) => (
+            <div className="nested-record" key={`${path.join('.')}-${index}`}>
+              <div className="field-label">{label ? `${label} ${index + 1}` : `Record ${index + 1}`}</div>
+              {renderEditableNode(item, [...path, index], '', options)}
+            </div>
+          ))}
+        </div>
+      );
+    }
+    if (value && typeof value === 'object') {
+      return (
+        <div className="field-grid" key={path.join('.') || label}>
+          {Object.entries(value)
+            .filter(([key]) => !options.excludeKeys?.includes(key))
+            .map(([key, child]) => renderEditableNode(child, [...path, key], key, options))}
+        </div>
+      );
+    }
+    return (
+      <div className="field-group" key={path.join('.')}>
+        <label className="field-label">{label || path[path.length - 1]}</label>
+        <input
+          className="field-input"
+          value={value === null || value === undefined ? '' : String(value)}
+          onChange={(event) => updateDraftPath(path, event.target.value)}
+        />
+      </div>
+    );
+  };
 
-  const financialInfoFields = [
-    { label: 'Subtotal Amount', key: 'subtotalAmount', value: headerObj.subtotalAmount || currentDraft.subtotalAmount },
-    { label: 'Tax Amount', key: 'taxAmount', value: headerObj.taxAmount || currentDraft.taxAmount },
-    { label: 'Total Amount Due', key: 'totalAmount', value: headerObj.totalAmount || headerObj.totalAmountDue || currentDraft.totalAmount },
-    { label: 'Currency', key: 'currency', value: headerObj.currency || currentDraft.currency || '$' }
-  ];
+  const renderFieldInputs = () => {
+    const isEmpty = !canonical || Object.keys(canonical).length === 0;
+    if (isEmpty) {
+      return (
+        <div className="section-block">
+          <div className="section-title">Extraction data unavailable</div>
+          <div className="subtle-copy">No extracted invoice data available for this invoice yet.</div>
+        </div>
+      );
+    }
+    return (
+      <div className="invoice-sections" style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+        {/* 1. INVOICE HEADER */}
+        {activeTab === 'header' && (
+          <div className="section-block" style={{ margin: 0 }}>
+            <div className="section-title" style={{ fontSize: '0.72rem', color: 'var(--primary, #6366f1)', marginBottom: '6px' }}>📄 INVOICE HEADER</div>
+            {Object.keys(headerObj).length > 0 ? (
+              renderEditableNode(headerObj, ['invoiceHeader'], '')
+            ) : Object.keys(extraTopObj).length > 0 ? (
+              renderEditableNode(extraTopObj, [], '')
+            ) : (
+              <div className="subtle-copy">No header fields found</div>
+            )}
+          </div>
+        )}
 
-  const paymentInfoFields = [
-    { label: 'Remit To Name', key: 'remitToCompanyName', value: headerObj.remitToCompanyName || currentDraft.remitToCompanyName || headerObj.remitTo },
-    { label: 'Remit Address', key: 'remitToAddress', value: headerObj.remitToAddress || currentDraft.remitToAddress },
-    { label: 'Payment Method / Bank', key: 'paymentMethod', value: headerObj.paymentMethod || currentDraft.paymentMethod }
-  ];
+        {/* 2. SHIPMENT DETAILS */}
+        {activeTab === 'shipment' && (
+          <div className="section-block" style={{ margin: 0 }}>
+            <div className="section-title" style={{ fontSize: '0.72rem', color: 'var(--primary, #6366f1)', marginBottom: '6px' }}>
+              🚚 SHIPMENT DETAILS {shipmentRecords.length > 0 ? `(${shipmentRecords.length})` : ''}
+            </div>
+            {shipmentRecords.length > 0 ? (
+              renderEditableNode(shipmentRecords, [shipmentKey || 'shipmentDetails'], '', { excludeKeys: ['chargeLineItems', 'chargeLineItem'] })
+            ) : (
+              <div className="subtle-copy">No shipment records found</div>
+            )}
+          </div>
+        )}
 
-  let shipmentData = currentDraft.shipmentDetails || currentDraft.shipmentDetail || currentDraft.shipments || currentDraft.shipment;
-  if (!Array.isArray(shipmentData)) {
-    shipmentData = shipmentData && typeof shipmentData === 'object' ? [shipmentData] : [];
-  }
-
-  let lineItemsData = currentDraft.chargeLineItems || currentDraft.lineItems || currentDraft.items || currentDraft.charges;
-  if (!Array.isArray(lineItemsData)) {
-    lineItemsData = lineItemsData && typeof lineItemsData === 'object' ? [lineItemsData] : [];
-  }
-  if (lineItemsData.length === 0 && shipmentData.length > 0) {
-    lineItemsData = [...lineItemsData];
-    shipmentData.forEach(s => {
-      if (s && Array.isArray(s.chargeLineItems)) lineItemsData.push(...s.chargeLineItems);
-    });
-  }
+        {/* 3. CHARGE LINE ITEMS */}
+        {activeTab === 'charges' && (
+          <div className="section-block" style={{ margin: 0 }}>
+            <div className="section-title" style={{ fontSize: '0.72rem', color: 'var(--primary, #6366f1)', marginBottom: '6px' }}>
+              💳 CHARGE LINE ITEMS {chargeRecords.length > 0 ? `(${chargeRecords.length})` : ''}
+            </div>
+            {chargeRecords.length > 0 ? (
+              chargeRecords.map((record) => (
+                <div className="nested-record" key={record.path.join('.')} style={{ marginBottom: '4px' }}>
+                  <div className="field-label" style={{ color: 'var(--primary, #6366f1)', fontSize: '0.68rem', marginBottom: '2px' }}>{record.label}</div>
+                  {renderEditableNode(record.charge, record.path, '')}
+                </div>
+              ))
+            ) : (
+              <div className="subtle-copy">No line items found</div>
+            )}
+          </div>
+        )}
+      </div>
+    );
+  };
 
   const relativePageLabel = relativePage;
   // Isolated invoice pages only — never the full multi-invoice document
@@ -2331,15 +2403,6 @@ export const MultiInvoiceWorkspace = ({ docId: propDocId, docIds: propDocIds }) 
             </div>
 
             <div className="emir-summary-meta">
-              {hasConfidence ? (
-                <span className={`emir-confidence-badge ${confidencePercent < 80 ? 'warning' : ''}`}>
-                  🎯 Confidence {confidencePercent}%
-                </span>
-              ) : (
-                <span className="emir-confidence-badge warning" style={{ background: '#334155', color: '#94a3b8' }}>
-                  🎯 Confidence N/A
-                </span>
-              )}
               <span className={`status-pill ${isPoorQuality ? 'warning-strong' : selectedInvoice?.status === 'APPROVED' ? 'success' : isExtractionFailed ? 'danger' : (isPreparing || isExtracting) ? 'warning' : 'primary'}`}>
                 {isPoorQuality ? '⚠ Poor Image Quality' : invoiceStatusLabel}
               </span>
@@ -2357,39 +2420,23 @@ export const MultiInvoiceWorkspace = ({ docId: propDocId, docIds: propDocIds }) 
           )}
 
           {/* TAB SELECTOR */}
-          <div className="emir-tabs">
-            <button
-              type="button"
-              className={`emir-tab-btn ${activeTab === 'header' ? 'is-active' : ''}`}
-              onClick={() => setActiveTab('header')}
-            >
-              📄 Invoice Info
-            </button>
-            <button
-              type="button"
-              className={`emir-tab-btn ${activeTab === 'shipments' ? 'is-active' : ''}`}
-              onClick={() => setActiveTab('shipments')}
-            >
-              🚚 Shipments {shipmentData.length > 0 ? `(${shipmentData.length})` : ''}
-            </button>
-            <button
-              type="button"
-              className={`emir-tab-btn ${activeTab === 'charges' ? 'is-active' : ''}`}
-              onClick={() => setActiveTab('charges')}
-            >
-              💳 Charge Line Items {lineItemsData.length > 0 ? `(${lineItemsData.length})` : ''}
-            </button>
-            <button
-              type="button"
-              className={`emir-tab-btn ${activeTab === 'confidence' ? 'is-active' : ''}`}
-              onClick={() => setActiveTab('confidence')}
-            >
-              🎯 Extraction Info
-            </button>
+          <div className="invoice-section-tabs" role="tablist" aria-label="Extracted invoice sections" style={{ padding: '0.75rem 1rem 0.5rem' }}>
+            {sectionDefinitions.map((section) => (
+              <button
+                key={section.id}
+                type="button"
+                role="tab"
+                aria-selected={activeTab === section.id}
+                className={activeTab === section.id ? 'primary-btn' : 'secondary-btn'}
+                onClick={() => setActiveTab(section.id)}
+              >
+                {section.label}
+              </button>
+            ))}
           </div>
 
           {/* TAB CONTENT PANEL */}
-          <div className="emir-tab-panel">
+          <div className={`editor-scroll-content ${activeTab === 'shipment' ? 'single-invoice-shipment-content' : ''}`} style={{ flex: 1, padding: '1rem', overflowY: 'auto' }}>
             {isExtractionFailed ? (
               <div className="emir-extraction-state">
                 <div className="emir-extraction-state__icon emir-extraction-state__icon--error">⚠</div>
@@ -2430,317 +2477,10 @@ export const MultiInvoiceWorkspace = ({ docId: propDocId, docIds: propDocIds }) 
                 </p>
               </div>
             ) : (
-              <>
-            {/* 1. INVOICE HEADER TAB */}
-            {activeTab === 'header' && (
-              <>
-                <div className="emir-field-section">
-                  <h3 className="emir-section-title">📋 INVOICE INFORMATION</h3>
-                  <div className="emir-field-grid">
-                    {invoiceInfoFields.map(f => (
-                      <div className="emir-field-group" key={f.key}>
-                        <label className="emir-field-label">{f.label}</label>
-                        <input
-                          className="emir-field-input"
-                          value={f.value === null || f.value === undefined ? '' : String(f.value)}
-                          placeholder="Not extracted"
-                          onChange={(e) => updateDraftPath(['invoiceHeader', f.key], e.target.value)}
-                        />
-                      </div>
-                    ))}
-                  </div>
-                </div>
-
-                <div className="emir-field-section">
-                  <h3 className="emir-section-title">🚛 CARRIER INFORMATION</h3>
-                  <div className="emir-field-grid">
-                    {carrierInfoFields.map(f => (
-                      <div className="emir-field-group" key={f.key}>
-                        <label className="emir-field-label">{f.label}</label>
-                        <input
-                          className="emir-field-input"
-                          value={f.value === null || f.value === undefined ? '' : String(f.value)}
-                          placeholder="Not extracted"
-                          onChange={(e) => updateDraftPath(['invoiceHeader', f.key], e.target.value)}
-                        />
-                      </div>
-                    ))}
-                  </div>
-                </div>
-
-                <div className="emir-field-section">
-                  <h3 className="emir-section-title">🏢 BILLING & CUSTOMER INFORMATION</h3>
-                  <div className="emir-field-grid">
-                    {billingInfoFields.map(f => (
-                      <div className="emir-field-group" key={f.key}>
-                        <label className="emir-field-label">{f.label}</label>
-                        <input
-                          className="emir-field-input"
-                          value={f.value === null || f.value === undefined ? '' : String(f.value)}
-                          placeholder="Not extracted"
-                          onChange={(e) => updateDraftPath(['invoiceHeader', f.key], e.target.value)}
-                        />
-                      </div>
-                    ))}
-                  </div>
-                </div>
-
-                <div className="emir-field-section">
-                  <h3 className="emir-section-title">💰 FINANCIAL SUMMARY</h3>
-                  <div className="emir-field-grid">
-                    {financialInfoFields.map(f => (
-                      <div className="emir-field-group" key={f.key}>
-                        <label className="emir-field-label">{f.label}</label>
-                        <input
-                          className="emir-field-input"
-                          value={f.value === null || f.value === undefined ? '' : String(f.value)}
-                          placeholder="Not extracted"
-                          onChange={(e) => updateDraftPath(['invoiceHeader', f.key], e.target.value)}
-                        />
-                      </div>
-                    ))}
-                  </div>
-                </div>
-
-                <div className="emir-field-section">
-                  <h3 className="emir-section-title">🏦 PAYMENT & REMITTANCE INFORMATION</h3>
-                  <div className="emir-field-grid">
-                    {paymentInfoFields.map(f => (
-                      <div className="emir-field-group" key={f.key}>
-                        <label className="emir-field-label">{f.label}</label>
-                        <input
-                          className="emir-field-input"
-                          value={f.value === null || f.value === undefined ? '' : String(f.value)}
-                          placeholder="Not extracted"
-                          onChange={(e) => updateDraftPath(['invoiceHeader', f.key], e.target.value)}
-                        />
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              </>
+              renderFieldInputs()
             )}
-
-            {/* 2. SHIPMENTS TAB */}
-            {activeTab === 'shipments' && (
-              <>
-                {shipmentData.length === 0 ? (
-                  <div className="emir-empty-box">
-                    <div className="emir-empty-icon">🚚</div>
-                    <div className="emir-empty-text">No shipment records extracted for this invoice.</div>
-                    <div style={{ fontSize: '12px', color: '#94a3b8', marginTop: '4px' }}>If missing due to unreadable text, you can enter details manually.</div>
-                  </div>
-                ) : (
-                  <div className="emir-table-container">
-                    <table className="emir-table">
-                      <thead>
-                        <tr>
-                          <th>Shipment #</th>
-                          <th>Tracking / PRO</th>
-                          <th>Carrier</th>
-                          <th>Mode</th>
-                          <th>Origin</th>
-                          <th>Destination</th>
-                          <th>Ship Date</th>
-                          <th>Delivery Date</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {shipmentData.map((ship, idx) => (
-                          <tr key={idx}>
-                            <td>
-                              <input
-                                className="emir-table-input"
-                                value={ship.shipmentNumber || idx + 1}
-                                placeholder="Not extracted"
-                                onChange={(e) => updateDraftPath(['shipmentDetails', idx, 'shipmentNumber'], e.target.value)}
-                              />
-                            </td>
-                            <td>
-                              <input
-                                className="emir-table-input"
-                                value={ship.trackingNumber || ship.proNumber || ''}
-                                placeholder="Not extracted"
-                                onChange={(e) => updateDraftPath(['shipmentDetails', idx, 'trackingNumber'], e.target.value)}
-                              />
-                            </td>
-                            <td>
-                              <input
-                                className="emir-table-input"
-                                value={ship.carrierName || ship.carrier || ''}
-                                placeholder="Not extracted"
-                                onChange={(e) => updateDraftPath(['shipmentDetails', idx, 'carrierName'], e.target.value)}
-                              />
-                            </td>
-                            <td>
-                              <input
-                                className="emir-table-input"
-                                value={ship.mode || ''}
-                                placeholder="Not extracted"
-                                onChange={(e) => updateDraftPath(['shipmentDetails', idx, 'mode'], e.target.value)}
-                              />
-                            </td>
-                            <td>
-                              <input
-                                className="emir-table-input"
-                                value={ship.origin || ship.originCity || ''}
-                                placeholder="Not extracted"
-                                onChange={(e) => updateDraftPath(['shipmentDetails', idx, 'origin'], e.target.value)}
-                              />
-                            </td>
-                            <td>
-                              <input
-                                className="emir-table-input"
-                                value={ship.destination || ship.destCity || ''}
-                                placeholder="Not extracted"
-                                onChange={(e) => updateDraftPath(['shipmentDetails', idx, 'destination'], e.target.value)}
-                              />
-                            </td>
-                            <td>
-                              <input
-                                className="emir-table-input"
-                                value={ship.shipDate || ship.pickupDate || ''}
-                                placeholder="Not extracted"
-                                onChange={(e) => updateDraftPath(['shipmentDetails', idx, 'shipDate'], e.target.value)}
-                              />
-                            </td>
-                            <td>
-                              <input
-                                className="emir-table-input"
-                                value={ship.deliveryDate || ''}
-                                placeholder="Not extracted"
-                                onChange={(e) => updateDraftPath(['shipmentDetails', idx, 'deliveryDate'], e.target.value)}
-                              />
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                )}
-              </>
-            )}
-
-            {/* 3. CHARGE LINE ITEMS TAB */}
-            {activeTab === 'charges' && (
-              <>
-                {lineItemsData.length === 0 ? (
-                  <div className="emir-empty-box">
-                    <div className="emir-empty-icon">💳</div>
-                    <div className="emir-empty-text">No charge line items extracted for this invoice.</div>
-                    <div style={{ fontSize: '12px', color: '#94a3b8', marginTop: '4px' }}>If missing due to unreadable text, you can enter details manually.</div>
-                  </div>
-                ) : (
-                  <div className="emir-table-container">
-                    <table className="emir-table">
-                      <thead>
-                        <tr>
-                          <th>#</th>
-                          <th>Description</th>
-                          <th>Code / Category</th>
-                          <th>Quantity</th>
-                          <th>Rate</th>
-                          <th>Amount</th>
-                          <th>Currency</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {lineItemsData.map((item, idx) => (
-                          <tr key={idx}>
-                            <td>{idx + 1}</td>
-                            <td>
-                              <input
-                                className="emir-table-input"
-                                value={item.description || item.chargeDescription || ''}
-                                placeholder="Not extracted"
-                                onChange={(e) => updateDraftPath(['chargeLineItems', idx, 'description'], e.target.value)}
-                              />
-                            </td>
-                            <td>
-                              <input
-                                className="emir-table-input"
-                                value={item.chargeCode || item.code || ''}
-                                placeholder="Not extracted"
-                                onChange={(e) => updateDraftPath(['chargeLineItems', idx, 'chargeCode'], e.target.value)}
-                              />
-                            </td>
-                            <td>
-                              <input
-                                className="emir-table-input"
-                                value={item.quantity ?? item.qty ?? 1}
-                                placeholder="1"
-                                onChange={(e) => updateDraftPath(['chargeLineItems', idx, 'quantity'], e.target.value)}
-                              />
-                            </td>
-                            <td>
-                              <input
-                                className="emir-table-input"
-                                value={item.rate || item.unitPrice || ''}
-                                placeholder="Not extracted"
-                                onChange={(e) => updateDraftPath(['chargeLineItems', idx, 'rate'], e.target.value)}
-                              />
-                            </td>
-                            <td>
-                              <input
-                                className="emir-table-input"
-                                value={item.amount || item.chargeAmount || ''}
-                                placeholder="Not extracted"
-                                onChange={(e) => updateDraftPath(['chargeLineItems', idx, 'amount'], e.target.value)}
-                              />
-                            </td>
-                            <td>
-                              <input
-                                className="emir-table-input"
-                                value={item.currency || '$'}
-                                placeholder="$"
-                                onChange={(e) => updateDraftPath(['chargeLineItems', idx, 'currency'], e.target.value)}
-                              />
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                )}
-              </>
-            )}
-
-            {/* 4. EXTRACTION / CONFIDENCE TAB */}
-            {activeTab === 'confidence' && (
-              <div className="emir-field-section">
-                <h3 className="emir-section-title">🎯 EXTRACTION & CONFIDENCE METRICS</h3>
-                <div className="emir-field-grid">
-                  <div className="emir-field-group">
-                    <label className="emir-field-label">Document ID</label>
-                    <input className="emir-field-input" value={activeDocId || ''} readOnly style={{ opacity: 0.8 }} />
-                  </div>
-                  <div className="emir-field-group">
-                    <label className="emir-field-label">Invoice Index</label>
-                    <input className="emir-field-input" value={`Invoice ${selectedInvoiceIndex + 1}`} readOnly style={{ opacity: 0.8 }} />
-                  </div>
-                  <div className="emir-field-group">
-                    <label className="emir-field-label">Isolated Page Range</label>
-                    <input className="emir-field-input" value={`Pages 1–${invoicePagesTotal} of ${selectedInvoiceLabel}`} readOnly style={{ opacity: 0.8 }} />
-                  </div>
-                  <div className="emir-field-group">
-                    <label className="emir-field-label">Overall Confidence Score</label>
-                    <input className="emir-field-input" value={confidencePercent != null ? `${confidencePercent}%` : 'N/A'} readOnly style={{ opacity: 0.8 }} />
-                  </div>
-                  <div className="emir-field-group">
-                    <label className="emir-field-label">Image Quality Flag</label>
-                    <input className="emir-field-input" value={isPoorQuality ? 'Poor Image Quality (Needs Review)' : 'Normal Image Quality'} readOnly style={{ opacity: 0.8, color: isPoorQuality ? 'var(--danger, #EA6A6A)' : 'var(--success, #1FC991)' }} />
-                  </div>
-                  <div className="emir-field-group">
-                    <label className="emir-field-label">Processing Status</label>
-                    <input className="emir-field-input" value={invoiceStatusLabel} readOnly style={{ opacity: 0.8 }} />
-                  </div>
-                </div>
-              </div>
-            )}
-            </>
-          )}
-        </div>
-      </section>
+          </div>
+        </section>
       </div>
 
       {/* ── C. INVOICE NAVIGATOR with Filters & Document Grouping ────────── */}
