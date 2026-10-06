@@ -415,8 +415,7 @@ function App() {
           <a href="/documents" className="nav-link">Documents</a>
           <a href="/escalations" className="nav-link">Escalations</a>
           <a href="/preview" className="nav-link">Preview</a>
-          <a href="/documents/upload" className="nav-link">Upload Single</a>
-          <a href="/documents/upload-multi" className="nav-link">Upload Multiple</a>
+          <a href="/documents/upload" className="nav-link">Upload Invoice</a>
           <a href="/review-queue" className="nav-link">Review Queue</a>
           <a href="/invoices" className="nav-link">Invoices</a>
         </nav>
@@ -871,8 +870,8 @@ function App() {
           <div className="section-header">
             <div>
               <div className="eyebrow">Workflow</div>
-              <h1 className="page-title">Document Ingestion & AI Pipeline</h1>
-              <p className="subtle-copy mt-2">Upload PDF, DOC, DOCX, or image logistics paperwork to trigger automated extraction.</p>
+              <h1 className="page-title">Upload Invoice</h1>
+              <p className="subtle-copy mt-2">Upload single or multi-invoice documents (PDF, JPG, PNG, WEBP, AVIF). The AI engine automatically detects invoice structures and routes to the appropriate review workspace.</p>
             </div>
             <a href="/documents" className="primary-btn">View All Documents</a>
           </div>
@@ -1759,7 +1758,7 @@ function App() {
     case 'flagged': renderedRoute = <FlaggedInvoicesView documents={documents} />; break;
     case 'preview': renderedRoute = <PreviewRange />; break;
     case 'upload': renderedRoute = <UploadView />; break;
-    case 'upload-multi': renderedRoute = <UploadMultiView />; break;
+    case 'upload-multi': renderedRoute = <UploadView />; break;
     case 'multi-workspace': renderedRoute = <MultiInvoiceWorkspace docId={path.split('/')[2]} />; break;
     case 'batch-workspace': renderedRoute = <MultiInvoiceWorkspace />; break;
     case 'review': renderedRoute = <ReviewView />; break;
