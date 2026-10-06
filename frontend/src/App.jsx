@@ -3,7 +3,6 @@ import { apiGetJson, normalizeApiCacheUrl } from './dataCache.js';
 import { UploadMultiView, MultiInvoiceWorkspace, ExtractionProcessingPanel } from './MultiInvoiceViews.jsx';
 import { Escalations } from './Escalations.jsx';
 import { EscalationModal } from './EscalationModal.jsx';
-import { SummaryCards } from './SummaryCards.jsx';
 import { PreviewRange } from './PreviewRange.jsx';
 
 const API = '/api';
@@ -661,7 +660,6 @@ function App() {
               <p className="subtle-copy mt-2">View and manage ingested logistics paperwork.</p>
             </div>
             <a href="/documents/upload" className="primary-btn">+ Upload New Document</a>
-        <SummaryCards />
           </div>
 
           <div className="card table-card">
