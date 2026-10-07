@@ -779,7 +779,10 @@ function App() {
           const failedDispatch = (data.dispatches || []).find((dispatch) => {
             if (!dispatch.webhookResponse) return false;
             const status = Number(dispatch.webhookResponse?.status);
-            return !Number.isFinite(status) || status < 200 || status >= 300;
+            return dispatch.webhookResponse.success === false
+              || !Number.isFinite(status)
+              || status < 200
+              || status >= 300;
           });
           if (failedDispatch) {
             throw new Error(failedDispatch.webhookResponse?.error || 'The n8n workflow could not be started.');
@@ -817,6 +820,13 @@ function App() {
                   redirectScheduled = true;
                   window.setTimeout(() => { window.location.assign('/escalations'); }, 600);
                 }
+                return;
+              }
+
+              const failedStatus = statuses.find((status) => status.status === 'FAILED');
+              if (failedStatus) {
+                setUploading(false);
+                setStatusText(`Processing failed: ${failedStatus.errorMessage || 'n8n could not process this document.'}`);
                 return;
               }
 
@@ -973,6 +983,7 @@ function App() {
     const [doc, setDoc] = useState(null);
     const [loadingDoc, setLoadingDoc] = useState(true);
     const [processing, setProcessing] = useState(false);
+    const [dispatching, setDispatching] = useState(false);
     const [selectedSection, setSelectedSection] = useState('all');
     const [invoiceDrafts, setInvoiceDrafts] = useState({});
     const [savingInvoice, setSavingInvoice] = useState(false);
@@ -1033,7 +1044,8 @@ function App() {
       const terminalStatuses = new Set(['FAILED', 'EXTRACTED', 'APPROVED', 'INVOICE_GENERATED', 'IN_REVIEW']);
 
       pollingRef.current.cancelled = false;
-      setProcessing(true);
+      setDispatching(true);
+      setProcessing(false);
       extractionTriggeredRef.current = true;
 
       try {
@@ -1047,10 +1059,20 @@ function App() {
           pageEnd,
           pages: Array.from({ length: Math.max(1, pageEnd - pageStart + 1) }, (_, i) => pageStart + i),
         });
+        if (!pollingRef.current.cancelled) setProcessing(true);
       } catch (error) {
         console.error('[Single Invoice] Extraction trigger failed:', error);
-        if (!pollingRef.current.cancelled) setProcessing(false);
+        if (!pollingRef.current.cancelled) {
+          setProcessing(false);
+          setDoc((current) => current ? {
+            ...current,
+            status: 'FAILED',
+            errorMessage: error.message || 'n8n did not accept the extraction request.',
+          } : current);
+        }
         return;
+      } finally {
+        if (!pollingRef.current.cancelled) setDispatching(false);
       }
 
       const poll = async () => {
@@ -1381,8 +1403,8 @@ function App() {
               <p className="subtle-copy mt-2">Edit the exact extracted key-value pairs before final generation.</p>
             </div>
             <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap' }}>
-              <button type="button" className="primary-btn" onClick={startSingleInvoiceExtraction} disabled={processing || !doc || Object.keys(getSingleInvoiceData(doc)).length > 0}>
-                {processing ? 'Extracting...' : 'Extract Invoice Data'}
+              <button type="button" className="primary-btn" onClick={startSingleInvoiceExtraction} disabled={processing || dispatching || !doc || Object.keys(getSingleInvoiceData(doc)).length > 0}>
+                {dispatching ? 'Connecting to n8n...' : processing ? 'Extracting...' : 'Extract Invoice Data'}
               </button>
               <button type="button" className="secondary-btn" onClick={discardDocument} disabled={discarding}>
                 {discarding ? 'Discarding...' : 'Discard'}
@@ -1427,9 +1449,24 @@ function App() {
                 ))}
               </div>
               <div className={`editor-scroll-content ${activeSection.id === 'shipment' ? 'single-invoice-shipment-content' : ''}`}>
-                {(processing || (isEmpty && doc?.status !== 'FAILED')) ? (
+                {dispatching ? (
+                  <div className="emir-extraction-state">
+                    <div className="emir-extraction-spinner" aria-hidden="true" />
+                    <h3 className="emir-extraction-state__title">Contacting n8n</h3>
+                    <p className="emir-extraction-state__desc">Waiting for n8n to confirm it received the extraction request...</p>
+                  </div>
+                ) : processing ? (
                   <div className="mt-2">
                     <ExtractionProcessingPanel isSingleInvoice={true} />
+                  </div>
+                ) : isEmpty ? (
+                  <div className="emir-extraction-state">
+                    <h3 className="emir-extraction-state__title">{doc?.status === 'FAILED' ? 'Extraction Failed' : 'Extraction Not Started'}</h3>
+                    <p className="emir-extraction-state__desc">
+                      {doc?.status === 'FAILED'
+                        ? (doc.errorMessage || 'n8n did not accept the extraction request.')
+                        : 'Select “Extract Invoice Data” to send this document to n8n.'}
+                    </p>
                   </div>
                 ) : (
                   renderFieldInputs()

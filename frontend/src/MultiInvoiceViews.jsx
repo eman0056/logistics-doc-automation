@@ -1820,11 +1820,18 @@ export const MultiInvoiceWorkspace = ({ docId: propDocId, docIds: propDocIds }) 
       if (!match) return null;
       setInvoices((prev) => prev.map((inv, idx) => {
         if (idx !== index) return inv;
+        const matchStatus = String(match.status || match.extractionStatus || '').toUpperCase();
         return {
           ...inv,
           ...match,
-          extractionUi: invoiceHasRealExtraction(match) ? EXTRACTION_UI.EXTRACTED : (inv.extractionUi || EXTRACTION_UI.IDLE),
-          extractionError: invoiceHasRealExtraction(match) ? null : inv.extractionError,
+          extractionUi: invoiceHasRealExtraction(match)
+            ? EXTRACTION_UI.EXTRACTED
+            : (['FAILED', 'EXTRACTION_FAILED', 'ERROR'].includes(matchStatus)
+              ? EXTRACTION_UI.FAILED
+              : (inv.extractionUi || EXTRACTION_UI.IDLE)),
+          extractionError: invoiceHasRealExtraction(match)
+            ? null
+            : (match.errorMessage || match.extractionError || inv.extractionError),
         };
       }));
       if (invoiceHasRealExtraction(match)) {
@@ -1864,12 +1871,6 @@ export const MultiInvoiceWorkspace = ({ docId: propDocId, docIds: propDocIds }) 
 
     // Brief preparing state for professional UX, then extracting
     await new Promise((r) => setTimeout(r, 350));
-    patchInvoiceAt(index, {
-      extractionUi: EXTRACTION_UI.EXTRACTING,
-      status: 'EXTRACTING',
-      extractionStatus: 'EXTRACTING',
-    });
-
     try {
       const result = await triggerInvoiceExtraction({
         ...invoice,
@@ -1906,7 +1907,8 @@ export const MultiInvoiceWorkspace = ({ docId: propDocId, docIds: propDocIds }) 
             extractionUi: EXTRACTION_UI.FAILED,
             status: 'FAILED',
             extractionStatus: 'FAILED',
-            extractionError: 'We couldn\'t extract the data from this invoice. Please try again.',
+            extractionError: found?.errorMessage || found?.extractionError
+              || 'n8n accepted the request, but no extraction result arrived after 40 seconds.',
           });
         }
       }
@@ -1923,7 +1925,7 @@ export const MultiInvoiceWorkspace = ({ docId: propDocId, docIds: propDocIds }) 
         extractionUi: EXTRACTION_UI.FAILED,
         status: 'FAILED',
         extractionStatus: 'FAILED',
-        extractionError: 'We couldn\'t extract the data from this invoice. Please try again.',
+        extractionError: err?.message || 'n8n did not accept the extraction request.',
       });
     } finally {
       extractionInFlightRef.current.delete(invoiceKey);
@@ -2020,7 +2022,7 @@ export const MultiInvoiceWorkspace = ({ docId: propDocId, docIds: propDocIds }) 
               : (['FAILED', 'EXTRACTION_FAILED'].includes(String(inv.status || '').toUpperCase())
                 ? EXTRACTION_UI.FAILED
                 : EXTRACTION_UI.IDLE),
-            extractionError: null,
+            extractionError: inv.errorMessage || inv.extractionError || null,
           }));
           setDoc(foundDoc);
           setInvoices(normalized);
@@ -2584,7 +2586,7 @@ export const MultiInvoiceWorkspace = ({ docId: propDocId, docIds: propDocIds }) 
                 <div className="emir-extraction-state__icon emir-extraction-state__icon--error">⚠</div>
                 <h3 className="emir-extraction-state__title">Extraction Failed</h3>
                 <p className="emir-extraction-state__desc">
-                  We couldn&apos;t extract the data from {selectedInvoiceLabel}. Please try again.
+                  {selectedInvoice?.extractionError || `We couldn&apos;t extract the data from ${selectedInvoiceLabel}. Please try again.`}
                 </p>
                 <button
                   type="button"
@@ -2789,4 +2791,3 @@ export const MultiInvoiceWorkspace = ({ docId: propDocId, docIds: propDocIds }) 
     </main>
   );
 };
-
