@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { extractRealInvoiceObject, invoiceHasRealExtraction } from './MultiInvoiceViews.jsx';
 
 export const DEFAULT_DEMO_ESCALATIONS = [];
 
@@ -26,42 +27,30 @@ export const Escalations = () => {
       const res = await fetch('/api/documents?refresh=' + Date.now());
       const data = await res.json();
       const issues = [];
-      const seenIds = new Set();
 
       (data.documents || []).forEach(doc => {
-        const docStatus = doc.status || 'PENDING';
-        const isDocFlagged = docStatus === 'Escalation Required' || docStatus === 'Poor Image Quality' || docStatus === 'POOR_IMAGE_QUALITY' || doc.poorImageQuality || (doc.imageQuality != null && doc.imageQuality < 0.6);
-        
-        if (isDocFlagged && !resolvedSet.has(doc.id)) {
-          seenIds.add(doc.id);
-          const isDocPoor = docStatus === 'POOR_IMAGE_QUALITY' || docStatus === 'Poor Image Quality' || doc.poorImageQuality || (doc.imageQuality != null && doc.imageQuality < 0.6);
-          issues.push({
-            id: doc.id,
-            documentId: doc.id,
-            docNumber: doc.fileName,
-            invoiceNumber: 'Doc Level',
-            reason: isDocPoor ? 'Poor Image Quality' : docStatus,
-            date: doc.createdAt ? new Date(doc.createdAt).toISOString().split('T')[0] : new Date().toISOString().split('T')[0],
-            status: 'Pending Review',
-            isMulti: (doc.invoiceCount || 1) > 1
-          });
-        }
-
         (doc.invoices || []).forEach((inv, idx) => {
           const invStatus = inv.status || inv.extractionStatus;
           const isInvFlagged = invStatus === 'Poor Image Quality' || invStatus === 'POOR_IMAGE_QUALITY' || invStatus === 'Escalation Required' || inv.poorImageQuality || (inv.imageQuality != null && inv.imageQuality < 0.6);
           const invKey = inv.id || `${doc.id}-${idx}`;
+          const extractedData = extractRealInvoiceObject(inv.extractedData || inv.canonicalJson) || {};
+          const extractedHeader = extractedData.invoiceHeader || extractedData.header || {};
+          const hasInvoiceNumber = invoiceHasRealExtraction(inv) && Boolean(
+            extractedHeader.invoiceNumber
+            || extractedHeader.invoice_number
+            || extractedHeader.invoiceNo
+            || extractedData.invoiceNumber
+            || inv.invoiceNumber
+          );
 
-          if (isInvFlagged && !resolvedSet.has(invKey) && !resolvedSet.has(doc.id)) {
-            seenIds.add(invKey);
-            const isInvPoor = invStatus === 'POOR_IMAGE_QUALITY' || invStatus === 'Poor Image Quality' || inv.poorImageQuality || (inv.imageQuality != null && inv.imageQuality < 0.6);
+          if (isInvFlagged && !hasInvoiceNumber && !resolvedSet.has(invKey) && !resolvedSet.has(doc.id)) {
             issues.push({
               id: invKey,
               documentId: doc.id,
               invoiceIndex: idx,
               docNumber: doc.fileName,
               invoiceNumber: inv.invoiceNumber || `Invoice #${idx + 1}`,
-              reason: isInvPoor ? 'Poor Image Quality' : (invStatus || 'Escalation Required'),
+              reason: invStatus === 'POOR_IMAGE_QUALITY' || invStatus === 'Poor Image Quality' || inv.poorImageQuality || (inv.imageQuality != null && inv.imageQuality < 0.6) ? 'Poor Image Quality' : (invStatus || 'Escalation Required'),
               date: doc.createdAt ? new Date(doc.createdAt).toISOString().split('T')[0] : new Date().toISOString().split('T')[0],
               status: 'Pending Review',
               isMulti: true
@@ -133,7 +122,7 @@ export const Escalations = () => {
         </div>
         <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center' }}>
           <span className="status-pill danger" style={{ fontSize: '0.85rem', padding: '0.4rem 0.8rem' }}>
-            📸⚠️ {escalations.length} Active Alerts
+            📸⚠️ {filtered.length} Active Alerts
           </span>
         </div>
       </div>
@@ -178,7 +167,7 @@ export const Escalations = () => {
               onClick={() => setFilterReason('ALL')}
               style={{ padding: '0.4rem 0.8rem', fontSize: '0.8rem' }}
             >
-              All Flags ({escalations.length})
+              All Flags ({filtered.length})
             </button>
             <button 
               type="button"

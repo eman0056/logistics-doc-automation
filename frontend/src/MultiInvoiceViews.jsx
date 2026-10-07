@@ -466,6 +466,17 @@ export const UploadMultiView = () => {
     setBatchResults({ docs: fileEntries.length, completed, needsReview, failed, invoices: totalInvoices, poorQuality, docIds });
     setIsProcessing(false);
     setBatchDone(true);
+
+    if (failed === 0 && docIds.length === 1) {
+      const uploadedEntry = fileEntries.find((entry) => entry.documentId === docIds[0]);
+      if (uploadedEntry) {
+        const isPdf = (uploadedEntry.file?.name || '').toLowerCase().endsWith('.pdf');
+        const target = uploadedEntry.invoiceCount > 1 || isPdf
+          ? `/documents/${docIds[0]}/multi-workspace?expectedInvoices=${encodeURIComponent(uploadedEntry.invoiceCount || 1)}`
+          : `/documents/${docIds[0]}/review`;
+        window.location.assign(target);
+      }
+    }
   };
 
   const handleRetry = async (entry) => {
@@ -2784,7 +2795,8 @@ export const MultiInvoiceWorkspace = ({ docId: propDocId, docIds: propDocIds }) 
             const invHeader = invDraft.invoiceHeader || invDraft.header || {};
             const hasReal = invoiceHasRealExtraction(inv) || Boolean(extractRealInvoiceObject(invDraft));
             const invNumberVal = hasReal ? (invHeader.invoiceNumber || invDraft.invoiceNumber || inv.invoiceNumber) : null;
-            const displayNum = invNumberVal ? String(invNumberVal) : 'Not extracted';
+            const hasInvoiceNumber = Boolean(invNumberVal);
+            const displayNum = hasInvoiceNumber ? String(invNumberVal) : 'Poor image';
             const conf = hasReal && inv.overallConfidence != null ? Math.round(inv.overallConfidence * 100) : null;
             const statusLabel = humanInvoiceStatus(inv, globalIdx);
             const ui = normalizeInvoiceExtractionUi(inv);
@@ -2807,7 +2819,7 @@ export const MultiInvoiceWorkspace = ({ docId: propDocId, docIds: propDocIds }) 
                   {isSelected && <span className="emir-selected-pill">● SELECTED</span>}
                 </div>
 
-                <div className="emir-card-number" style={{ fontStyle: displayNum === 'Not extracted' ? 'italic' : 'normal', opacity: displayNum === 'Not extracted' ? 0.7 : 1 }}>
+                <div className="emir-card-number" style={{ fontStyle: hasInvoiceNumber ? 'normal' : 'italic', opacity: hasInvoiceNumber ? 1 : 0.7 }}>
                   {displayNum}
                 </div>
 
