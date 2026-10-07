@@ -4,6 +4,7 @@ import { UploadMultiView, MultiInvoiceWorkspace, ExtractionProcessingPanel, trig
 import { Escalations } from './Escalations.jsx';
 import { EscalationModal } from './EscalationModal.jsx';
 import { PreviewRange } from './PreviewRange.jsx';
+import { BackButton } from './BackButton.jsx';
 
 const API = '/api';
 
@@ -1262,6 +1263,7 @@ function App() {
         <main className="page">
           <div className="section-header">
             <div>
+              <BackButton />
               <div className="eyebrow">Review</div>
               <h1 className="page-title">Dynamic Review & Edit</h1>
               <p className="subtle-copy mt-2">Edit the exact extracted key-value pairs before final generation.</p>

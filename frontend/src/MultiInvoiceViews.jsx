@@ -3,6 +3,7 @@ import * as pdfjsLib from 'pdfjs-dist/build/pdf.js';
 import pdfWorkerUrl from 'pdfjs-dist/build/pdf.worker.min.js?url';
 import { apiGetJson, normalizeApiCacheUrl } from './dataCache.js';
 import { EscalationModal } from './EscalationModal.jsx';
+import { BackButton } from './BackButton.jsx';
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorkerUrl || `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js`;
 
@@ -1839,6 +1840,8 @@ export const MultiInvoiceWorkspace = ({ docId: propDocId, docIds: propDocIds }) 
   const [saveSuccess, setSaveSuccess] = useState(false);
   const [saveError, setSaveError] = useState('');
   const [showDiscardModal, setShowDiscardModal] = useState(false);
+  const [discardingDocument, setDiscardingDocument] = useState(false);
+  const [discardError, setDiscardError] = useState('');
   const [showEscalationModal, setShowEscalationModal] = useState(false);
   const [pageOffset, setPageOffset] = useState(0);
   const [zoomMode, setZoomMode] = useState('fit'); // 'fit' | 'manual'
@@ -2172,11 +2175,42 @@ export const MultiInvoiceWorkspace = ({ docId: propDocId, docIds: propDocIds }) 
     }
   };
 
-  const handleConfirmDiscard = () => {
-    if (!selectedInvoice) return;
-    const originalExtracted = extractRealInvoiceObject(selectedInvoice.extractedData || selectedInvoice.canonicalJson) || {};
-    setDrafts((prev) => ({ ...prev, [selectedInvoiceIndex]: originalExtracted }));
-    setShowDiscardModal(false);
+  const handleConfirmDiscard = async () => {
+    if (discardingDocument) return;
+    const discardDocId = selectedInvoice?.documentId || primaryDocId;
+    const requestUrl = `${API}/documents/${discardDocId}`;
+    let responseStatus = null;
+    setDiscardingDocument(true);
+    setDiscardError('');
+    console.log('[Document Discard] Sending request:', { url: requestUrl, method: 'DELETE' });
+    try {
+      const response = await fetch(requestUrl, { method: 'DELETE', cache: 'no-store' });
+      responseStatus = response.status;
+      let result = {};
+      try {
+        result = await response.json();
+      } catch (parseError) {
+        if (response.ok) throw parseError;
+      }
+      console.log('[Document Discard] Response:', { url: requestUrl, status: response.status, body: result });
+      if (!response.ok || !result.success) {
+        throw new Error(result.error || `Discard failed (HTTP ${response.status}).`);
+      }
+
+      setShowDiscardModal(false);
+      window.history.pushState({}, '', '/dashboard');
+      window.dispatchEvent(new PopStateEvent('popstate'));
+    } catch (error) {
+      console.error('[Document Discard] Request failed:', {
+        url: requestUrl,
+        status: responseStatus,
+        message: error.message,
+        error,
+      });
+      setDiscardError(error.message || 'Unable to discard document.');
+    } finally {
+      setDiscardingDocument(false);
+    }
   };
 
   if (loading) {
@@ -2394,8 +2428,9 @@ export const MultiInvoiceWorkspace = ({ docId: propDocId, docIds: propDocIds }) 
       {/* ── A. TOP HEADER ─────────────────────────────────────────────────── */}
       <header className="emir-header">
         <div className="emir-header-left">
+          <BackButton />
           <div className="emir-breadcrumbs">
-            <span>Document Review</span>
+            <a href="/dashboard" style={{ color: 'inherit', textDecoration: 'none' }}>Document Review</a>
             <span>/</span>
             <span>{isBatchMode ? 'Batch Multi-Invoice Processing' : 'Multi-Invoice Processing'}</span>
             {!isBatchMode && <span className="emir-file-badge">{doc?.fileName || 'Combined_Invoice.pdf'}</span>}
@@ -2425,7 +2460,10 @@ export const MultiInvoiceWorkspace = ({ docId: propDocId, docIds: propDocIds }) 
           <button
             type="button"
             className="emir-btn-discard"
-            onClick={() => setShowDiscardModal(true)}
+            onClick={() => {
+              setDiscardError('');
+              setShowDiscardModal(true);
+            }}
           >
             ✕ Discard
           </button>
@@ -2801,16 +2839,18 @@ export const MultiInvoiceWorkspace = ({ docId: propDocId, docIds: propDocIds }) 
           <div className="emir-modal-card">
             <div className="emir-modal-header">
               <div className="emir-modal-icon">⚠️</div>
-              <h3 className="emir-modal-title">Discard Invoice Changes?</h3>
+              <h3 className="emir-modal-title">Discard this document?</h3>
             </div>
             <div className="emir-modal-body">
-              This will remove all unsaved modifications made to the currently selected invoice (<strong>Invoice {selectedInvoiceIndex + 1}</strong>).
+              This cannot be undone.
+              {discardError && <div role="alert" style={{ color: 'var(--danger, #EA6A6A)', marginTop: '0.75rem' }}>{discardError}</div>}
             </div>
             <div className="emir-modal-footer">
               <button
                 type="button"
                 className="secondary-btn"
                 onClick={() => setShowDiscardModal(false)}
+                disabled={discardingDocument}
               >
                 Cancel
               </button>
@@ -2818,8 +2858,9 @@ export const MultiInvoiceWorkspace = ({ docId: propDocId, docIds: propDocIds }) 
                 type="button"
                 className="emir-btn-discard"
                 onClick={handleConfirmDiscard}
+                disabled={discardingDocument}
               >
-                Discard Changes
+                {discardingDocument ? 'Discarding...' : 'Discard'}
               </button>
             </div>
           </div>
