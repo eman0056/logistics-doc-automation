@@ -9,6 +9,8 @@ import uuid
 import time
 import os
 import base64
+import hashlib
+import mimetypes
 import urllib.request
 import urllib.error
 import threading
@@ -222,7 +224,7 @@ def _validate_production_webhook_url(webhook_url):
     return webhook_url
 
 
-def send_to_n8n_webhook(invoice_index, pages, base64_pdf, doc_id=None, raw_ocr_text=None, file_bytes=None, page_start_for_ocr=None, page_end_for_ocr=None, image_quality=None, invoice_id=None):
+def send_to_n8n_webhook(invoice_index, pages, base64_pdf, doc_id=None, raw_ocr_text=None, file_bytes=None, page_start_for_ocr=None, page_end_for_ocr=None, image_quality=None, invoice_id=None, source_file_name=None, source_mime_type=None, source_file_size=None, dispatch_file_size=None):
     """
     Send isolated invoice payload to n8n webhook.
     The attached PDF/file contains ONLY this invoice's pages — never the full multi-invoice document.
@@ -284,14 +286,50 @@ def send_to_n8n_webhook(invoice_index, pages, base64_pdf, doc_id=None, raw_ocr_t
         app_base_url = 'http://localhost:3000'
     callback_url = f"{app_base_url}/api/documents/{doc_id}/extraction/callback"
 
+    safe_source_name = os.path.basename((source_file_name or "").replace("\\", "/")).replace('"', "_").replace("\r", "_").replace("\n", "_")
+    is_pdf = safe_source_name.lower().endswith(".pdf") or (
+        not os.path.splitext(safe_source_name)[1] and (source_mime_type or "").lower() == "application/pdf"
+    )
+    file_name = f"{resolved_invoice_id}.pdf" if is_pdf else (safe_source_name or resolved_invoice_id)
+    stored_mime_type = (source_mime_type or "").split(";", 1)[0].strip()
+    file_type = "application/pdf" if is_pdf else (
+        stored_mime_type if stored_mime_type and stored_mime_type != "application/octet-stream"
+        else mimetypes.guess_type(file_name)[0] or stored_mime_type or "application/octet-stream"
+    )
+
+    try:
+        file_payload_bytes = base64.b64decode(base64_pdf, validate=True) if base64_pdf else b""
+    except (ValueError, TypeError) as exc:
+        error_message = f"Invalid base64 file payload for invoice {resolved_invoice_id}: {exc}"
+        print(f"[n8n FILE] invoiceId={resolved_invoice_id} fileName={file_name!r} mimeType={file_type!r} validationError={error_message}")
+        return {"success": False, "status": 0, "error": error_message}
+    if not file_payload_bytes:
+        error_message = f"Empty file payload for invoice {resolved_invoice_id}"
+        print(f"[n8n FILE] invoiceId={resolved_invoice_id} fileName={file_name!r} mimeType={file_type!r} validationError={error_message}")
+        return {"success": False, "status": 0, "error": error_message}
+    if base64.b64encode(file_payload_bytes).decode("ascii") != base64_pdf:
+        error_message = f"File payload failed base64 integrity validation for invoice {resolved_invoice_id}"
+        print(f"[n8n FILE] invoiceId={resolved_invoice_id} fileName={file_name!r} mimeType={file_type!r} validationError={error_message}")
+        return {"success": False, "status": 0, "error": error_message}
+    file_size = len(file_payload_bytes)
+    if dispatch_file_size is not None and file_size != dispatch_file_size:
+        error_message = f"File payload size mismatch for invoice {resolved_invoice_id}: expected {dispatch_file_size}, decoded {file_size}"
+        print(f"[n8n FILE] invoiceId={resolved_invoice_id} fileName={file_name!r} mimeType={file_type!r} validationError={error_message}")
+        return {"success": False, "status": 0, "error": error_message}
+    if not is_pdf and file_bytes is not None and file_payload_bytes != file_bytes:
+        error_message = f"Uploaded file bytes do not match the stored source for invoice {resolved_invoice_id}"
+        print(f"[n8n FILE] invoiceId={resolved_invoice_id} fileName={file_name!r} mimeType={file_type!r} validationError={error_message}")
+        return {"success": False, "status": 0, "error": error_message}
+
     payload = {
         "invoiceIndex": invoice_index,
         "invoiceId": resolved_invoice_id,
         "pages": page_list,
         "pageStart": page_start,
         "pageEnd": page_end,
-        "pdfBase64": base64_pdf,
         "fileBase64": base64_pdf,
+        "fileName": file_name,
+        "mimeType": file_type,
         "documentId": doc_id,
         "docId": doc_id,
         "rawOcrText": raw_ocr_text,
@@ -302,23 +340,19 @@ def send_to_n8n_webhook(invoice_index, pages, base64_pdf, doc_id=None, raw_ocr_t
         "timestamp": datetime.now().isoformat()
     }
 
-    sliced_bytes = None
-    try:
-        sliced_bytes = base64.b64decode(base64_pdf) if base64_pdf else None
-    except Exception:
-        sliced_bytes = None
-    file_name = f"{resolved_invoice_id}.pdf"
-    file_type = "application/pdf"
-    file_size = len(sliced_bytes) if sliced_bytes else 0
-
+    print(
+        f"[n8n FILE] invoiceId={resolved_invoice_id} fileName={file_name!r} "
+        f"sizeBytes={file_size} sourceSizeBytes={source_file_size} mimeType={file_type!r} "
+        f"sha256={hashlib.sha256(file_payload_bytes).hexdigest()}"
+    )
     print(
         f"[n8n DISPATCH] Initiating dispatch -> invoiceId={resolved_invoice_id} documentId={doc_id} "
         f"workflowType={workflow_type} invoiceCount={invoice_count} "
-        f"pageStart={page_start} pageEnd={page_end} pages={page_list} fileSize={file_size} webhook={webhook_url}"
+        f"pageStart={page_start} pageEnd={page_end} pages={page_list} webhook={webhook_url}"
     )
 
     try:
-        if sliced_bytes:
+        if file_payload_bytes:
             fields = {
                 "documentId": str(doc_id or ""),
                 "docId": str(doc_id or ""),
@@ -328,22 +362,19 @@ def send_to_n8n_webhook(invoice_index, pages, base64_pdf, doc_id=None, raw_ocr_t
                 "pageEnd": str(page_end),
                 "pages": json.dumps(page_list),
                 "fileName": file_name,
-                "fileType": file_type,
+                "mimeType": file_type,
                 "fileSize": str(file_size),
                 "callbackUrl": callback_url,
                 "rawOcrText": raw_ocr_text or "",
                 "imageQuality": str(image_quality),
                 "workflowType": workflow_type,
                 "detectedInvoiceCount": str(invoice_count),
-                "pdfBase64": base64_pdf,
                 "fileBase64": base64_pdf,
-                "payload": json.dumps({k: v for k, v in payload.items() if k not in ("pdfBase64", "fileBase64")}),
             }
             body, boundary = _build_multipart_body(
                 fields,
                 [
-                    ("file", file_name, file_type, sliced_bytes),
-                    ("data", file_name, file_type, sliced_bytes),
+                    ("data", file_name, file_type, file_payload_bytes),
                 ],
             )
             req = urllib.request.Request(
@@ -2304,7 +2335,7 @@ def _set_document_invoice_state(doc_id, invoice_id, invoice_index, page_start, p
 
 async def _internal_process_invoice(doc_id: str, invoice_index: int, page_start: int, page_end: int, invoice_id=None):
     conn = get_db()
-    cursor = execute_query(conn, "SELECT fileData, storagePath, fileName FROM Document WHERE id = ?", (doc_id,))
+    cursor = execute_query(conn, "SELECT fileData, storagePath, fileName, mimeType, fileSize FROM Document WHERE id = ?", (doc_id,))
     row = cursor.fetchone()
     if invoice_id:
         invoice_cursor = execute_query(
@@ -2334,7 +2365,7 @@ async def _internal_process_invoice(doc_id: str, invoice_index: int, page_start:
     page_start = invoice_row[2] or 1
     page_end = invoice_row[3] or page_start
 
-    file_data_b64, storage_path, file_name = row
+    file_data_b64, storage_path, file_name, mime_type, source_file_size = row
     file_bytes = None
 
     if file_data_b64:
@@ -2347,6 +2378,16 @@ async def _internal_process_invoice(doc_id: str, invoice_index: int, page_start:
 
     if not file_bytes:
         return JSONResponse({"success": False, "error": f"PDF file not found: {doc_id}"}, status_code=404)
+    if source_file_size is not None and len(file_bytes) != int(source_file_size):
+        error_message = (
+            f"Stored file size mismatch for document {doc_id}: expected {source_file_size}, "
+            f"found {len(file_bytes)} bytes"
+        )
+        _set_document_invoice_state(
+            doc_id, invoice_id, invoice_index, page_start, page_end, "FAILED",
+            error_message=error_message,
+        )
+        return JSONResponse({"success": False, "error": error_message}, status_code=500)
 
     resolved_invoice_id = invoice_id
     print(
@@ -2375,7 +2416,10 @@ async def _internal_process_invoice(doc_id: str, invoice_index: int, page_start:
         send_to_n8n_webhook,
         invoice_index, list(range(int(page_start), int(page_end) + 1)), base64_pdf,
         doc_id=doc_id, file_bytes=file_bytes, page_start_for_ocr=page_start, page_end_for_ocr=page_end,
-        image_quality=image_quality, invoice_id=resolved_invoice_id
+        image_quality=image_quality, invoice_id=resolved_invoice_id,
+        source_file_name=file_name, source_mime_type=mime_type,
+        source_file_size=source_file_size,
+        dispatch_file_size=extraction["file_size"] if ext == ".pdf" or not ext else len(file_bytes),
     )
     if not webhook_result["success"]:
         state_conn = get_db()
