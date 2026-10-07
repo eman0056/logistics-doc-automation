@@ -1,5 +1,4 @@
 import React, { useState, useEffect } from 'react';
-import { extractRealInvoiceObject, invoiceHasRealExtraction } from './MultiInvoiceViews.jsx';
 
 export const DEFAULT_DEMO_ESCALATIONS = [];
 
@@ -24,41 +23,24 @@ export const Escalations = () => {
     const resolvedSet = new Set(resolvedIds);
 
     try {
-      const res = await fetch('/api/documents?refresh=' + Date.now());
+      const res = await fetch(`/api/documents?escalations_only=true&refresh=${Date.now()}`, { cache: 'no-store' });
+      if (!res.ok) throw new Error(`Unable to load escalations (HTTP ${res.status}).`);
       const data = await res.json();
-      const issues = [];
-
-      (data.documents || []).forEach(doc => {
-        (doc.invoices || []).forEach((inv, idx) => {
-          const invStatus = inv.status || inv.extractionStatus;
-          const isInvFlagged = invStatus === 'Poor Image Quality' || invStatus === 'POOR_IMAGE_QUALITY' || invStatus === 'Escalation Required' || inv.poorImageQuality || (inv.imageQuality != null && inv.imageQuality < 0.6);
-          const invKey = inv.id || `${doc.id}-${idx}`;
-          const extractedData = extractRealInvoiceObject(inv.extractedData || inv.canonicalJson) || {};
-          const extractedHeader = extractedData.invoiceHeader || extractedData.header || {};
-          const hasInvoiceNumber = invoiceHasRealExtraction(inv) && Boolean(
-            extractedHeader.invoiceNumber
-            || extractedHeader.invoice_number
-            || extractedHeader.invoiceNo
-            || extractedData.invoiceNumber
-            || inv.invoiceNumber
-          );
-
-          if (isInvFlagged && !hasInvoiceNumber && !resolvedSet.has(invKey) && !resolvedSet.has(doc.id)) {
-            issues.push({
-              id: invKey,
-              documentId: doc.id,
-              invoiceIndex: idx,
-              docNumber: doc.fileName,
-              invoiceNumber: inv.invoiceNumber || `Invoice #${idx + 1}`,
-              reason: invStatus === 'POOR_IMAGE_QUALITY' || invStatus === 'Poor Image Quality' || inv.poorImageQuality || (inv.imageQuality != null && inv.imageQuality < 0.6) ? 'Poor Image Quality' : (invStatus || 'Escalation Required'),
-              date: doc.createdAt ? new Date(doc.createdAt).toISOString().split('T')[0] : new Date().toISOString().split('T')[0],
-              status: 'Pending Review',
-              isMulti: true
-            });
-          }
-        });
+      const seenInvoices = new Set();
+      const issues = (data.escalations || []).filter((item) => {
+        if (
+          item.scope !== 'invoice'
+          || !item.poorImageQuality
+          || item.hasInvoiceNumber
+          || !item.hasExtraction
+          || resolvedSet.has(item.id)
+          || resolvedSet.has(item.documentId)
+        ) return false;
+        const invoiceKey = `${item.documentId}:${item.invoiceIndex}`;
+        if (seenInvoices.has(invoiceKey)) return false;
+        seenInvoices.add(invoiceKey);
+        return true;
       });
-
       setEscalations(issues);
     } catch (err) {
       console.error('Failed to load escalations', err);
@@ -100,17 +82,21 @@ export const Escalations = () => {
     }
   };
 
-  const filtered = escalations.filter(e => {
+  const searchable = escalations.filter(e => {
     const matchesSearch = (
       e.docNumber.toLowerCase().includes(search.toLowerCase()) ||
       e.invoiceNumber.toLowerCase().includes(search.toLowerCase()) ||
       e.reason.toLowerCase().includes(search.toLowerCase())
     );
-    if (!matchesSearch) return false;
+    return matchesSearch;
+  });
+  const filtered = searchable.filter(e => {
     if (filterReason === 'POOR_QUALITY') return e.reason.includes('Poor Image Quality');
     if (filterReason === 'ESCALATED') return e.reason.includes('Escalation');
     return true;
   });
+  const poorQualityCount = searchable.filter(e => e.reason.includes('Poor Image Quality')).length;
+  const dataIssuesCount = searchable.filter(e => e.reason.includes('Escalation')).length;
 
   return (
     <main className="page">
@@ -175,7 +161,7 @@ export const Escalations = () => {
               onClick={() => setFilterReason('POOR_QUALITY')}
               style={{ padding: '0.4rem 0.8rem', fontSize: '0.8rem' }}
             >
-              Poor Quality 📸
+              Poor Quality 📸 ({poorQualityCount})
             </button>
             <button 
               type="button"
@@ -183,7 +169,7 @@ export const Escalations = () => {
               onClick={() => setFilterReason('ESCALATED')}
               style={{ padding: '0.4rem 0.8rem', fontSize: '0.8rem' }}
             >
-              Data Issues ⚠️
+              Data Issues ⚠️ ({dataIssuesCount})
             </button>
           </div>
         </div>

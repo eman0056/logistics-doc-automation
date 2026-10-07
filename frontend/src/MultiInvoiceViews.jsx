@@ -489,31 +489,10 @@ export const UploadMultiView = () => {
     if (docIds.length === 1) {
       const targetDocId = docIds[0];
       const uploadedEntry = fileEntries.find((entry) => entry.documentId === targetDocId);
-      let doc = null;
-      try {
-        const res = await fetch(`${API}/documents?refresh=${Date.now()}`);
-        if (!res.ok) throw new Error(`Document lookup failed (HTTP ${res.status})`);
-        const data = await res.json();
-        doc = (data.documents || []).find((item) => item.id === targetDocId) || null;
-      } catch (error) {
-        console.error('[Upload] Failed to reload uploaded document metadata:', error);
-      }
-
-      const invCount = Number(
-        doc?.invoiceCount
-        ?? doc?.invoices?.length
-        ?? (docIds.length === 1 ? batchResults.invoices : null)
-        ?? uploadedEntry?.invoiceCount
-        ?? 1
-      );
-      const fileName = doc?.fileName || uploadedEntry?.file?.name || '';
+      const invCount = Number(uploadedEntry?.invoiceCount ?? batchResults.invoices ?? 1);
+      const fileName = uploadedEntry?.file?.name || '';
       const isPdf = fileName.toLowerCase().endsWith('.pdf');
-      const isPoor = doc?.status === 'POOR_IMAGE_QUALITY'
-        || doc?.status === 'Poor Image Quality'
-        || doc?.poorImageQuality;
-      if (isPoor) {
-        window.location.assign('/escalations');
-      } else if (invCount > 1 || isPdf) {
+      if (invCount > 1 || isPdf) {
         window.location.assign(`/documents/${targetDocId}/multi-workspace?expectedInvoices=${encodeURIComponent(invCount)}`);
       } else {
         window.location.assign(`/documents/${targetDocId}/review`);
@@ -1939,10 +1918,15 @@ export const MultiInvoiceWorkspace = ({ docId: propDocId, docIds: propDocIds }) 
       const extractedPayload = result?.extractedData;
       const realObj = extractRealInvoiceObject(extractedPayload) || extractRealInvoiceObject(extractedPayload?.extractedData);
       if (realObj) {
+        const header = realObj.invoiceHeader || realObj.invoice_header || realObj.header || realObj;
+        const invoiceNumber = header.invoiceNumber || header.invoice_number || header.invoiceNo || header.invoice_no || header.invoiceId || header.documentNumber;
+        const hasInvoiceNumber = invoiceNumber != null && String(invoiceNumber).trim() !== '';
+        const resultStatus = hasInvoiceNumber ? 'EXTRACTED' : 'POOR_IMAGE_QUALITY';
         patchInvoiceAt(index, {
           extractionUi: EXTRACTION_UI.EXTRACTED,
-          status: 'EXTRACTED',
-          extractionStatus: 'EXTRACTED',
+          status: resultStatus,
+          extractionStatus: resultStatus,
+          poorImageQuality: !hasInvoiceNumber,
           extractedData: realObj,
           canonicalJson: realObj,
           extractionError: null,
@@ -2006,7 +1990,7 @@ export const MultiInvoiceWorkspace = ({ docId: propDocId, docIds: propDocIds }) 
         if (isBatchMode) {
           const idsQuery = docIds.join(',');
           const [docsRes, invRes] = await Promise.all([
-            fetch(`${API}/documents?refresh=${Date.now()}`, { cache: 'no-store' }),
+            fetch(`${API}/documents?summary=true&ids=${encodeURIComponent(primaryDocId)}&refresh=${Date.now()}`, { cache: 'no-store' }),
             fetch(`${API}/documents/${primaryDocId}/invoices?ids=${encodeURIComponent(idsQuery)}&refresh=${Date.now()}`, { cache: 'no-store' })
           ]);
           if (!docsRes.ok || !invRes.ok) {
@@ -2020,7 +2004,7 @@ export const MultiInvoiceWorkspace = ({ docId: propDocId, docIds: propDocIds }) 
           const docId = primaryDocId;
           setLoadingMessage('Detecting invoices...');
           const [docRes, invRes] = await Promise.all([
-            fetch(`${API}/documents?refresh=${Date.now()}`, { cache: 'no-store' }),
+            fetch(`${API}/documents?summary=true&ids=${encodeURIComponent(docId)}&refresh=${Date.now()}`, { cache: 'no-store' }),
             fetch(`${API}/documents/${docId}/invoices?refresh=${Date.now()}`, { cache: 'no-store' })
           ]);
           if (!docRes.ok || !invRes.ok) {
@@ -2033,21 +2017,23 @@ export const MultiInvoiceWorkspace = ({ docId: propDocId, docIds: propDocIds }) 
 
           const isPdf = (foundDoc?.fileName || '').toLowerCase().endsWith('.pdf');
           if (isPdf) {
-            const detectRes = await fetch(`${API}/documents/${docId}/detect-invoices?refresh=${Date.now()}`, { cache: 'no-store' });
-            if (!detectRes.ok) {
-              throw new Error(`Invoice detection failed (HTTP ${detectRes.status})`);
-            }
-            const detectData = await detectRes.json();
-            const detectedGroups = Array.isArray(detectData.invoiceGroups) ? detectData.invoiceGroups : [];
-            if (!detectData.success || detectedGroups.length === 0) {
-              throw new Error('Invoice detection returned no invoice groups for this PDF.');
-            }
-
-            const expectedCount = Number.isInteger(expectedInvoiceCountParam) && expectedInvoiceCountParam > 0
+            let expectedCount = Number.isInteger(expectedInvoiceCountParam) && expectedInvoiceCountParam > 0
               ? expectedInvoiceCountParam
-              : detectedGroups.length;
-            if (detectedGroups.length !== expectedCount) {
-              throw new Error(`Invoice detection found ${detectedGroups.length} invoices; upload reported ${expectedCount}.`);
+              : Number(foundDoc?.invoiceCount || 0);
+            if (expectedCount <= 0) {
+              const detectRes = await fetch(`${API}/documents/${docId}/detect-invoices?refresh=${Date.now()}`, { cache: 'no-store' });
+              if (!detectRes.ok) {
+                throw new Error(`Invoice detection failed (HTTP ${detectRes.status})`);
+              }
+              const detectData = await detectRes.json();
+              const detectedGroups = Array.isArray(detectData.invoiceGroups) ? detectData.invoiceGroups : [];
+              if (!detectData.success || detectedGroups.length === 0) {
+                throw new Error('Invoice detection returned no invoice groups for this PDF.');
+              }
+              expectedCount = detectedGroups.length;
+            }
+            if (invoiceList.length > expectedCount) {
+              throw new Error(`Invoice list returned ${invoiceList.length} records; expected ${expectedCount}.`);
             }
 
             for (let attempt = 0; attempt < 30 && invoiceList.length < expectedCount; attempt += 1) {
@@ -2792,15 +2778,19 @@ export const MultiInvoiceWorkspace = ({ docId: propDocId, docIds: propDocIds }) 
           {filteredWithIndex.map(({ inv, globalIdx }) => {
             const isSelected = selectedInvoiceIndex === globalIdx;
             const invDraft = drafts[globalIdx] || {};
-            const invHeader = invDraft.invoiceHeader || invDraft.header || {};
+            const invHeader = invDraft.invoiceHeader || invDraft.invoice_header || invDraft.header || {};
             const hasReal = invoiceHasRealExtraction(inv) || Boolean(extractRealInvoiceObject(invDraft));
-            const invNumberVal = hasReal ? (invHeader.invoiceNumber || invDraft.invoiceNumber || inv.invoiceNumber) : null;
-            const hasInvoiceNumber = Boolean(invNumberVal);
-            const displayNum = hasInvoiceNumber ? String(invNumberVal) : 'Poor image';
+            const invNumberVal = hasReal ? (
+              invHeader.invoiceNumber || invHeader.invoice_number || invHeader.invoiceNo
+              || invHeader.invoice_no || invHeader.invoiceId || invHeader.documentNumber
+              || invDraft.invoiceNumber || inv.invoiceNumber
+            ) : null;
+            const hasInvoiceNumber = invNumberVal != null && String(invNumberVal).trim() !== '';
+            const displayNum = hasReal ? (hasInvoiceNumber ? String(invNumberVal) : 'Poor image') : 'Not extracted';
             const conf = hasReal && inv.overallConfidence != null ? Math.round(inv.overallConfidence * 100) : null;
             const statusLabel = humanInvoiceStatus(inv, globalIdx);
             const ui = normalizeInvoiceExtractionUi(inv);
-            const poor = inv.poorImageQuality || inv.status === 'Poor Image Quality' || inv.status === 'POOR_IMAGE_QUALITY';
+            const poor = hasReal && !hasInvoiceNumber;
             const srcName = inv.sourceFileName || inv.fileName || '';
             const invLabel = invoiceDisplayLabel(inv, globalIdx);
             const invPageCount = invoicePageCount(inv);

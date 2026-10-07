@@ -342,35 +342,45 @@ function App() {
   }, []);
 
   useEffect(() => {
-    const loadData = async () => {
-      try {
-        const [customerRes, docsRes] = await Promise.all([
-          fetchJson(`${API}/customer`),
-          fetchJson(`${API}/documents`),
-        ]);
-
-        if (!customerRes.ok) {
-          throw new Error('Unable to load customer data.');
+    let active = true;
+    fetchJson(`${API}/customer`)
+      .then(async (response) => {
+        if (!response.ok) throw new Error('Unable to load customer data.');
+        const data = await response.json();
+        if (active && data.customer) setCustomer(data.customer);
+      })
+      .catch((error) => {
+        if (active) {
+          setLoadError(error.message || 'Unable to load customer data.');
+          console.error('Customer load error', error);
         }
-        if (!docsRes.ok) {
-          throw new Error('Unable to load document data.');
-        }
-
-        const customerJson = await customerRes.json();
-        const docsJson = await docsRes.json();
-
-        if (customerJson.customer) setCustomer(customerJson.customer);
-        setDocuments(docsJson.documents || []);
-      } catch (error) {
-        setLoadError(error.message || 'Unable to load application data.');
-        console.error('Load error', error);
-      } finally {
-        setLoading(false);
-      }
-    };
-
-    loadData();
+      });
+    return () => { active = false; };
   }, []);
+
+  useEffect(() => {
+    let active = true;
+    const pathname = path.split('?')[0];
+    const documentsUrl = pathname === '/invoices' || pathname === '/flagged'
+      ? `${API}/documents`
+      : `${API}/documents?summary=true&refresh=${Date.now()}`;
+    fetchJson(documentsUrl)
+      .then(async (response) => {
+        if (!response.ok) throw new Error('Unable to load document data.');
+        const data = await response.json();
+        if (active) setDocuments(data.documents || []);
+      })
+      .catch((error) => {
+        if (active) {
+          setLoadError(error.message || 'Unable to load document data.');
+          console.error('Document load error', error);
+        }
+      })
+      .finally(() => {
+        if (active) setLoading(false);
+      });
+    return () => { active = false; };
+  }, [path]);
 
   const route = useMemo(() => {
     const pathname = path.split('?')[0];

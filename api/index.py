@@ -495,6 +495,7 @@ def init_db(conn):
         "ALTER TABLE DocumentInvoice ADD COLUMN status TEXT;",
         "ALTER TABLE DocumentInvoice ADD COLUMN errorMessage TEXT;",
         "CREATE UNIQUE INDEX IF NOT EXISTS idx_document_invoice_order ON DocumentInvoice(documentId, invoiceIndex);",
+        "CREATE INDEX IF NOT EXISTS idx_document_invoice_status_quality ON DocumentInvoice(status, imageQuality);",
     ]
     for stmt in alter_statements:
         try:
@@ -1886,10 +1887,147 @@ def get_customer():
     }
     return {"success": True, "customer": customer}
 
+def _has_saved_extraction_result(data):
+    if not isinstance(data, dict):
+        return False
+    if isinstance(data.get("extractedData"), dict):
+        data = data["extractedData"]
+    return any(key in data for key in (
+        "invoiceHeader", "invoice_header", "header", "shipmentDetails",
+        "shipmentDetail", "shipment_details", "chargeLineItems",
+        "charge_line_items", "invoiceNumber", "invoice_number",
+        "invoiceNo", "invoice_no", "invoiceId", "documentNumber",
+    ))
+
+
+def _invoice_number_from_data(data):
+    extracted = _parse_invoice_json(data)
+    header = extracted.get("invoiceHeader") or extracted.get("invoice_header") or extracted.get("header") or extracted
+    if not isinstance(header, dict):
+        header = extracted
+    for key in ("invoiceNumber", "invoice_number", "invoiceNo", "invoice_no", "invoiceId", "documentNumber"):
+        value = header.get(key) or extracted.get(key)
+        if value is not None and str(value).strip():
+            return value
+    return None
+
+
+def _invoice_result_status(data):
+    if not _has_saved_extraction_result(_parse_invoice_json(data)):
+        return "EXTRACTING"
+    return "EXTRACTED" if _invoice_number_from_data(data) else "POOR_IMAGE_QUALITY"
+
+
 @app.get("/api/documents")
-def get_documents():
+def get_documents(escalations_only: bool = False, summary: bool = False, ids: str = None):
     try:
         conn = get_db()
+        if escalations_only:
+            cursor = execute_query(conn, """
+                SELECT d.id, d.fileName, d.createdAt, di.id, di.invoiceIndex,
+                       di.status, di.imageQuality, di.canonicalJson, di.finalSubmittedData,
+                       COALESCE(invoice_counts.invoiceCount, 0)
+                FROM Document d
+                JOIN DocumentInvoice di ON di.documentId = d.id
+                LEFT JOIN (
+                    SELECT documentId, COUNT(*) AS invoiceCount
+                    FROM DocumentInvoice GROUP BY documentId
+                ) invoice_counts ON invoice_counts.documentId = d.id
+                WHERE di.status IN ('POOR_IMAGE_QUALITY', 'Poor Image Quality')
+                   OR di.imageQuality < 0.6
+                ORDER BY d.createdAt DESC, di.invoiceIndex;
+            """)
+            rows = cursor.fetchall()
+            conn.close()
+            escalation_rows = []
+            seen_invoices = set()
+            for row in rows:
+                document_id, file_name, created_at, invoice_id, invoice_index, status, image_quality, canonical_json, final_data, invoice_count = row
+                extracted = _parse_invoice_json(canonical_json or final_data)
+                if not _has_saved_extraction_result(extracted):
+                    continue
+                header = extracted.get("invoiceHeader") or extracted.get("invoice_header") or extracted.get("header") or extracted
+                if not isinstance(header, dict):
+                    header = extracted
+                invoice_number = next((
+                    header.get(key) or extracted.get(key)
+                    for key in ("invoiceNumber", "invoice_number", "invoiceNo", "invoice_no", "invoiceId", "documentNumber")
+                    if header.get(key) or extracted.get(key)
+                ), None)
+                if invoice_number is not None and str(invoice_number).strip():
+                    continue
+                dedupe_key = (document_id, invoice_index)
+                if dedupe_key in seen_invoices:
+                    continue
+                seen_invoices.add(dedupe_key)
+                escalation_rows.append({
+                    "id": invoice_id,
+                    "documentId": document_id,
+                    "invoiceIndex": invoice_index,
+                    "docNumber": file_name,
+                    "invoiceNumber": f"Invoice #{int(invoice_index or 0) + 1}",
+                    "reason": "Poor Image Quality",
+                    "date": created_at.isoformat()[:10] if hasattr(created_at, "isoformat") else str(created_at or "")[:10],
+                    "status": "Pending Review",
+                    "isMulti": invoice_count > 1,
+                    "scope": "invoice",
+                    "poorImageQuality": True,
+                    "hasInvoiceNumber": False,
+                    "hasExtraction": True,
+                })
+            response = JSONResponse({"success": True, "escalations": escalation_rows})
+            response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+            response.headers["Pragma"] = "no-cache"
+            response.headers["Expires"] = "0"
+            return response
+
+        if summary:
+            doc_ids = [doc_id.strip() for doc_id in (ids or "").split(",") if doc_id.strip()]
+            where_clause = f"WHERE d.id IN ({','.join(['?'] * len(doc_ids))})" if doc_ids else ""
+            cursor = execute_query(conn, f"""
+                SELECT d.id, d.fileName, d.fileSize, d.mimeType, d.documentType, d.status,
+                       d.overallConfidence, d.invoiceGeneratedAt, d.createdAt,
+                       COALESCE(invoice_counts.invoiceCount, 0)
+                FROM Document d
+                LEFT JOIN (
+                    SELECT documentId, COUNT(*) AS invoiceCount
+                    FROM DocumentInvoice GROUP BY documentId
+                ) invoice_counts ON invoice_counts.documentId = d.id
+                {where_clause}
+                ORDER BY d.createdAt DESC;
+            """, tuple(doc_ids))
+            docs = [{
+                "id": row[0], "fileName": row[1], "fileSize": row[2],
+                "mimeType": row[3], "documentType": row[4], "status": row[5],
+                "overallConfidence": row[6],
+                "invoiceGeneratedAt": row[7].isoformat() if hasattr(row[7], "isoformat") else row[7],
+                "createdAt": row[8].isoformat() if hasattr(row[8], "isoformat") else row[8],
+                "invoices": [], "invoiceCount": row[9],
+            } for row in cursor.fetchall()]
+            poor_params = tuple(doc_ids)
+            poor_doc_filter = f" AND documentId IN ({','.join(['?'] * len(doc_ids))})" if doc_ids else ""
+            poor_cursor = execute_query(conn, f"""
+                SELECT documentId, canonicalJson, finalSubmittedData
+                FROM DocumentInvoice
+                WHERE status IN ('POOR_IMAGE_QUALITY', 'Poor Image Quality'){poor_doc_filter};
+            """, poor_params)
+            poor_document_ids = set()
+            for document_id, canonical_json, final_data in poor_cursor.fetchall():
+                extracted = _parse_invoice_json(canonical_json or final_data)
+                if _has_saved_extraction_result(extracted) and not _invoice_number_from_data(extracted):
+                    poor_document_ids.add(document_id)
+            for doc in docs:
+                if doc["id"] in poor_document_ids:
+                    doc["status"] = "POOR_IMAGE_QUALITY"
+                elif doc["status"] in ("POOR_IMAGE_QUALITY", "Poor Image Quality"):
+                    doc["status"] = "PREPROCESSED"
+            conn.close()
+            response = JSONResponse({"success": True, "documents": docs})
+            response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+            response.headers["Pragma"] = "no-cache"
+            response.headers["Expires"] = "0"
+            return response
+
         cursor = execute_query(conn, """
             SELECT d.id, d.fileName, d.fileSize, d.mimeType, d.storagePath, d.documentType, d.status, d.overallConfidence, d.invoiceGeneratedAt, d.createdAt, e.canonicalJson, e.confidenceScores, e.finalSubmittedData, d.imageQuality, d.errorMessage
             FROM Document d
@@ -1915,20 +2053,22 @@ def get_documents():
             invoice_header = invoice_data if isinstance(invoice_data, dict) else {}
           inv_status = invoice[9]
           inv_quality = invoice[11] if len(invoice) > 11 else None
-          is_poor = inv_status == 'POOR_IMAGE_QUALITY' or (inv_quality is not None and inv_quality < 0.6)
+          has_extraction = _has_saved_extraction_result(invoice_data)
+          is_poor = has_extraction and not _invoice_number_from_data(invoice_data)
+          display_status = "POOR_IMAGE_QUALITY" if is_poor else ("EXTRACTED" if has_extraction and inv_status == "POOR_IMAGE_QUALITY" else (inv_status or "EXTRACTED"))
 
           invoices_by_document.setdefault(invoice[1], []).append({
             "id": invoice[0], "documentId": invoice[1], "invoiceIndex": invoice[2],
             "pageStart": invoice[3], "pageEnd": invoice[4], "rawOcrText": invoice[5], "canonicalJson": invoice[6],
             "confidenceScores": invoice[7], "finalSubmittedData": invoice[8],
             "extractedData": invoice_data,
-            "status": "POOR_IMAGE_QUALITY" if is_poor else (inv_status or "EXTRACTED"),
+            "status": display_status,
             "overallConfidence": invoice[10],
-            "imageQuality": inv_quality,
+            "imageQuality": inv_quality if is_poor else None,
             "errorMessage": invoice[12] if len(invoice) > 12 else None,
             "poorImageQuality": is_poor,
-            "extractionStatus": "POOR_IMAGE_QUALITY" if is_poor else (inv_status or "PENDING"),
-            "extractionComplete": bool(invoice[6] or invoice[8]),
+            "extractionStatus": display_status if has_extraction else (inv_status or "PENDING"),
+            "extractionComplete": has_extraction,
             "invoiceNumber": invoice_header.get('invoiceNumber') or invoice_header.get('invoiceId') or invoice_header.get('documentNumber') or invoice_header.get('invoiceNo')
           })
         
@@ -1960,7 +2100,11 @@ def get_documents():
 
             doc_status = r[6]
             doc_quality = r[13] if len(r) > 13 else None
-            is_doc_poor = doc_status == 'POOR_IMAGE_QUALITY' or (doc_quality is not None and doc_quality < 0.6) or any(inv.get('poorImageQuality') for inv in invoice_records)
+            is_doc_poor = any(inv.get('poorImageQuality') for inv in invoice_records)
+            display_doc_status = "POOR_IMAGE_QUALITY" if is_doc_poor else (
+                "PREPROCESSED" if doc_status in ("POOR_IMAGE_QUALITY", "Poor Image Quality")
+                else (doc_status or ("EXTRACTED" if invoice_records else "PREPROCESSED"))
+            )
 
             doc = {
                 "id": r[0],
@@ -1969,9 +2113,9 @@ def get_documents():
                 "mimeType": r[3],
                 "storagePath": r[4],
                 "documentType": r[5],
-                "status": "POOR_IMAGE_QUALITY" if is_doc_poor else (doc_status or ("EXTRACTED" if invoice_records else "PREPROCESSED")),
+                "status": display_doc_status,
                 "overallConfidence": r[7],
-                "imageQuality": doc_quality,
+                "imageQuality": doc_quality if is_doc_poor else None,
                 "errorMessage": r[14] if len(r) > 14 else None,
                 "poorImageQuality": is_doc_poor,
                 "invoiceGeneratedAt": r[8].isoformat() if hasattr(r[8], "isoformat") else r[8],
@@ -1981,7 +2125,8 @@ def get_documents():
             doc["invoices"] = invoice_records
             doc["invoiceCount"] = len(doc["invoices"])
             docs.append(doc)
-        response = JSONResponse({"success": True, "documents": docs})
+        payload = {"success": True, "documents": docs}
+        response = JSONResponse(payload)
         response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
         response.headers["Pragma"] = "no-cache"
         response.headers["Expires"] = "0"
@@ -2006,6 +2151,10 @@ def _parse_invoice_json(value):
 def _serialize_invoice_row(row):
   extracted_data = _parse_invoice_json(row[6] or row[8] or {})
   confidence_scores = _parse_invoice_json(row[7]) if row[7] else {}
+  has_extraction = _has_saved_extraction_result(extracted_data)
+  status = _invoice_result_status(extracted_data) if has_extraction else (
+    "PREPROCESSED" if row[9] in ("POOR_IMAGE_QUALITY", "Poor Image Quality") else (row[9] or "PENDING")
+  )
   # row[11] = fileName (from JOIN), row[12] = mimeType (from JOIN) — optional
   file_name = row[11] if len(row) > 13 and row[11] else None
   mime_type = row[12] if len(row) > 13 and row[12] else 'application/octet-stream'
@@ -2022,12 +2171,12 @@ def _serialize_invoice_row(row):
     "extractedData": extracted_data,
     "confidenceScores": confidence_scores,
     "finalSubmittedData": row[8],
-    "status": row[9],
-    "extractionStatus": row[9] or "PENDING",
+    "status": status,
+    "extractionStatus": status,
     "errorMessage": error_message,
     "extractionError": error_message,
     "overallConfidence": row[10],
-    "extractionComplete": bool(row[6] or row[8]),
+    "extractionComplete": has_extraction,
     "fileName": file_name,
     "sourceFileName": file_name,
     "mimeType": mime_type,
@@ -2141,17 +2290,16 @@ async def upload_multi_document(request: Request):
             doc_id = str(uuid.uuid4())
             storage_path = f"api/documents/{doc_id}/file"
             
-            img_quality = get_image_blur_quality(file_bytes)
-            initial_status = 'POOR_IMAGE_QUALITY' if img_quality < 0.6 else 'PREPROCESSED'
+            initial_status = 'PREPROCESSED'
             
-            execute_query(conn, "INSERT INTO Document (id, fileName, fileSize, mimeType, storagePath, status, pageCount, processedPages, fileData, imageQuality) VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?)", (doc_id, file_item.filename, len(file_bytes), file_item.content_type or 'application/octet-stream', storage_path, initial_status, page_count, file_b64, img_quality))
+            execute_query(conn, "INSERT INTO Document (id, fileName, fileSize, mimeType, storagePath, status, pageCount, processedPages, fileData, imageQuality) VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, NULL)", (doc_id, file_item.filename, len(file_bytes), file_item.content_type or 'application/octet-stream', storage_path, initial_status, page_count, file_b64))
             
             for idx, group in enumerate(invoice_groups):
                 inv_id = f"{doc_id}-invoice-{idx + 1}"
                 execute_query(
                     conn,
-                    "INSERT INTO DocumentInvoice (id, documentId, invoiceIndex, pageStart, pageEnd, imageQuality, status) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                    (inv_id, doc_id, idx, group.get("pageStart", 1), group.get("pageEnd", 1), img_quality, initial_status)
+                    "INSERT INTO DocumentInvoice (id, documentId, invoiceIndex, pageStart, pageEnd, imageQuality, status) VALUES (?, ?, ?, ?, ?, NULL, ?)",
+                    (inv_id, doc_id, idx, group.get("pageStart", 1), group.get("pageEnd", 1), initial_status)
                 )
             
             if not os.getenv("VERCEL"):
@@ -2279,6 +2427,8 @@ def _looks_like_extracted_invoice(data):
 def _set_document_invoice_state(doc_id, invoice_id, invoice_index, page_start, page_end, status, canonical=None, error_message=None):
     conn = None
     try:
+        if status == "EXTRACTED" and canonical is not None:
+            status = _invoice_result_status(canonical)
         conn = get_db()
         resolved_id = invoice_id or f"{doc_id}-invoice-{int(invoice_index) + 1}"
         cursor = execute_query(
@@ -2314,7 +2464,7 @@ def _set_document_invoice_state(doc_id, invoice_id, invoice_index, page_start, p
                 "UPDATE Document SET status = 'FAILED', errorMessage = ? WHERE id = ?",
                 (error_message, doc_id),
             )
-        elif status in ("EXTRACTING", "EXTRACTED"):
+        elif status in ("EXTRACTING", "EXTRACTED", "POOR_IMAGE_QUALITY"):
             execute_query(
                 conn,
                 "UPDATE Document SET status = ?, errorMessage = NULL WHERE id = ?",
@@ -2943,7 +3093,7 @@ async def extraction_callback(doc_id: str, request: Request):
             except ValueError:
                 threshold = 0.6
 
-            inv_status = 'EXTRACTED' if img_quality >= threshold else 'POOR_IMAGE_QUALITY'
+            inv_status = _invoice_result_status(extracted)
 
             # Upsert: first try by id, then fall back to (documentId, invoiceIndex)
             cursor = execute_query(conn, "SELECT id FROM DocumentInvoice WHERE id = ? OR (documentId = ? AND invoiceIndex = ?)", (invoice_id, doc_id, invoice_index))
@@ -2966,14 +3116,13 @@ async def extraction_callback(doc_id: str, request: Request):
         received_count = count_cursor.fetchone()[0]
         is_complete = received_count >= expected_count
 
-        cursor_poor = execute_query(conn, "SELECT COUNT(*) FROM DocumentInvoice WHERE documentId = ? AND (status = 'POOR_IMAGE_QUALITY' OR status = 'Poor Image Quality' OR (imageQuality IS NOT NULL AND imageQuality < 0.6))", (doc_id,))
+        cursor_poor = execute_query(conn, "SELECT COUNT(*) FROM DocumentInvoice WHERE documentId = ? AND status = 'POOR_IMAGE_QUALITY'", (doc_id,))
         poor_row = cursor_poor.fetchone()
         poor_count = poor_row[0] if poor_row else 0
         cursor_doc = execute_query(conn, "SELECT status, imageQuality, fileName FROM Document WHERE id = ?", (doc_id,))
         doc_row = cursor_doc.fetchone()
-        is_doc_originally_poor = doc_row and (doc_row[0] in ('POOR_IMAGE_QUALITY', 'Poor Image Quality') or (doc_row[1] is not None and doc_row[1] < 0.6))
 
-        if poor_count > 0 or is_doc_originally_poor:
+        if poor_count > 0:
             doc_status = 'POOR_IMAGE_QUALITY'
         elif is_complete:
             doc_status = 'EXTRACTED'
