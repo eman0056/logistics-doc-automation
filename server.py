@@ -200,8 +200,8 @@ def _resolve_extraction_webhook(doc_id):
         )
         return webhook_url, 'multi-invoice', invoice_count
     webhook_url = (
-        os.getenv('N8N_WEBHOOK_URL')
-        or os.getenv('SINGLE_INVOICE_N8N_WEBHOOK_URL')
+        os.getenv('SINGLE_INVOICE_N8N_WEBHOOK_URL')
+        or os.getenv('N8N_WEBHOOK_URL')
         or SINGLE_INVOICE_WEBHOOK_URL
     )
     return webhook_url, 'single-invoice', invoice_count
@@ -283,7 +283,7 @@ def send_to_n8n_webhook(invoice_index, pages, base64_pdf, doc_id=None, raw_ocr_t
     file_size = len(sliced_bytes) if sliced_bytes else 0
 
     print(
-        f"[n8n] Sending isolated invoice invoiceId={resolved_invoice_id} documentId={doc_id} "
+        f"[n8n DISPATCH] Initiating dispatch -> invoiceId={resolved_invoice_id} documentId={doc_id} "
         f"workflowType={workflow_type} invoiceCount={invoice_count} "
         f"pageStart={page_start} pageEnd={page_end} pages={page_list} fileSize={file_size} webhook={webhook_url}"
     )
@@ -307,6 +307,7 @@ def send_to_n8n_webhook(invoice_index, pages, base64_pdf, doc_id=None, raw_ocr_t
                 "workflowType": workflow_type,
                 "detectedInvoiceCount": str(invoice_count),
                 "pdfBase64": base64_pdf,
+                "fileBase64": base64_pdf,
                 "payload": json.dumps({k: v for k, v in payload.items() if k not in ("pdfBase64", "fileBase64")}),
             }
             body, boundary = _build_multipart_body(
