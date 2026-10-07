@@ -2079,177 +2079,16 @@ async def upload_documents(request: Request):
     except RuntimeError as exc:
         return JSONResponse({"error": str(exc), "code": "DURABLE_DATABASE_REQUIRED"}, status_code=503)
 
-    form = await request.form()
-    files = form.getlist('file')
-    if not files:
-        return JSONResponse({"error": "No files uploaded"}, status_code=400)
-        
-    import base64
-    vercel_url = os.getenv("VERCEL_URL")
-    forwarded_host = request.headers.get("x-forwarded-host")
-    host = request.headers.get("host")
-    
-    if os.getenv("APP_BASE_URL"):
-        app_base_url = os.getenv("APP_BASE_URL").rstrip("/")
-    elif forwarded_host:
-        app_base_url = f"https://{forwarded_host}"
-    elif vercel_url:
-        app_base_url = f"https://{vercel_url}"
-    elif host and "localhost" not in host and "127.0.0.1" not in host:
-        app_base_url = f"https://{host}"
-    else:
-        app_base_url = str(request.base_url).rstrip("/")
-    single_webhook_url = (
-        os.getenv("SINGLE_INVOICE_N8N_WEBHOOK_URL")
-        or os.getenv("N8N_WEBHOOK_URL")
-        or SINGLE_INVOICE_WEBHOOK_URL
-    )
-    multi_webhook_url = (
-        os.getenv("MULTI_INVOICE_N8N_WEBHOOK_URL")
-        or os.getenv("N8N_WEBHOOK_URL")
-        or MULTI_INVOICE_WEBHOOK_URL
-    )
-
-    def trigger_webhook(url, data):
-        try:
-            url = _validate_production_webhook_url(url)
-            req = urllib.request.Request(url, data=json.dumps(data).encode('utf-8'), headers={'Content-Type': 'application/json'})
-            with urllib.request.urlopen(req, timeout=10) as response:
-                response_body = response.read().decode('utf-8', errors='replace')
-                status = response.status
-                print(f"[n8n RESPONSE] URL={url} status={status} responseBody={response_body[:2000]!r}")
-                result = {"status": status, "body": response_body[:2000]}
-                if not 200 <= status < 300:
-                    result.update({"success": False, "error": f"n8n webhook returned HTTP {status}: {response_body[:300]}"})
-                else:
-                    result["success"] = True
-                return result
-        except urllib.error.HTTPError as e:
-            try:
-                response_body = e.read().decode('utf-8', errors='replace')
-            except Exception as read_error:
-                response_body = f"Could not read n8n error response: {read_error}"
-            print(f"[n8n RESPONSE] URL={url} status={e.code} responseBody={response_body[:2000]!r} thrownError={e}")
-            return {
-                "status": e.code,
-                "body": response_body[:2000],
-                "success": False,
-                "error": f"n8n webhook returned HTTP {e.code}: {response_body[:300]}",
-            }
-        except Exception as e:
-            print(f"[n8n RESPONSE] URL={url} status=0 responseBody='' thrownError={e}")
-            return {"status": 0, "success": False, "error": str(e)}
-
-    results = []
-    page_counts = {}
-    dispatches = []
-    try:
-        for file_item in files:
-            file_bytes = await file_item.read()
-            file_b64 = base64.b64encode(file_bytes).decode('utf-8')
-            invoice_groups = detect_invoice_groups(file_bytes, file_item.filename or '')
-            invoice_count = len(invoice_groups)
-            selected_webhook_url = multi_webhook_url if invoice_count >= 2 else single_webhook_url
-            
-            doc_id = str(uuid.uuid4())
-            page_count = count_pdf_pages(file_bytes) if (file_item.filename or '').lower().endswith('.pdf') else 1
-            storage_path = f"api/documents/{doc_id}/file"
-            
-            img_quality = get_image_blur_quality(file_bytes)
-            print(f"[Backend] 🔍 Calculated imageQuality score for {file_item.filename}: {img_quality}")
-
-            payload = {
-                "documentId": doc_id,
-                "storagePath": storage_path,
-                "fileName": file_item.filename,
-                "fileBase64": file_b64,
-                "pageCount": page_count,
-                "pages": [{"pageNumber": page_number, "totalPages": page_count} for page_number in range(1, page_count + 1)],
-                "detectedInvoiceCount": invoice_count,
-                "detectedInvoiceGroups": invoice_groups,
-                "rawOcrText": "\n\f\n".join(group.get("rawOcrText", "") for group in invoice_groups),
-                "workflowType": "multi-invoice" if invoice_count >= 2 else "single-invoice",
-                "imageQuality": img_quality,
-                "callbackUrl": f"{app_base_url}/api/documents/{doc_id}/extraction/callback"
-            }
-            
-            try:
-                threshold = float(os.getenv('IMAGE_QUALITY_THRESHOLD', '0.6'))
-            except ValueError:
-                threshold = 0.6
-
-            initial_status = 'POOR_IMAGE_QUALITY' if img_quality < threshold else 'PREPROCESSED'
-
-            conn = get_db()
-            execute_query(conn, "INSERT INTO Document (id, fileName, fileSize, mimeType, storagePath, status, pageCount, processedPages, fileData, imageQuality) VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?)", (doc_id, file_item.filename, len(file_bytes), file_item.content_type or 'application/octet-stream', storage_path, initial_status, page_count, file_b64, img_quality))
-            
-            # Pre-seed DocumentInvoice record so frontend Flagged tab detects poor quality instantly
-            execute_query(conn, "INSERT INTO DocumentInvoice (id, documentId, invoiceIndex, pageStart, pageEnd, imageQuality, status) VALUES (?, ?, 0, 1, ?, ?, ?)", (f"{doc_id}-invoice-1", doc_id, page_count, img_quality, initial_status))
-            conn.commit()
-            conn.close()
-
-            # Vercel's deployment filesystem is read-only. The database copy is
-            # sufficient for the API route and n8n can read that route directly.
-            if not os.getenv("VERCEL"):
-              disk_path = os.path.normpath(os.path.join(BASE_DIR, storage_path))
-              os.makedirs(os.path.dirname(disk_path), exist_ok=True)
-              with open(disk_path, 'wb') as fh:
-                fh.write(file_bytes)
-
-            # Await dispatch so Vercel cannot terminate the serverless invocation
-            # before n8n receives the document payload.
-            # Multi-invoice documents must NOT send the full PDF — extraction is invoice-specific.
-            if invoice_count < 2:
-                dispatch_result = await asyncio.to_thread(trigger_webhook, selected_webhook_url, payload)
-                if not dispatch_result["success"]:
-                    failure_message = dispatch_result.get("error") or "n8n webhook failed"
-                    failure_conn = get_db()
-                    execute_query(
-                        failure_conn,
-                        "UPDATE Document SET status = 'FAILED', errorMessage = ? WHERE id = ?",
-                        (failure_message, doc_id),
-                    )
-                    execute_query(
-                        failure_conn,
-                        "UPDATE DocumentInvoice SET status = 'FAILED', errorMessage = ? WHERE documentId = ?",
-                        (failure_message, doc_id),
-                    )
-                    failure_conn.commit()
-                    failure_conn.close()
-                else:
-                    accepted_conn = get_db()
-                    execute_query(
-                        accepted_conn,
-                        "UPDATE Document SET status = 'EXTRACTING', errorMessage = NULL WHERE id = ?",
-                        (doc_id,),
-                    )
-                    execute_query(
-                        accepted_conn,
-                        "UPDATE DocumentInvoice SET status = 'EXTRACTING', errorMessage = NULL WHERE documentId = ?",
-                        (doc_id,),
-                    )
-                    accepted_conn.commit()
-                    accepted_conn.close()
-            else:
-                print(f"[Backend] Multi-invoice upload stored without full-document n8n dispatch: doc={doc_id} invoices={invoice_count}")
-                dispatch_result = {"status": None, "skipped": "multi-invoice-deferred", "success": True}
-            results.append(doc_id)
-            page_counts[doc_id] = page_count
-            dispatches.append({
-              "documentId": doc_id,
-              "detectedInvoiceCount": invoice_count,
-              "workflowType": payload["workflowType"],
-              "webhookUrl": selected_webhook_url if invoice_count < 2 else None,
-              "webhookResponse": dispatch_result,
-            })
-            
-        return {"success": True, "documentIds": results, "pageCounts": page_counts, "dispatches": dispatches}
-    except Exception as e:
-        return JSONResponse({"error": str(e)}, status_code=500)
+    return await upload_multi_document(request)
 
 @app.post("/api/documents/upload-multi")
 @app.post("/api/upload-multi-invoice")
 async def upload_multi_document(request: Request):
+    try:
+        require_durable_database()
+    except RuntimeError as exc:
+        return JSONResponse({"error": str(exc), "code": "DURABLE_DATABASE_REQUIRED"}, status_code=503)
+
     form = await request.form()
     files = form.getlist('file')
     if not files:
@@ -2262,11 +2101,13 @@ async def upload_multi_document(request: Request):
         for file_item in files:
             file_bytes = await file_item.read()
             file_b64 = base64.b64encode(file_bytes).decode('utf-8')
-            invoice_groups = detect_invoice_groups(file_bytes, file_item.filename or '')
-            invoice_count = len(invoice_groups)
-            
-            doc_id = str(uuid.uuid4())
             page_count = count_pdf_pages(file_bytes) if (file_item.filename or '').lower().endswith('.pdf') else 1
+            invoice_groups = detect_invoice_groups(file_bytes, file_item.filename or '')
+            if not invoice_groups:
+                invoice_groups = [{"invoiceIndex": 0, "pageStart": 1, "pageEnd": page_count}]
+            invoice_count = len(invoice_groups)
+
+            doc_id = str(uuid.uuid4())
             storage_path = f"api/documents/{doc_id}/file"
             
             img_quality = get_image_blur_quality(file_bytes)
@@ -2465,10 +2306,33 @@ async def _internal_process_invoice(doc_id: str, invoice_index: int, page_start:
     conn = get_db()
     cursor = execute_query(conn, "SELECT fileData, storagePath, fileName FROM Document WHERE id = ?", (doc_id,))
     row = cursor.fetchone()
+    if invoice_id:
+        invoice_cursor = execute_query(
+            conn,
+            "SELECT id, invoiceIndex, pageStart, pageEnd FROM DocumentInvoice WHERE id = ? AND documentId = ?",
+            (invoice_id, doc_id),
+        )
+    else:
+        invoice_cursor = execute_query(
+            conn,
+            "SELECT id, invoiceIndex, pageStart, pageEnd FROM DocumentInvoice WHERE documentId = ? AND invoiceIndex = ?",
+            (doc_id, invoice_index),
+        )
+    invoice_row = invoice_cursor.fetchone()
     conn.close()
 
     if not row:
         return JSONResponse({"success": False, "error": f"PDF file not found: {doc_id}"}, status_code=404)
+    if not invoice_row:
+        return JSONResponse(
+            {"success": False, "error": "Selected invoice does not belong to this document"},
+            status_code=404,
+        )
+
+    invoice_id = invoice_row[0]
+    invoice_index = invoice_row[1]
+    page_start = invoice_row[2] or 1
+    page_end = invoice_row[3] or page_start
 
     file_data_b64, storage_path, file_name = row
     file_bytes = None
@@ -2484,7 +2348,7 @@ async def _internal_process_invoice(doc_id: str, invoice_index: int, page_start:
     if not file_bytes:
         return JSONResponse({"success": False, "error": f"PDF file not found: {doc_id}"}, status_code=404)
 
-    resolved_invoice_id = invoice_id or f"{doc_id}-invoice-{int(invoice_index) + 1}"
+    resolved_invoice_id = invoice_id
     print(
         f"[Backend] Processing isolated invoice invoiceId={resolved_invoice_id} documentId={doc_id} "
         f"pages {page_start}-{page_end}"
@@ -2514,29 +2378,58 @@ async def _internal_process_invoice(doc_id: str, invoice_index: int, page_start:
         image_quality=image_quality, invoice_id=resolved_invoice_id
     )
     if not webhook_result["success"]:
-        error_message = webhook_result.get("error") or "Extraction failed"
-        _set_document_invoice_state(
-            doc_id, resolved_invoice_id, invoice_index, page_start, page_end, "FAILED",
-            error_message=error_message,
+        state_conn = get_db()
+        state_cursor = execute_query(
+            state_conn,
+            "SELECT status, canonicalJson FROM DocumentInvoice WHERE id = ? AND documentId = ?",
+            (resolved_invoice_id, doc_id),
         )
-        return JSONResponse({
-            "success": False,
-            "invoiceId": resolved_invoice_id,
-            "documentId": doc_id,
-            "pageStart": page_start,
-            "pageEnd": page_end,
-            "status": webhook_result.get("status"),
-            "error": error_message,
-        }, status_code=500)
-
-    _set_document_invoice_state(
-        doc_id, resolved_invoice_id, invoice_index, page_start, page_end, "EXTRACTING"
-    )
+        persisted_state = state_cursor.fetchone()
+        state_conn.close()
+        persisted_data = _parse_invoice_json(persisted_state[1]) if persisted_state and persisted_state[1] else {}
+        if (
+            persisted_state
+            and persisted_state[0] in ("EXTRACTED", "APPROVED", "INVOICE_GENERATED")
+            and _looks_like_extracted_invoice(persisted_data)
+        ):
+            webhook_result = {
+                "success": True,
+                "status": webhook_result.get("status"),
+                "extractedData": persisted_data,
+            }
+        else:
+            error_message = webhook_result.get("error") or "Extraction failed"
+            _set_document_invoice_state(
+                doc_id, resolved_invoice_id, invoice_index, page_start, page_end, "FAILED",
+                error_message=error_message,
+            )
+            return JSONResponse({
+                "success": False,
+                "invoiceId": resolved_invoice_id,
+                "documentId": doc_id,
+                "pageStart": page_start,
+                "pageEnd": page_end,
+                "status": webhook_result.get("status"),
+                "error": error_message,
+            }, status_code=500)
 
     extracted_data = webhook_result.get("extractedData")
     if _looks_like_extracted_invoice(extracted_data):
         to_store = extracted_data.get("extractedData") if isinstance(extracted_data, dict) and isinstance(extracted_data.get("extractedData"), dict) else extracted_data
         _set_document_invoice_state(doc_id, resolved_invoice_id, invoice_index, page_start, page_end, "EXTRACTED", canonical=to_store)
+    else:
+        state_conn = get_db()
+        state_cursor = execute_query(
+            state_conn,
+            "SELECT status FROM DocumentInvoice WHERE id = ? AND documentId = ?",
+            (resolved_invoice_id, doc_id),
+        )
+        current_state = state_cursor.fetchone()
+        state_conn.close()
+        if not current_state or current_state[0] not in ("EXTRACTED", "APPROVED", "INVOICE_GENERATED"):
+            _set_document_invoice_state(
+                doc_id, resolved_invoice_id, invoice_index, page_start, page_end, "EXTRACTING"
+            )
     return {
         "success": True,
         "invoiceId": resolved_invoice_id,

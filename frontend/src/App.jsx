@@ -688,7 +688,6 @@ function App() {
     const [selectedFiles, setSelectedFiles] = useState([]);
     const [uploading, setUploading] = useState(false);
     const [statusText, setStatusText] = useState('');
-    const [pageProgress, setPageProgress] = useState(null);
 
     const handleFiles = (files) => {
       if (!files || !files.length) return;
@@ -707,161 +706,20 @@ function App() {
       const formData = new FormData();
       selectedFiles.forEach((file) => formData.append('file', file));
 
-      let redirectScheduled = false;
-      let redirectAttempts = 0;
-      const maxRedirectAttempts = 12;
-
-      const scheduleRedirect = async (completedId) => {
-        if (redirectScheduled) return;
-        redirectScheduled = true;
-
-        const tryResolveRoute = async () => {
-          try {
-            const documentsResponse = await fetchJson(`${API}/documents?refresh=${Date.now()}`);
-            const documentsJson = await documentsResponse.json();
-            const completedDocument = (documentsJson.documents || []).find((document) => document.id === completedId) || null;
-
-            // If document is flagged as POOR_IMAGE_QUALITY, redirect immediately to escalations
-            const docStatus = completedDocument?.status || '';
-            const isDocPoor = docStatus === 'POOR_IMAGE_QUALITY' || docStatus === 'Poor Image Quality' || completedDocument?.poorImageQuality;
-            if (isDocPoor) {
-              setUploading(false);
-              setStatusText('Poor image quality detected — redirecting to escalations...');
-              if (window.location.pathname !== '/escalations') {
-                window.location.assign('/escalations');
-              }
-              return;
-            }
-
-            const invoiceCount = Number(completedDocument?.invoiceCount ?? completedDocument?.invoices?.length ?? 0);
-
-            if (!completedDocument || invoiceCount < 1) {
-              redirectAttempts += 1;
-              if (redirectAttempts < maxRedirectAttempts) {
-                window.setTimeout(() => tryResolveRoute(), 1500);
-                return;
-              }
-              setUploading(false);
-              setStatusText('Waiting for invoice count...');
-              console.error('Upload redirect stalled because invoice count is missing or invalid for document', completedId);
-              return;
-            }
-
-            const target = invoiceCount > 1
-              ? `/documents/${completedId}/multi-workspace`
-              : `/documents/${completedId}/review`;
-
-            setUploading(false);
-            setStatusText('Redirecting...');
-
-            if (window.location.pathname !== target) {
-              window.location.assign(target);
-            }
-          } catch (error) {
-            redirectAttempts += 1;
-            if (redirectAttempts < maxRedirectAttempts) {
-              window.setTimeout(() => tryResolveRoute(), 1500);
-              return;
-            }
-            setUploading(false);
-            setStatusText('Waiting for invoice count...');
-            console.error('Upload redirect error', error);
-          }
-        };
-
-        window.setTimeout(() => tryResolveRoute(), 800);
-      };
-
       try {
         const res = await fetchJson(`${API}/documents/upload`, { method: 'POST', body: formData });
         const data = await res.json();
         if (data.success && data.documentIds && data.documentIds.length > 0) {
-          const failedDispatch = (data.dispatches || []).find((dispatch) => {
-            if (!dispatch.webhookResponse) return false;
-            const status = Number(dispatch.webhookResponse?.status);
-            return dispatch.webhookResponse.success === false
-              || !Number.isFinite(status)
-              || status < 200
-              || status >= 300;
-          });
-          if (failedDispatch) {
-            throw new Error(failedDispatch.webhookResponse?.error || 'The n8n workflow could not be started.');
-          }
-
-          const dispatchMap = {};
-          (data.dispatches || []).forEach((d) => { dispatchMap[d.documentId] = d; });
-
-          const totalPages = Object.values(data.pageCounts || {}).reduce((sum, count) => sum + count, 0);
-          setPageProgress({ current: 0, total: totalPages || data.documentIds.length });
-          setStatusText(`${totalPages || data.documentIds.length} pages detected. Processing 0/${totalPages || data.documentIds.length}`);
-
-          const pollProgress = async () => {
-            try {
-              const statuses = await Promise.all(data.documentIds.map(async (documentId) => {
-                // Bypass cache for status polling - use no-store to ensure fresh data
-                const response = await fetch(`${API}/documents/${documentId}/status`, { cache: 'no-store' });
-                if (!response.ok) {
-                  let detail = '';
-                  try {
-                    const errorPayload = await response.json();
-                    detail = errorPayload.error ? `: ${errorPayload.error}` : '';
-                  } catch (error) { }
-                  throw new Error(`Status request failed (${response.status})${detail}`);
-                }
-                return response.json();
-              }));
-
-              // If ANY document is flagged as Poor Image Quality, redirect immediately to /escalations
-              const hasPoorQuality = statuses.some((s) => s.isPoorImageQuality || s.status === 'POOR_IMAGE_QUALITY' || s.status === 'Poor Image Quality');
-              if (hasPoorQuality) {
-                setUploading(false);
-                setStatusText('Poor image quality detected — redirecting to escalations...');
-                if (!redirectScheduled) {
-                  redirectScheduled = true;
-                  window.setTimeout(() => { window.location.assign('/escalations'); }, 600);
-                }
-                return;
-              }
-
-              const failedStatus = statuses.find((status) => status.status === 'FAILED');
-              if (failedStatus) {
-                setUploading(false);
-                setStatusText(`Processing failed: ${failedStatus.errorMessage || 'n8n could not process this document.'}`);
-                return;
-              }
-
-              const current = statuses.reduce((sum, status) => sum + (status.processedPages || 0), 0);
-              const total = statuses.reduce((sum, status) => sum + (status.pageCount || 1), 0);
-              setPageProgress({ current, total });
-              setStatusText(current >= total ? `Extraction completed — ${total}/${total} pages processed` : `Processing ${current}/${total}`);
-
-              if (current >= total || statuses.every((status) => status.isExtracted)) {
-                const firstCompletedDoc = data.documentIds.find((documentId, index) => statuses[index]?.isExtracted);
-                const completedId = firstCompletedDoc || data.documentIds[0];
-
-                if (!redirectScheduled) {
-                  scheduleRedirect(completedId);
-                }
-                return;
-              }
-
-              if (!redirectScheduled) {
-                window.setTimeout(pollProgress, 1500);
-              }
-            } catch (error) {
-              console.error('Poll error:', error);
-              if (/^Status request failed \((?:4\d\d|5\d\d)\)/.test(error.message || '')) {
-                setUploading(false);
-                setStatusText(`Unable to read processing status: ${error.message}`);
-                return;
-              }
-              if (!redirectScheduled) {
-                window.setTimeout(pollProgress, 2000);
-              }
-            }
-          };
-
-          window.setTimeout(pollProgress, 1000);
+          const firstDocId = data.documentIds[0];
+          const firstDispatch = (data.dispatches || []).find((dispatch) => dispatch.documentId === firstDocId);
+          const invoiceCount = Number(firstDispatch?.invoiceCount || 1);
+          const target = data.documentIds.length > 1
+            ? `/batch-workspace?ids=${data.documentIds.join(',')}`
+            : invoiceCount > 1
+              ? `/documents/${firstDocId}/multi-workspace`
+              : `/documents/${firstDocId}/review`;
+          setStatusText('Upload complete. No extraction has started.');
+          window.location.assign(target);
         } else {
           alert(data.error || 'Upload failed');
           setUploading(false);
@@ -879,7 +737,7 @@ function App() {
             <div>
               <div className="eyebrow">Workflow</div>
               <h1 className="page-title">Upload Invoice</h1>
-              <p className="subtle-copy mt-2">Upload single or multi-invoice documents (PDF, JPG, PNG, WEBP, AVIF). The AI engine automatically detects invoice structures and routes to the appropriate review workspace.</p>
+              <p className="subtle-copy mt-2">Upload single or multi-invoice documents (PDF, JPG, PNG, WEBP, AVIF). Review the detected invoices and click an invoice to start its extraction.</p>
             </div>
             <a href="/documents" className="primary-btn">View All Documents</a>
           </div>
@@ -913,10 +771,9 @@ function App() {
             </div>
 
             <button className="primary-btn w-full mt-4" onClick={handleUpload} disabled={uploading}>
-              {uploading ? 'Uploading...' : 'Start Upload & AI Processing'}
+              {uploading ? 'Uploading...' : 'Upload Documents'}
             </button>
             {statusText && <div className="progress-box">{statusText}</div>}
-            {pageProgress && <div className="subtle-copy mt-2">{pageProgress.current}/{pageProgress.total} pages processed</div>}
           </div>
         </main>
       </>
@@ -1030,6 +887,7 @@ function App() {
 
     const startSingleInvoiceExtraction = async () => {
       if (!doc) return;
+      if (processing || dispatching || extractionTriggeredRef.current) return;
 
       const hasRealExtraction = Object.keys(getSingleInvoiceData(doc)).length > 0;
       if (hasRealExtraction) {
@@ -1064,6 +922,7 @@ function App() {
         console.error('[Single Invoice] Extraction trigger failed:', error);
         if (!pollingRef.current.cancelled) {
           setProcessing(false);
+          extractionTriggeredRef.current = false;
           setDoc((current) => current ? {
             ...current,
             status: 'FAILED',
@@ -1120,6 +979,7 @@ function App() {
 
           if (status.status === 'FAILED') {
             setProcessing(false);
+            extractionTriggeredRef.current = false;
             return;
           }
         } catch (error) {
@@ -1419,10 +1279,22 @@ function App() {
               <h3 className="section-title" style={{ color: '#fff', letterSpacing: '0.1em' }}>Original Document</h3>
               <div className="invoice-preview-list">
                 <div className="invoice-tab-bar">
-                  <div className="invoice-preview-item active">
-                    <span><strong>Original uploaded document</strong></span>
-                    <small>{selectedInvoice.extractionComplete ? '✓ Extracted' : 'Document preview'}</small>
-                  </div>
+                  <button
+                    type="button"
+                    className="invoice-preview-item active"
+                    onClick={startSingleInvoiceExtraction}
+                    disabled={dispatching || processing || Boolean(selectedInvoice.extractionComplete)}
+                    aria-label="Select Invoice 1 and start its extraction"
+                  >
+                    <span><strong>Invoice 1 · Original uploaded document</strong></span>
+                    <small>
+                      {selectedInvoice.extractionComplete
+                        ? '✓ Extracted'
+                        : dispatching || processing
+                          ? 'Extraction in progress'
+                          : 'Click invoice to start extraction'}
+                    </small>
+                  </button>
                 </div>
                 <div className="preview-box" key={selectedInvoice?.id || docId}>
                   {isPdfDocument() ? (

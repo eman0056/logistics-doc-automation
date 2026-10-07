@@ -6,7 +6,6 @@ import json
 import urllib.parse
 import urllib.request
 import urllib.error
-import threading
 import os
 import sys
 import cgi
@@ -215,10 +214,21 @@ def send_to_n8n_webhook(invoice_index, pages, base64_pdf, doc_id=None, raw_ocr_t
     """
     webhook_url, workflow_type, invoice_count = _resolve_extraction_webhook(doc_id)
     if not webhook_url:
+        print(f"[n8n DISPATCH] URL is not configured for documentId={doc_id}")
         return {
             "success": False,
             "error": "n8n webhook URL not set in environment"
         }
+    parsed_webhook_url = urllib.parse.urlparse(webhook_url)
+    if (
+        parsed_webhook_url.scheme != "https"
+        or not parsed_webhook_url.netloc
+        or "/webhook/" not in parsed_webhook_url.path
+        or "/webhook-test/" in parsed_webhook_url.path
+    ):
+        error_message = "n8n webhook URL must be an absolute HTTPS production URL containing /webhook/ and not /webhook-test/"
+        print(f"[n8n DISPATCH] URL={webhook_url!r} rejected: {error_message}")
+        return {"success": False, "error": error_message}
 
     page_start = pages[0] if isinstance(pages, (list, tuple)) and len(pages) > 0 else 1
     page_end = pages[-1] if isinstance(pages, (list, tuple)) and len(pages) > 1 else page_start
@@ -333,7 +343,8 @@ def send_to_n8n_webhook(invoice_index, pages, base64_pdf, doc_id=None, raw_ocr_t
         with urllib.request.urlopen(req, timeout=90) as response:
             resp_body = response.read().decode('utf-8', errors='replace')
             n8n_status = response.status
-            if n8n_status != 200:
+            print(f"[n8n RESPONSE] URL={webhook_url} status={n8n_status} responseBody={resp_body[:2000]!r}")
+            if not 200 <= n8n_status < 300:
                 print(
                     f"[n8n] ❌ invoiceId={resolved_invoice_id} documentId={doc_id} "
                     f"pageStart={page_start} pageEnd={page_end} n8nStatus={n8n_status} error={resp_body[:500]}"
@@ -349,7 +360,7 @@ def send_to_n8n_webhook(invoice_index, pages, base64_pdf, doc_id=None, raw_ocr_t
             except Exception:
                 extracted_data = {"rawResponse": resp_body}
 
-            print(f"[n8n] ✅ Isolated invoice {resolved_invoice_id} processed successfully (status={n8n_status})")
+            print(f"[n8n] ✅ Isolated invoice {resolved_invoice_id} accepted (status={n8n_status})")
             return {
                 "success": True,
                 "status": n8n_status,
@@ -362,8 +373,8 @@ def send_to_n8n_webhook(invoice_index, pages, base64_pdf, doc_id=None, raw_ocr_t
         except Exception:
             resp_body = str(e)
         print(
-            f"[n8n] ❌ invoiceId={resolved_invoice_id} documentId={doc_id} "
-            f"pageStart={page_start} pageEnd={page_end} n8nStatus={e.code} error={resp_body[:500]}"
+            f"[n8n RESPONSE] URL={webhook_url} status={e.code} "
+            f"responseBody={resp_body[:2000]!r} thrownError={e}"
         )
         return {
             "success": False,
@@ -372,8 +383,7 @@ def send_to_n8n_webhook(invoice_index, pages, base64_pdf, doc_id=None, raw_ocr_t
         }
     except Exception as e:
         print(
-            f"[n8n] ❌ invoiceId={resolved_invoice_id} documentId={doc_id} "
-            f"pageStart={page_start} pageEnd={page_end} n8nStatus=0 error={e}"
+            f"[n8n RESPONSE] URL={webhook_url} status=0 responseBody='' thrownError={e}"
         )
         return {
             "success": False,
@@ -967,43 +977,6 @@ class LogisticsAutomationHandler(http.server.BaseHTTPRequestHandler):
         temp_dir = os.path.join(BASE_DIR, "tmp_uploads")
         os.makedirs(temp_dir, exist_ok=True)
         
-        app_base_url = get_effective_base_url()
-        single_webhook_url = SINGLE_INVOICE_WEBHOOK_URL
-        multi_webhook_url = MULTI_INVOICE_WEBHOOK_URL
-        env_file = os.path.join(BASE_DIR, ".env.local")
-        if os.path.exists(env_file):
-            with open(env_file, "r") as ef:
-                for line in ef:
-                    if line.startswith("N8N_WEBHOOK_URL="):
-                      single_webhook_url = line.split("=", 1)[1].strip().strip('"')
-                    if line.startswith("MULTI_INVOICE_N8N_WEBHOOK_URL="):
-                      multi_webhook_url = line.split("=", 1)[1].strip().strip('"')
-                    if line.startswith("APP_BASE_URL="):
-                        app_base_url = line.split("=", 1)[1].strip().strip('"')
-                        
-        def trigger_webhook(url, data):
-            import urllib.request
-            import json
-            doc_id_log = data.get('documentId', '?')
-            workflow_log = data.get('workflowType', '?')
-            count_log = data.get('detectedInvoiceCount', '?')
-            print(f"[n8n] → Dispatching to webhook URL={url} documentId={doc_id_log} workflowType={workflow_log} invoiceCount={count_log}")
-            req = urllib.request.Request(
-                url,
-                data=json.dumps(data).encode('utf-8'),
-                headers={'Content-Type': 'application/json'},
-                method='POST'
-            )
-            try:
-                with urllib.request.urlopen(req, timeout=60) as response:
-                    response_body = response.read().decode('utf-8', errors='replace')
-                    print(f"[n8n] ✅ n8n accepted: documentId={doc_id_log} workflowType={workflow_log} status={response.status} response={response_body[:300]}")
-            except urllib.error.HTTPError as e:
-                body = e.read().decode('utf-8', errors='replace') if hasattr(e, 'read') else str(e)
-                print(f"[n8n] ❌ HTTP error dispatching to n8n: documentId={doc_id_log} url={url} status={e.code} body={body[:300]}")
-            except Exception as e:
-                print(f"[n8n] ❌ Network error dispatching to n8n: documentId={doc_id_log} url={url} error={type(e).__name__}: {e}")
-
         results = []
         dispatches_list = []
         try:
@@ -1028,21 +1001,6 @@ class LogisticsAutomationHandler(http.server.BaseHTTPRequestHandler):
                 img_quality = get_image_blur_quality(saved_file_path)
                 print(f"[Backend] ✅ Image quality score: {img_quality}")
 
-                # Step 2: Seed invoice rows. For multi-invoice documents do NOT send the
-                # full PDF to n8n — extraction is invoice-specific from the review workspace.
-                payload = {
-                    "documentId": res["documentId"],
-                    "storagePath": res["storagePath"],
-                    "fileName": res["fileName"],
-                    "fileBase64": base64.b64encode(file_bytes).decode('ascii'),
-                    "detectedInvoiceCount": invoice_count,
-                    "detectedInvoiceGroups": invoice_groups,
-                    "rawOcrText": "\n\f\n".join(group.get("rawOcrText", "") for group in invoice_groups),
-                    "workflowType": workflow_type,
-                    "imageQuality": img_quality,
-                    "callbackUrl": f"{app_base_url}/api/documents/{res['documentId']}/extraction/callback"
-                }  # app_base_url already resolved via get_effective_base_url() above
-                
                 # n8n is NOT called automatically on upload.
                 # Extraction is triggered explicitly by the user from the review workspace.
                 print(f"[Backend] Document stored successfully: documentId={res['documentId']} workflowType={workflow_type} invoiceCount={invoice_count} — awaiting user-initiated extraction.")
@@ -1289,10 +1247,30 @@ class LogisticsAutomationHandler(http.server.BaseHTTPRequestHandler):
         cursor = conn.cursor()
         cursor.execute("SELECT storagePath, fileName FROM Document WHERE id = ?", (doc_id,))
         row = cursor.fetchone()
+        if invoice_id:
+            cursor.execute(
+                "SELECT id, invoiceIndex, pageStart, pageEnd FROM DocumentInvoice WHERE id = ? AND documentId = ?",
+                (invoice_id, doc_id),
+            )
+        else:
+            cursor.execute(
+                "SELECT id, invoiceIndex, pageStart, pageEnd FROM DocumentInvoice WHERE documentId = ? AND invoiceIndex = ?",
+                (doc_id, invoice_index),
+            )
+        invoice_row = cursor.fetchone()
         conn.close()
         
         if not row:
             return self._send_json({"success": False, "error": f"PDF file not found: {doc_id}"}, 404)
+        if not invoice_row:
+            return self._send_json(
+                {"success": False, "error": "Selected invoice does not belong to this document"},
+                404,
+            )
+
+        invoice_id, invoice_index, page_start, page_end = invoice_row
+        page_start = page_start or 1
+        page_end = page_end or page_start
             
         rel_storage_path, file_name = row
         file_path = os.path.join(BASE_DIR, rel_storage_path)
@@ -1305,13 +1283,15 @@ class LogisticsAutomationHandler(http.server.BaseHTTPRequestHandler):
             f"[Backend] Processing isolated invoice invoiceId={resolved_invoice_id} documentId={doc_id} "
             f"pages {page_start}-{page_end}"
         )
-        self._set_document_invoice_state(doc_id, resolved_invoice_id, invoice_index, page_start, page_end, "EXTRACTING")
 
         ext = os.path.splitext(file_name)[1].lower()
         if ext == ".pdf" or not ext:
             extraction = extract_invoice_pages(file_path, page_start, page_end)
             if not extraction["success"]:
-                self._set_document_invoice_state(doc_id, resolved_invoice_id, invoice_index, page_start, page_end, "FAILED")
+                self._set_document_invoice_state(
+                    doc_id, resolved_invoice_id, invoice_index, page_start, page_end, "FAILED",
+                    error_message=extraction["error"],
+                )
                 return self._send_json({"success": False, "error": extraction["error"]}, 400)
             base64_pdf = extraction["base64"]
             print(f"[Backend] ✅ Isolated invoice PDF size: {extraction['file_size']} bytes (pages {page_start}-{page_end} only)")
@@ -1341,44 +1321,43 @@ class LogisticsAutomationHandler(http.server.BaseHTTPRequestHandler):
             conn_q.commit()
             conn_q.close()
 
-        # Dispatch to n8n in a background thread so the HTTP response is returned
-        # to the frontend immediately. The frontend polls /api/documents/<id>/status
-        # until status becomes EXTRACTED. n8n posts back to callbackUrl when done.
-        def _dispatch_to_n8n():
-            result = send_to_n8n_webhook(
-                invoice_index, list(range(int(page_start), int(page_end) + 1)), base64_pdf, doc_id=doc_id,
-                file_path=file_path, page_start_for_ocr=page_start, page_end_for_ocr=page_end,
-                image_quality=image_quality, invoice_id=resolved_invoice_id
+        result = send_to_n8n_webhook(
+            invoice_index, list(range(int(page_start), int(page_end) + 1)), base64_pdf, doc_id=doc_id,
+            file_path=file_path, page_start_for_ocr=page_start, page_end_for_ocr=page_end,
+            image_quality=image_quality, invoice_id=resolved_invoice_id
+        )
+        if not result["success"]:
+            error_message = result.get("error") or "n8n webhook failed"
+            print(f"[Backend] ❌ n8n dispatch failed: invoiceId={resolved_invoice_id} error={error_message}")
+            self._set_document_invoice_state(
+                doc_id, resolved_invoice_id, invoice_index, page_start, page_end, "FAILED",
+                error_message=error_message,
             )
-            if not result["success"]:
-                print(f"[Backend] ❌ n8n dispatch failed: invoiceId={resolved_invoice_id} error={result.get('error')}")
-                self._set_document_invoice_state(doc_id, resolved_invoice_id, invoice_index, page_start, page_end, "FAILED")
-                return
-            # If n8n responded synchronously with extracted data, save it immediately.
-            extracted = result.get("extractedData")
-            if isinstance(extracted, dict):
-                inner = extracted.get("extractedData") if isinstance(extracted.get("extractedData"), dict) else extracted
-                if isinstance(inner, dict) and any(inner.get(k) for k in (
-                    "invoiceHeader", "header", "shipmentDetails", "chargeLineItems", "invoiceNumber", "lineItems"
-                )):
-                    self._set_document_invoice_state(
-                        doc_id, resolved_invoice_id, invoice_index, page_start, page_end, "EXTRACTED", canonical=inner
-                    )
-                    try:
-                        conn_sync = sqlite3.connect(DB_PATH)
-                        cur_sync = conn_sync.cursor()
-                        cur_sync.execute(
-                            "UPDATE Document SET status = 'EXTRACTED' WHERE id = ? AND status NOT IN ('POOR_IMAGE_QUALITY', 'IN_REVIEW', 'APPROVED', 'INVOICE_GENERATED');",
-                            (doc_id,)
-                        )
-                        conn_sync.commit()
-                        conn_sync.close()
-                    except Exception as sync_exc:
-                        print(f"[Backend] Warning: could not update Document status: {sync_exc}")
+            return self._send_json({
+                "success": False,
+                "invoiceId": resolved_invoice_id,
+                "documentId": doc_id,
+                "error": error_message,
+            }, 502)
 
-        threading.Thread(target=_dispatch_to_n8n, daemon=True).start()
+        extracted = result.get("extractedData")
+        inner = extracted.get("extractedData") if isinstance(extracted, dict) and isinstance(extracted.get("extractedData"), dict) else extracted
+        has_extracted_data = isinstance(inner, dict) and any(inner.get(k) for k in (
+            "invoiceHeader", "header", "shipmentDetails", "chargeLineItems", "invoiceNumber", "lineItems"
+        ))
 
-        # Respond immediately — frontend will poll /status until EXTRACTED
+        current_conn = sqlite3.connect(DB_PATH)
+        current_cursor = current_conn.cursor()
+        current_cursor.execute("SELECT status FROM DocumentInvoice WHERE id = ? AND documentId = ?", (resolved_invoice_id, doc_id))
+        current_state = current_cursor.fetchone()
+        current_conn.close()
+        if has_extracted_data:
+            self._set_document_invoice_state(
+                doc_id, resolved_invoice_id, invoice_index, page_start, page_end, "EXTRACTED", canonical=inner
+            )
+        elif not current_state or current_state[0] not in ("EXTRACTED", "APPROVED", "INVOICE_GENERATED"):
+            self._set_document_invoice_state(doc_id, resolved_invoice_id, invoice_index, page_start, page_end, "EXTRACTING")
+
         return self._send_json({
             "success": True,
             "invoiceId": resolved_invoice_id,
@@ -1387,8 +1366,8 @@ class LogisticsAutomationHandler(http.server.BaseHTTPRequestHandler):
             "pageStart": page_start,
             "pageEnd": page_end,
             "imageQuality": image_quality,
-            "status": "EXTRACTING",
-            "message": "Extraction dispatched to n8n. Poll /status for completion."
+            "status": "EXTRACTED" if has_extracted_data else "EXTRACTING",
+            "extractedData": extracted,
         })
             
     def _handle_batch_generate(self):

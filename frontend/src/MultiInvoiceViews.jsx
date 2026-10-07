@@ -350,7 +350,7 @@ export const UploadMultiView = () => {
 
     const uploadUrl = `${API}/documents/upload-multi`;
     const uploadMethod = 'POST';
-    console.log('[n8n Upload] Sending file to backend:', { url: uploadUrl, method: uploadMethod, fileName: entry.file.name });
+    console.log('[Document Upload] Sending file to backend:', { url: uploadUrl, method: uploadMethod, fileName: entry.file.name });
 
     const uploadController = new AbortController();
     const uploadTimeout = setTimeout(() => uploadController.abort(), 120_000); // 120 s
@@ -367,8 +367,8 @@ export const UploadMultiView = () => {
 
       if (!res.ok) {
         const errText = await res.text().catch(() => `HTTP ${res.status}`);
-        const errorMsg = `Cannot reach n8n server — backend responded ${res.status}: ${errText}`;
-        console.error('[n8n Upload] Non-OK response:', { url: uploadUrl, status: res.status, body: errText });
+        const errorMsg = `Document upload failed — backend responded ${res.status}: ${errText}`;
+        console.error('[Document Upload] Non-OK response:', { url: uploadUrl, status: res.status, body: errText });
         updateEntry(entry.id, { status: FILE_STATUS.FAILED, error: errorMsg });
         return { success: false };
       }
@@ -378,9 +378,9 @@ export const UploadMultiView = () => {
       clearTimeout(uploadTimeout);
       const isTimeout = fetchErr.name === 'AbortError';
       const errorMsg = isTimeout
-        ? 'Cannot reach n8n server — request timed out after 120 seconds.'
-        : `Cannot reach n8n server — ${fetchErr.message}`;
-      console.error('[n8n Upload] Fetch error:', {
+        ? 'Document upload timed out after 120 seconds.'
+        : `Document upload failed — ${fetchErr.message}`;
+      console.error('[Document Upload] Fetch error:', {
         url: uploadUrl,
         method: uploadMethod,
         errorName: fetchErr.name,
@@ -393,7 +393,7 @@ export const UploadMultiView = () => {
 
     if (!data.success) {
       const errorMsg = data.error || 'Upload failed — backend returned success: false.';
-      console.error('[n8n Upload] Backend failure:', { url: uploadUrl, response: data });
+      console.error('[Document Upload] Backend failure:', { url: uploadUrl, response: data });
       updateEntry(entry.id, { status: FILE_STATUS.FAILED, error: errorMsg });
       return { success: false };
     }
@@ -492,13 +492,13 @@ export const UploadMultiView = () => {
       <main className="page">
         <div className="section-header">
           <div>
-            <div className="eyebrow">Batch Processing</div>
-            <h1 className="page-title">Batch Processing Complete</h1>
+            <div className="eyebrow">Document Upload</div>
+            <h1 className="page-title">Upload Complete</h1>
           </div>
         </div>
         <div className="bq-summary-card">
           <div className="bq-summary-icon">✅</div>
-          <h2 className="bq-summary-title">Processing Complete</h2>
+          <h2 className="bq-summary-title">Upload Complete</h2>
           <div className="bq-summary-grid">
             <div className="bq-summary-stat">
               <div className="bq-summary-stat__value">{batchResults.docs}</div>
@@ -506,7 +506,7 @@ export const UploadMultiView = () => {
             </div>
             <div className="bq-summary-stat bq-summary-stat--success">
               <div className="bq-summary-stat__value">{batchResults.completed}</div>
-              <div className="bq-summary-stat__label">Successfully Processed</div>
+              <div className="bq-summary-stat__label">Documents Uploaded</div>
             </div>
             <div className="bq-summary-stat bq-summary-stat--warning">
               <div className="bq-summary-stat__value">{batchResults.needsReview}</div>
@@ -514,7 +514,7 @@ export const UploadMultiView = () => {
             </div>
             <div className="bq-summary-stat bq-summary-stat--primary">
               <div className="bq-summary-stat__value">{batchResults.invoices}</div>
-              <div className="bq-summary-stat__label">Invoices Extracted</div>
+              <div className="bq-summary-stat__label">Invoices Ready for Review</div>
             </div>
             <div className="bq-summary-stat bq-summary-stat--warning">
               <div className="bq-summary-stat__value">{batchResults.poorQuality}</div>
@@ -612,7 +612,7 @@ export const UploadMultiView = () => {
           <div className="bq-queue-header">
             <div className="bq-queue-title">
               Selected Documents <span className="bq-queue-count">{totalFiles}</span>
-              {isProcessing && <span className="bq-queue-processing-badge">Processing {processingCount > 0 ? processingCount + ' active' : '...'}</span>}
+              {isProcessing && <span className="bq-queue-processing-badge">Uploading {processingCount > 0 ? processingCount + ' active' : '...'}</span>}
             </div>
             <div className="bq-queue-actions">
               {!isProcessing && (
@@ -629,11 +629,11 @@ export const UploadMultiView = () => {
             </div>
           </div>
 
-          {/* Overall progress bar (when processing) */}
+          {/* Overall upload progress bar */}
           {isProcessing && (
             <div className="bq-overall-progress">
               <div className="bq-op-label">
-                <span>{completedCount} of {totalFiles} documents processed</span>
+                <span>{completedCount} of {totalFiles} documents uploaded</span>
                 <span className="bq-op-pct">{Math.round((completedCount / Math.max(totalFiles, 1)) * 100)}%</span>
               </div>
               <div className="bq-op-bar">
@@ -717,7 +717,7 @@ export const UploadMultiView = () => {
             })}
           </div>
 
-          {/* Process button */}
+          {/* Upload button */}
           {!isProcessing && (
             <button
               type="button"
@@ -725,7 +725,7 @@ export const UploadMultiView = () => {
               onClick={handleProcessAll}
               disabled={isProcessing || fileEntries.filter((e) => e.status === FILE_STATUS.READY || e.status === FILE_STATUS.FAILED).length === 0}
             >
-              🚀 Process All Documents
+              🚀 Upload Documents
             </button>
           )}
         </div>
@@ -1330,12 +1330,12 @@ export const ExtractionProcessingPanel = ({ invoiceIndex, pageStart, pageEnd, is
   }, [invoiceIndex]);
 
   const steps = isSingleInvoice ? [
-    { id: 1, label: 'Document uploaded', detail: 'Document received & queued for AI extraction' },
+    { id: 1, label: 'Invoice selected', detail: 'Selected invoice sent to the AI workflow' },
     { id: 2, label: 'Reading invoice content', detail: 'Optical character recognition (OCR)' },
     { id: 3, label: 'Extracting invoice data', detail: 'Analyzing fields, headers & line items' },
     { id: 4, label: 'Preparing results', detail: 'Structuring JSON payload & schema validation' }
   ] : [
-    { id: 1, label: 'Document received', detail: 'Page isolated & sent to AI engine' },
+    { id: 1, label: 'Invoice selected', detail: 'Selected invoice pages sent to the AI workflow' },
     { id: 2, label: 'Reading invoice content', detail: 'Optical character recognition (OCR)' },
     { id: 3, label: 'Extracting invoice data', detail: 'Analyzing fields, headers & line items' },
     { id: 4, label: 'Preparing results', detail: 'Structuring JSON payload & schema validation' }
@@ -1869,8 +1869,6 @@ export const MultiInvoiceWorkspace = ({ docId: propDocId, docIds: propDocIds }) 
       extractionStatus: 'PREPARING',
     });
 
-    // Brief preparing state for professional UX, then extracting
-    await new Promise((r) => setTimeout(r, 350));
     try {
       const result = await triggerInvoiceExtraction({
         ...invoice,
