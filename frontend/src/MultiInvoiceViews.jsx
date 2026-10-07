@@ -462,20 +462,34 @@ export const UploadMultiView = () => {
     if (docIds.length === 0) return;
     if (docIds.length === 1) {
       const targetDocId = docIds[0];
+      const uploadedEntry = fileEntries.find((entry) => entry.documentId === targetDocId);
+      let doc = null;
       try {
-        const res = await fetch(`${API}/documents/${targetDocId}`);
+        const res = await fetch(`${API}/documents?refresh=${Date.now()}`);
+        if (!res.ok) throw new Error(`Document lookup failed (HTTP ${res.status})`);
         const data = await res.json();
-        const doc = data.document || data;
-        const invCount = Number(doc.invoiceCount ?? (doc.invoices ? doc.invoices.length : 1));
-        const isPoor = doc.status === 'POOR_IMAGE_QUALITY' || doc.status === 'Poor Image Quality' || doc.poorImageQuality;
-        if (isPoor) {
-          window.location.assign('/escalations');
-        } else if (invCount > 1) {
-          window.location.assign(`/documents/${targetDocId}/multi-workspace`);
-        } else {
-          window.location.assign(`/documents/${targetDocId}/review`);
-        }
-      } catch (e) {
+        doc = (data.documents || []).find((item) => item.id === targetDocId) || null;
+      } catch (error) {
+        console.error('[Upload] Failed to reload uploaded document metadata:', error);
+      }
+
+      const invCount = Number(
+        doc?.invoiceCount
+        ?? doc?.invoices?.length
+        ?? (docIds.length === 1 ? batchResults.invoices : null)
+        ?? uploadedEntry?.invoiceCount
+        ?? 1
+      );
+      const fileName = doc?.fileName || uploadedEntry?.file?.name || '';
+      const isPdf = fileName.toLowerCase().endsWith('.pdf');
+      const isPoor = doc?.status === 'POOR_IMAGE_QUALITY'
+        || doc?.status === 'Poor Image Quality'
+        || doc?.poorImageQuality;
+      if (isPoor) {
+        window.location.assign('/escalations');
+      } else if (invCount > 1 || isPdf) {
+        window.location.assign(`/documents/${targetDocId}/multi-workspace`);
+      } else {
         window.location.assign(`/documents/${targetDocId}/review`);
       }
     } else {

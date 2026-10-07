@@ -893,15 +893,13 @@ class LogisticsAutomationHandler(http.server.BaseHTTPRequestHandler):
     def _handle_get_document_status(self, doc_id):
         conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
-        cursor.execute("SELECT id, fileName, status, overallConfidence FROM Document WHERE id = ?;", (doc_id,))
+        cursor.execute("SELECT id, fileName, status, overallConfidence, mimeType FROM Document WHERE id = ?;", (doc_id,))
         row = cursor.fetchone()
         if not row:
             conn.close()
             return self._send_json({"error": "Document not found"}, 404)
 
-        # Count invoices from the legacy invoice table when present; the
-        # single-invoice path remains the existing /review route, while the
-        # multi-invoice path continues to /documents/{doc_id}/invoices.
+        # PDFs use the page-range workspace even when detection finds one invoice.
         try:
             cursor.execute("SELECT COUNT(*) FROM DocumentInvoice WHERE documentId = ?;", (doc_id,))
             invoice_count = cursor.fetchone()[0]
@@ -913,7 +911,7 @@ class LogisticsAutomationHandler(http.server.BaseHTTPRequestHandler):
         is_extracted = is_poor or row[2] in ["EXTRACTED", "IN_REVIEW", "APPROVED", "INVOICE_GENERATED"]
         if is_poor:
             review_url = "/escalations"
-        elif invoice_count > 1:
+        elif invoice_count > 1 or (row[1] or "").lower().endswith(".pdf"):
             review_url = f"/documents/{row[0]}/multi-workspace"
         else:
             review_url = f"/documents/{row[0]}/review"
@@ -1575,7 +1573,7 @@ class LogisticsAutomationHandler(http.server.BaseHTTPRequestHandler):
 
         cursor.execute("SELECT COUNT(*) FROM DocumentInvoice WHERE documentId = ? AND (status = 'POOR_IMAGE_QUALITY' OR status = 'Poor Image Quality' OR (imageQuality IS NOT NULL AND imageQuality < 0.6));", (doc_id,))
         poor_invoice_count = cursor.fetchone()[0]
-        cursor.execute("SELECT status, imageQuality FROM Document WHERE id = ?;", (doc_id,))
+        cursor.execute("SELECT status, imageQuality, fileName FROM Document WHERE id = ?;", (doc_id,))
         doc_row = cursor.fetchone()
         is_doc_originally_poor = doc_row and (doc_row[0] in ('POOR_IMAGE_QUALITY', 'Poor Image Quality') or (doc_row[1] is not None and doc_row[1] < 0.6))
 
@@ -1590,7 +1588,13 @@ class LogisticsAutomationHandler(http.server.BaseHTTPRequestHandler):
         conn.commit()
         conn.close()
 
-        review_url = f"/documents/{doc_id}/invoices" if expected_count > 1 else f"/documents/{doc_id}/review"
+        is_pdf = doc_row and (doc_row[2] or "").lower().endswith(".pdf")
+        review_url = (
+            f"/documents/{doc_id}/multi-workspace"
+            if is_pdf
+            else f"/documents/{doc_id}/invoices" if expected_count > 1
+            else f"/documents/{doc_id}/review"
+        )
         self._send_json({
             "success": True,
             "documentId": doc_id,
@@ -3066,9 +3070,13 @@ class LogisticsAutomationHandler(http.server.BaseHTTPRequestHandler):
 
                 reader = PdfReader(io.BytesIO(content))
                 total_pages = len(reader.pages)
-
-                start_idx = max(0, min(start_page - 1, total_pages - 1))
-                end_idx = max(start_idx, min(end_page - 1, total_pages - 1))
+                if total_pages == 0 or start_page < 1 or end_page < start_page or end_page > total_pages:
+                    return self._send_json(
+                        {"error": f"Invalid PDF page range {start_page}-{end_page} for a {total_pages}-page document"},
+                        400,
+                    )
+                start_idx = start_page - 1
+                end_idx = end_page - 1
 
                 writer = PdfWriter()
                 for i in range(start_idx, end_idx + 1):
@@ -3078,7 +3086,11 @@ class LogisticsAutomationHandler(http.server.BaseHTTPRequestHandler):
                 writer.write(out_stream)
                 content = out_stream.getvalue()
             except Exception as e:
-                print(f"[PDF Slice Error] Fallback to full document for {doc_id}: {e}")
+                print(f"[PDF Slice Error] documentId={doc_id} pageRange={start_page}-{end_page} error={e}")
+                return self._send_json(
+                    {"error": f"Unable to isolate PDF pages {start_page}-{end_page}: {e}"},
+                    500,
+                )
 
         self.send_response(200)
         content_type = "application/pdf" if is_pdf else (mime_type or "application/octet-stream")

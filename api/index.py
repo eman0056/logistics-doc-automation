@@ -2624,8 +2624,13 @@ def get_document_page_range(doc_id: str, start: int = 1, end: int = 1):
 
             reader = PdfReader(io.BytesIO(file_bytes))
             total_pages = len(reader.pages)
-            start_idx = max(0, min(start - 1, total_pages - 1))
-            end_idx = max(start_idx, min(end - 1, total_pages - 1))
+            if total_pages == 0 or start < 1 or end < start or end > total_pages:
+                return JSONResponse(
+                    {"error": f"Invalid PDF page range {start}-{end} for a {total_pages}-page document"},
+                    status_code=400,
+                )
+            start_idx = start - 1
+            end_idx = end - 1
 
             writer = PdfWriter()
             for i in range(start_idx, end_idx + 1):
@@ -2635,7 +2640,8 @@ def get_document_page_range(doc_id: str, start: int = 1, end: int = 1):
             writer.write(out_stream)
             content_bytes = out_stream.getvalue()
         except Exception as e:
-            print(f"[FastAPI PDF Slice Error] Fallback to full document for {doc_id}: {e}")
+            print(f"[FastAPI PDF Slice Error] documentId={doc_id} pageRange={start}-{end} error={e}")
+            return JSONResponse({"error": f"Unable to isolate PDF pages {start}-{end}: {e}"}, status_code=500)
 
     content_type = "application/pdf" if is_pdf else (mime_type or "application/octet-stream")
     response = Response(
@@ -2734,7 +2740,12 @@ def get_document_status(doc_id: str):
             extracted_data = parsed
             break
     is_extracted = bool(extracted_data) or row[2] in ["EXTRACTED", "IN_REVIEW", "APPROVED", "INVOICE_GENERATED"]
-    review_url = f"/documents/{row[0]}/invoices" if int(invoice_count) > 1 else f"/documents/{row[0]}/review"
+    is_pdf = str(row[1] or "").lower().endswith(".pdf")
+    review_url = (
+        f"/documents/{row[0]}/multi-workspace"
+        if int(invoice_count) > 1 or is_pdf
+        else f"/documents/{row[0]}/review"
+    )
     response = JSONResponse({
         "success": True,
         "documentId": row[0],
@@ -2958,7 +2969,7 @@ async def extraction_callback(doc_id: str, request: Request):
         cursor_poor = execute_query(conn, "SELECT COUNT(*) FROM DocumentInvoice WHERE documentId = ? AND (status = 'POOR_IMAGE_QUALITY' OR status = 'Poor Image Quality' OR (imageQuality IS NOT NULL AND imageQuality < 0.6))", (doc_id,))
         poor_row = cursor_poor.fetchone()
         poor_count = poor_row[0] if poor_row else 0
-        cursor_doc = execute_query(conn, "SELECT status, imageQuality FROM Document WHERE id = ?", (doc_id,))
+        cursor_doc = execute_query(conn, "SELECT status, imageQuality, fileName FROM Document WHERE id = ?", (doc_id,))
         doc_row = cursor_doc.fetchone()
         is_doc_originally_poor = doc_row and (doc_row[0] in ('POOR_IMAGE_QUALITY', 'Poor Image Quality') or (doc_row[1] is not None and doc_row[1] < 0.6))
 
@@ -2972,7 +2983,13 @@ async def extraction_callback(doc_id: str, request: Request):
         execute_query(conn, "UPDATE Document SET status = ?, processedPages = CASE WHEN ? THEN COALESCE(pageCount, 1) ELSE processedPages END WHERE id = ?", (doc_status, is_complete, doc_id))
         conn.commit()
 
-        review_url = f"/documents/{doc_id}/invoices" if expected_count > 1 else f"/documents/{doc_id}/review"
+        is_pdf = doc_row and str(doc_row[2] or "").lower().endswith(".pdf")
+        review_url = (
+            f"/documents/{doc_id}/multi-workspace"
+            if is_pdf
+            else f"/documents/{doc_id}/invoices" if expected_count > 1
+            else f"/documents/{doc_id}/review"
+        )
         return {"success": True, "invoiceCount": received_count, "expectedInvoiceCount": expected_count, "complete": is_complete, "reviewUrl": review_url}
 
     except Exception as e:

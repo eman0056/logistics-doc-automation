@@ -504,7 +504,7 @@ function App() {
           <td>{((doc.fileSize || 0) / 1024).toFixed(1)} KB</td>
           <td>{new Date(doc.createdAt).toLocaleDateString()}</td>
           <td style={{ textAlign: 'right' }}>
-            <a href={(doc.invoiceCount > 1 || (doc.invoices || []).length > 1) ? `/documents/${doc.id}/multi-workspace` : `/documents/${doc.id}/review`} className="nav-link" style={{ padding: '0.4rem 0.6rem', display: 'inline-flex' }}>
+            <a href={(doc.invoiceCount > 1 || (doc.invoices || []).length > 1 || (doc.fileName || '').toLowerCase().endsWith('.pdf')) ? `/documents/${doc.id}/multi-workspace` : `/documents/${doc.id}/review`} className="nav-link" style={{ padding: '0.4rem 0.6rem', display: 'inline-flex' }}>
               Review & Edit
             </a>
             <button
@@ -713,9 +713,10 @@ function App() {
           const firstDocId = data.documentIds[0];
           const firstDispatch = (data.dispatches || []).find((dispatch) => dispatch.documentId === firstDocId);
           const invoiceCount = Number(firstDispatch?.invoiceCount || 1);
+          const isPdfUpload = selectedFiles.some((file) => file.name.toLowerCase().endsWith('.pdf'));
           const target = data.documentIds.length > 1
             ? `/batch-workspace?ids=${data.documentIds.join(',')}`
-            : invoiceCount > 1
+            : invoiceCount > 1 || isPdfUpload
               ? `/documents/${firstDocId}/multi-workspace`
               : `/documents/${firstDocId}/review`;
           setStatusText('Upload complete. No extraction has started.');
@@ -1034,6 +1035,9 @@ function App() {
       extractedData: getSingleInvoiceData(doc),
     };
     const previewUrl = `${API}/documents/${docId}/file`;
+    const invoicePageStart = Number(selectedInvoice.pageStart || 1);
+    const invoicePageEnd = Number(selectedInvoice.pageEnd || invoicePageStart);
+    const invoicePageUrl = `${API}/documents/${docId}/page-range?start=${invoicePageStart}&end=${invoicePageEnd}`;
     const isPdfDocument = () => {
       const mimeType = (doc?.mimeType || '').toLowerCase();
       const fileName = (doc?.fileName || '').toLowerCase();
@@ -1286,7 +1290,7 @@ function App() {
                     disabled={dispatching || processing || Boolean(selectedInvoice.extractionComplete)}
                     aria-label="Select Invoice 1 and start its extraction"
                   >
-                    <span><strong>Invoice 1 · Original uploaded document</strong></span>
+                    <span><strong>Invoice 1 · Pages {invoicePageStart}-{invoicePageEnd}</strong></span>
                     <small>
                       {selectedInvoice.extractionComplete
                         ? '✓ Extracted'
@@ -1299,8 +1303,8 @@ function App() {
                 <div className="preview-box" key={selectedInvoice?.id || docId}>
                   {isPdfDocument() ? (
                     <>
-                      <iframe className="document-scroll-viewer" src={`${previewUrl}#page=${selectedInvoice?.pageStart || 1}`} title="Original document preview" />
-                      <a className="document-open-fallback" href={`${previewUrl}#page=${selectedInvoice?.pageStart || 1}`} target="_blank" rel="noreferrer">Open original document</a>
+                      <iframe className="document-scroll-viewer" src={`${invoicePageUrl}#page=1`} title="Original invoice pages preview" />
+                      <a className="document-open-fallback" href={`${invoicePageUrl}#page=1`} target="_blank" rel="noreferrer">Open original invoice pages</a>
                     </>
                   ) : (
                     <img src={previewUrl} alt="Document Preview" onError={(e) => { e.currentTarget.src = 'https://placehold.co/600x800/1e293b/475569?text=No+Preview+Available'; }} />
@@ -1572,7 +1576,7 @@ function App() {
             invoiceLabel: inv.invoiceNumber ? `Invoice ${inv.invoiceNumber}` : `Invoice #${idx + 1}`,
             status: invStatus || 'POOR_IMAGE_QUALITY',
             date: doc.createdAt ? new Date(doc.createdAt).toLocaleDateString() : '—',
-            reviewUrl: (doc.invoiceCount || 1) > 1
+            reviewUrl: (doc.invoiceCount || 1) > 1 || (doc.fileName || '').toLowerCase().endsWith('.pdf')
               ? `/documents/${doc.id}/multi-workspace?invoiceIndex=${idx}`
               : `/documents/${doc.id}/review`,
           });
