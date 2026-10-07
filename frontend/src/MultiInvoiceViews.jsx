@@ -154,6 +154,20 @@ const humanInvoiceStatus = (invoice, index = 0) => {
   return 'Not Extracted';
 };
 
+const invoiceExtractionProgress = (invoice) => {
+  const status = String(invoice?.status || invoice?.extractionStatus || invoice?.extractionUi || '').toUpperCase();
+  if (['FINISHING', 'FINALIZING', 'COMPLETING', 'PREPARING_RESULTS'].includes(status)) {
+    return { step: 4, progress: 94 };
+  }
+  if (['READING', 'OCR', 'READING_CONTENT'].includes(status)) {
+    return { step: 2, progress: 52 };
+  }
+  if (['EXTRACTING', 'PROCESSING'].includes(status)) {
+    return { step: 3, progress: 82 };
+  }
+  return { step: 1, progress: 25 };
+};
+
 /**
  * Triggers extraction for ONE invoice by asking the backend to slice ONLY that invoice's
  * page range and send the isolated PDF/pages payload to n8n.
@@ -488,7 +502,7 @@ export const UploadMultiView = () => {
       if (isPoor) {
         window.location.assign('/escalations');
       } else if (invCount > 1 || isPdf) {
-        window.location.assign(`/documents/${targetDocId}/multi-workspace`);
+        window.location.assign(`/documents/${targetDocId}/multi-workspace?expectedInvoices=${encodeURIComponent(invCount)}`);
       } else {
         window.location.assign(`/documents/${targetDocId}/review`);
       }
@@ -1305,12 +1319,24 @@ export const DocumentViewer = ({ docId, selectedGroup }) => {
   );
 };
 
-export const ExtractionProcessingPanel = ({ invoiceIndex, pageStart, pageEnd, isSingleInvoice = false }) => {
+export const ExtractionProcessingPanel = ({
+  invoiceIndex,
+  pageStart,
+  pageEnd,
+  isSingleInvoice = false,
+  progressStep: controlledStep,
+  progressValue: controlledProgress,
+}) => {
   const [currentStep, setCurrentStep] = useState(1);
   const [progress, setProgress] = useState(25);
   const [timedOut, setTimedOut] = useState(false);
 
   useEffect(() => {
+    if (controlledStep !== undefined || controlledProgress !== undefined) {
+      setTimedOut(false);
+      return undefined;
+    }
+
     setCurrentStep(1);
     setProgress(25);
     setTimedOut(false);
@@ -1341,7 +1367,10 @@ export const ExtractionProcessingPanel = ({ invoiceIndex, pageStart, pageEnd, is
       clearTimeout(t3);
       clearTimeout(tTimeout);
     };
-  }, [invoiceIndex]);
+  }, [invoiceIndex, controlledStep, controlledProgress]);
+
+  const displayedStep = controlledStep ?? currentStep;
+  const displayedProgress = controlledProgress ?? progress;
 
   const steps = isSingleInvoice ? [
     { id: 1, label: 'Invoice selected', detail: 'Selected invoice sent to the AI workflow' },
@@ -1386,14 +1415,14 @@ export const ExtractionProcessingPanel = ({ invoiceIndex, pageStart, pageEnd, is
           <div className="processing-bar-background">
             <div
               className="processing-bar-fill"
-              style={{ width: `${progress}%` }}
+              style={{ width: `${displayedProgress}%` }}
             >
               <div className="processing-bar-shimmer" />
             </div>
           </div>
           <div className="processing-bar-info">
             <span>{isSingleInvoice ? 'Single Document Extraction' : `Invoice #${invoiceIndex !== undefined ? invoiceIndex + 1 : '1'} (Pages ${pageStart || 1}${pageEnd && pageEnd !== pageStart ? `–${pageEnd}` : ''})`}</span>
-            <span className="processing-percent-text">{progress}%</span>
+            <span className="processing-percent-text">{displayedProgress}%</span>
           </div>
         </div>
 
@@ -1414,9 +1443,9 @@ export const ExtractionProcessingPanel = ({ invoiceIndex, pageStart, pageEnd, is
         ) : (
           <div className="processing-steps-container">
             {steps.map((step) => {
-              const isDone = step.id < currentStep;
-              const isActive = step.id === currentStep;
-              const isPending = step.id > currentStep;
+              const isDone = step.id < displayedStep;
+              const isActive = step.id === displayedStep;
+              const isPending = step.id > displayedStep;
 
               return (
                 <div
@@ -1795,6 +1824,7 @@ export const MultiInvoiceWorkspace = ({ docId: propDocId, docIds: propDocIds }) 
   const docIds = propDocIds || (idsParam ? idsParam.split(',').filter(Boolean) : null);
   const primaryDocId = propDocId || (docIds ? docIds[0] : null) || path.split('/')[2];
   const isBatchMode = docIds && docIds.length > 1;
+  const expectedInvoiceCountParam = Number(searchParams.get('expectedInvoices'));
 
   const [doc, setDoc] = useState(null);
   const [invoices, setInvoices] = useState([]);
@@ -1802,6 +1832,9 @@ export const MultiInvoiceWorkspace = ({ docId: propDocId, docIds: propDocIds }) 
   const [drafts, setDrafts] = useState({});
   const [activeTab, setActiveTab] = useState('header');
   const [loading, setLoading] = useState(true);
+  const [loadingMessage, setLoadingMessage] = useState('Loading multi-invoice review workspace...');
+  const [loadError, setLoadError] = useState('');
+  const [loadRetryKey, setLoadRetryKey] = useState(0);
   const [saving, setSaving] = useState(false);
   const [saveSuccess, setSaveSuccess] = useState(false);
   const [saveError, setSaveError] = useState('');
@@ -1951,6 +1984,7 @@ export const MultiInvoiceWorkspace = ({ docId: propDocId, docIds: propDocIds }) 
     let active = true;
     const load = async () => {
       setLoading(true);
+      setLoadError('');
       try {
         let invoiceList = [];
         let foundDoc = null;
@@ -1958,66 +1992,63 @@ export const MultiInvoiceWorkspace = ({ docId: propDocId, docIds: propDocIds }) 
         if (isBatchMode) {
           const idsQuery = docIds.join(',');
           const [docsRes, invRes] = await Promise.all([
-            fetch(`${API}/documents?refresh=${Date.now()}`),
-            fetch(`${API}/documents/${primaryDocId}/invoices?ids=${encodeURIComponent(idsQuery)}&refresh=${Date.now()}`)
+            fetch(`${API}/documents?refresh=${Date.now()}`, { cache: 'no-store' }),
+            fetch(`${API}/documents/${primaryDocId}/invoices?ids=${encodeURIComponent(idsQuery)}&refresh=${Date.now()}`, { cache: 'no-store' })
           ]);
+          if (!docsRes.ok || !invRes.ok) {
+            throw new Error(`Unable to load batch invoices (HTTP ${docsRes.status}/${invRes.status})`);
+          }
           const docsData = await docsRes.json();
           const invData = await invRes.json();
           foundDoc = (docsData.documents || []).find(d => d.id === primaryDocId) || null;
           invoiceList = Array.isArray(invData.invoices) ? invData.invoices : [];
         } else {
           const docId = primaryDocId;
+          setLoadingMessage('Detecting invoices...');
           const [docRes, invRes] = await Promise.all([
-            fetch(`${API}/documents?refresh=${Date.now()}`),
-            fetch(`${API}/documents/${docId}/invoices?refresh=${Date.now()}`)
+            fetch(`${API}/documents?refresh=${Date.now()}`, { cache: 'no-store' }),
+            fetch(`${API}/documents/${docId}/invoices?refresh=${Date.now()}`, { cache: 'no-store' })
           ]);
+          if (!docRes.ok || !invRes.ok) {
+            throw new Error(`Unable to load document invoices (HTTP ${docRes.status}/${invRes.status})`);
+          }
           const docData = await docRes.json();
           const invData = await invRes.json();
           foundDoc = (docData.documents || []).find(d => d.id === docId) || null;
           invoiceList = Array.isArray(invData.invoices) ? invData.invoices : [];
 
-          if (invoiceList.length === 0) {
-            try {
-              const detectRes = await fetch(`${API}/documents/${docId}/detect-invoices`);
-              const detectData = await detectRes.json();
-              if (detectData.success && Array.isArray(detectData.invoiceGroups)) {
-                invoiceList = detectData.invoiceGroups.map((grp, idx) => ({
-                  id: `${docId}-invoice-${idx + 1}`,
-                  invoiceId: `${docId}-invoice-${idx + 1}`,
-                  documentId: docId,
-                  sourceFileName: foundDoc?.fileName || docId,
-                  fileName: foundDoc?.fileName || docId,
-                  invoiceIndex: grp.invoiceIndex !== undefined ? grp.invoiceIndex : idx,
-                  pageStart: grp.pageStart || 1,
-                  pageEnd: grp.pageEnd || grp.pageStart || 1,
-                  status: 'Not Extracted',
-                  extractionStatus: 'idle',
-                  extractionUi: EXTRACTION_UI.IDLE,
-                  overallConfidence: null,
-                  extractedData: null
-                }));
-              }
-            } catch (e) {
-              console.warn('Invoice detection fallback error:', e);
+          const isPdf = (foundDoc?.fileName || '').toLowerCase().endsWith('.pdf');
+          if (isPdf) {
+            const detectRes = await fetch(`${API}/documents/${docId}/detect-invoices?refresh=${Date.now()}`, { cache: 'no-store' });
+            if (!detectRes.ok) {
+              throw new Error(`Invoice detection failed (HTTP ${detectRes.status})`);
             }
-          }
+            const detectData = await detectRes.json();
+            const detectedGroups = Array.isArray(detectData.invoiceGroups) ? detectData.invoiceGroups : [];
+            if (!detectData.success || detectedGroups.length === 0) {
+              throw new Error('Invoice detection returned no invoice groups for this PDF.');
+            }
 
-          if (invoiceList.length === 0) {
-            invoiceList = [{
-              id: `${docId}-invoice-1`,
-              invoiceId: `${docId}-invoice-1`,
-              documentId: docId,
-              sourceFileName: foundDoc?.fileName || docId,
-              fileName: foundDoc?.fileName || docId,
-              invoiceIndex: 0,
-              pageStart: 1,
-              pageEnd: 1,
-              status: 'Not Extracted',
-              extractionStatus: 'idle',
-              extractionUi: EXTRACTION_UI.IDLE,
-              overallConfidence: null,
-              extractedData: null
-            }];
+            const expectedCount = Number.isInteger(expectedInvoiceCountParam) && expectedInvoiceCountParam > 0
+              ? expectedInvoiceCountParam
+              : detectedGroups.length;
+            if (detectedGroups.length !== expectedCount) {
+              throw new Error(`Invoice detection found ${detectedGroups.length} invoices; upload reported ${expectedCount}.`);
+            }
+
+            for (let attempt = 0; attempt < 30 && invoiceList.length < expectedCount; attempt += 1) {
+              if (attempt > 0) await new Promise((resolve) => setTimeout(resolve, 1000));
+              const invoicesRes = await fetch(`${API}/documents/${docId}/invoices?refresh=${Date.now()}`, { cache: 'no-store' });
+              if (!invoicesRes.ok) {
+                throw new Error(`Invoice list refresh failed (HTTP ${invoicesRes.status})`);
+              }
+              const invoicesData = await invoicesRes.json();
+              invoiceList = Array.isArray(invoicesData.invoices) ? invoicesData.invoices : [];
+            }
+
+            if (invoiceList.length < expectedCount) {
+              throw new Error(`Waiting for invoice records timed out: expected ${expectedCount}, received ${invoiceList.length}.`);
+            }
           }
         }
 
@@ -2053,13 +2084,14 @@ export const MultiInvoiceWorkspace = ({ docId: propDocId, docIds: propDocIds }) 
         }
       } catch (err) {
         console.error('Failed loading multi invoice workspace:', err);
+        if (active) setLoadError(err.message || 'Unable to load the invoice workspace.');
       } finally {
         if (active) setLoading(false);
       }
     };
     load();
     return () => { active = false; };
-  }, [primaryDocId]);
+  }, [primaryDocId, loadRetryKey]);
 
   useEffect(() => {
     setPageOffset(0);
@@ -2152,7 +2184,22 @@ export const MultiInvoiceWorkspace = ({ docId: propDocId, docIds: propDocIds }) 
       <main className="emir-page">
         <div className="emir-empty-box">
           <div className="emir-empty-icon">🔄</div>
-          <div className="emir-empty-text">Loading multi-invoice review workspace...</div>
+          <div className="emir-empty-text">{loadingMessage}</div>
+        </div>
+      </main>
+    );
+  }
+  if (loadError) {
+    return (
+      <main className="emir-page">
+        <div className="emir-empty-box">
+          <div className="emir-empty-icon">⚠️</div>
+          <div className="emir-empty-text">{loadError}</div>
+          <button className="emir-btn emir-btn-primary" onClick={() => {
+            setLoadingMessage('Detecting invoices...');
+            setLoading(true);
+            setLoadRetryKey((key) => key + 1);
+          }}>Retry</button>
         </div>
       </main>
     );
@@ -2205,6 +2252,7 @@ export const MultiInvoiceWorkspace = ({ docId: propDocId, docIds: propDocIds }) 
   const isWaitingForExtraction = isPreparing || isExtracting || (selectedExtractionUi === EXTRACTION_UI.IDLE && !hasExtractedData);
   const invoiceStatusLabel = humanInvoiceStatus(selectedInvoice, selectedInvoiceIndex);
   const selectedInvoiceLabel = invoiceDisplayLabel(selectedInvoice, selectedInvoiceIndex);
+  const selectedExtractionProgress = invoiceExtractionProgress(selectedInvoice);
   const isPoorQuality = selectedInvoice?.poorImageQuality || selectedInvoice?.status === 'Poor Image Quality' || selectedInvoice?.status === 'POOR_IMAGE_QUALITY';
   // Use selected invoice's own documentId for PDF preview
   const activeDocId = selectedInvoice?.documentId || primaryDocId;
@@ -2608,28 +2656,19 @@ export const MultiInvoiceWorkspace = ({ docId: propDocId, docIds: propDocIds }) 
                   Retry Extraction
                 </button>
               </div>
-            ) : isPreparing ? (
-              <div className="emir-extraction-state">
-                <div className="emir-extraction-spinner" aria-hidden="true" />
-                <h3 className="emir-extraction-state__title">Preparing Invoice</h3>
-                <p className="emir-extraction-state__desc">
-                  Preparing {selectedInvoiceLabel} for secure data extraction...
-                </p>
-              </div>
-            ) : isExtracting ? (
-              <div className="emir-extraction-state">
-                <div className="emir-extraction-spinner" aria-hidden="true" />
-                <h3 className="emir-extraction-state__title">Extracting {selectedInvoiceLabel}</h3>
-                <p className="emir-extraction-state__desc">
-                  Analyzing invoice details and extracting structured data...
-                </p>
-              </div>
+            ) : isPreparing || isExtracting ? (
+              <ExtractionProcessingPanel
+                invoiceIndex={selectedInvoiceIndex}
+                pageStart={selectedInvoice?.pageStart}
+                pageEnd={selectedInvoice?.pageEnd}
+                progressStep={selectedExtractionProgress.step}
+                progressValue={selectedExtractionProgress.progress}
+              />
             ) : isWaitingForExtraction ? (
               <div className="emir-extraction-state">
-                <div className="emir-extraction-spinner" aria-hidden="true" />
-                <h3 className="emir-extraction-state__title">Preparing Invoice</h3>
+                <h3 className="emir-extraction-state__title">Select an Invoice</h3>
                 <p className="emir-extraction-state__desc">
-                  Preparing {selectedInvoiceLabel} for secure data extraction...
+                  Select an invoice to start extraction. Progress and results are tracked separately for each invoice.
                 </p>
               </div>
             ) : (

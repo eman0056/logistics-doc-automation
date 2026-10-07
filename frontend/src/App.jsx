@@ -717,7 +717,7 @@ function App() {
           const target = data.documentIds.length > 1
             ? `/batch-workspace?ids=${data.documentIds.join(',')}`
             : invoiceCount > 1 || isPdfUpload
-              ? `/documents/${firstDocId}/multi-workspace`
+              ? `/documents/${firstDocId}/multi-workspace?expectedInvoices=${encodeURIComponent(invoiceCount)}`
               : `/documents/${firstDocId}/review`;
           setStatusText('Upload complete. No extraction has started.');
           window.location.assign(target);
