@@ -5,7 +5,6 @@ import { Escalations } from './Escalations.jsx';
 import { EscalationModal } from './EscalationModal.jsx';
 import { PreviewRange } from './PreviewRange.jsx';
 import { BackButton } from './BackButton.jsx';
-import { validateInvoice } from './validation/engine.js';
 
 const API = '/api';
 
@@ -1036,36 +1035,15 @@ function App() {
       });
     }, [doc]);
 
-    const invoiceRecordForValidation = doc?.invoices?.[0];
-    const validationInvoiceId = invoiceRecordForValidation?.id || (doc ? `${doc.id}-extracted` : null);
-    const selectedInvoiceData = doc ? getSingleInvoiceData(doc) : {};
-    const draft = validationInvoiceId ? invoiceDrafts[validationInvoiceId] : null;
-    const canonical = draft && Object.keys(draft).length > 0 ? draft : selectedInvoiceData;
-    const isExtracted = Object.keys(selectedInvoiceData).length > 0;
-    const validation = useMemo(
-      () => (isExtracted ? validateInvoice(canonical) : { results: [], failedFields: [] }),
-      [canonical, isExtracted],
-    );
-    const failedValidationResults = validation.results.filter((result) => !result.passed);
-    const failedFieldSeverities = new Map();
-    failedValidationResults.forEach((result) => {
-      result.fieldPaths.forEach((fieldPath) => {
-        const currentSeverity = failedFieldSeverities.get(fieldPath);
-        if (result.severity === 'error' || !currentSeverity) {
-          failedFieldSeverities.set(fieldPath, result.severity);
-        }
-      });
-    });
-
     if (loadingDoc) return <RouteSkeleton label="Loading review..." />;
 
     if (!doc) return <main className="page"><div className="card upload-panel">Document not found.</div></main>;
 
-    const invoiceRecord = invoiceRecordForValidation;
+    const invoiceRecord = doc.invoices?.[0];
     const selectedInvoice = {
       ...(invoiceRecord || {}),
-      id: validationInvoiceId,
-      extractedData: selectedInvoiceData,
+      id: invoiceRecord?.id || `${doc.id}-extracted`,
+      extractedData: getSingleInvoiceData(doc),
     };
     const previewUrl = `${API}/documents/${docId}/file`;
     const invoicePageStart = Number(selectedInvoice.pageStart || 1);
@@ -1087,6 +1065,9 @@ function App() {
     const parseInvoiceData = (invoice) => {
       return parseStoredInvoiceData(invoice);
     };
+    const selectedInvoiceData = selectedInvoice.extractedData || {};
+    const draft = invoiceDrafts[selectedInvoice?.id];
+    const canonical = draft && Object.keys(draft).length > 0 ? draft : selectedInvoiceData;
     console.log('REVIEW RENDER MAPPING', { documentId: docId, invoiceId: selectedInvoice.id, extractedData: selectedInvoiceData, invoiceHeader: selectedInvoiceData?.invoiceHeader });
     const shipmentKey = Array.isArray(canonical.shipmentDetails) ? 'shipmentDetails' : 'shipmentDetail';
     const shipmentRecords = Array.isArray(canonical[shipmentKey]) ? canonical[shipmentKey] : [];
@@ -1116,12 +1097,6 @@ function App() {
     ];
     const activeSection = sectionDefinitions.find((section) => section.id === selectedSection) || sectionDefinitions[0];
     const isEmpty = Object.keys(canonical).length === 0;
-
-    const fieldPathFor = (path) => path.reduce((result, part) => (
-      typeof part === 'number'
-        ? `${result}[${part}]`
-        : result ? `${result}.${part}` : part
-    ), '');
 
     const updateInvoiceField = (key, value) => {
       setInvoiceDrafts((current) => ({
@@ -1216,13 +1191,7 @@ function App() {
         <div className="field-group" key={path.join('.')}>
           <label className="field-label">{label || path[path.length - 1]}</label>
           <input
-            className={`field-input ${
-              failedFieldSeverities.get(fieldPathFor(path)) === 'error'
-                ? 'validation-field-error'
-                : failedFieldSeverities.get(fieldPathFor(path)) === 'warning'
-                  ? 'validation-field-warning'
-                  : ''
-            }`}
+            className="field-input"
             value={value === null || value === undefined ? '' : String(value)}
             onChange={(event) => updateInvoicePath(path, event.target.value)}
           />
@@ -1360,18 +1329,6 @@ function App() {
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap' }}>
                 <h3 className="section-title" style={{ color: '#fff', letterSpacing: '0.1em', margin: 0 }}>Extracted Fields</h3>
               </div>
-              {failedValidationResults.length > 0 && (
-                <div role="status" aria-live="polite">
-                  <strong>Validation issues</strong>
-                  <ul>
-                    {failedValidationResults.map((result, index) => (
-                      <li key={`${result.ruleId}:${result.fieldPaths.join(',')}:${index}`}>
-                        {result.message}
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-              )}
               <div className="invoice-section-tabs" role="tablist" aria-label="Extracted invoice sections">
                 {sectionDefinitions.map((section) => (
                   <button key={section.id} type="button" role="tab" aria-selected={activeSection.id === section.id} className={activeSection.id === section.id ? 'primary-btn' : 'secondary-btn'} onClick={() => setSelectedSection(section.id)}>

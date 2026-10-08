@@ -974,16 +974,6 @@ img {
   box-shadow: 0 0 0 3px rgba(11, 143, 211, 0.16);
 }
 
-.field-input.validation-field-error {
-  border-color: var(--danger, #EA6A6A);
-  box-shadow: 0 0 0 1px rgba(234, 106, 106, 0.18);
-}
-
-.field-input.validation-field-warning {
-  border-color: var(--warning-strong, #e8790c);
-  box-shadow: 0 0 0 1px rgba(217, 163, 91, 0.18);
-}
-
 .editor-panel > div > h3.section-title {
   padding-bottom: 0.45rem;
   border-bottom: 1px solid var(--border);
