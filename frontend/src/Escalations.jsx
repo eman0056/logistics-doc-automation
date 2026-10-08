@@ -21,9 +21,6 @@ export const Escalations = () => {
   const [toastMsg, setToastMsg] = useState('');
 
   const loadEscalations = async () => {
-    const resolvedIds = getResolvedEscalationIds();
-    const resolvedSet = new Set(resolvedIds);
-
     try {
       setLoading(true);
       setLoadError('');
@@ -36,57 +33,67 @@ export const Escalations = () => {
         doc.id && (Number(doc.invoiceCount) > 0 || (Array.isArray(doc.invoices) && doc.invoices.length > 0))
       ));
       const documentsById = new Map(documentsWithInvoices.map((doc) => [doc.id, doc]));
-      const invoiceChunks = [];
-      for (let i = 0; i < documentsWithInvoices.length; i += 100) {
-        invoiceChunks.push(documentsWithInvoices.slice(i, i + 100));
-      }
-      const invoiceResponses = await Promise.all(invoiceChunks.map(async (documentChunk) => {
-        const ids = documentChunk.map((doc) => doc.id).join(',');
-        const requestDocId = documentChunk[0].id;
+      const invoiceResponses = await Promise.all(documentsWithInvoices.map(async (doc) => {
         const invoiceRes = await fetch(
-          `/api/documents/${encodeURIComponent(requestDocId)}/invoices?ids=${encodeURIComponent(ids)}&refresh=${Date.now()}`,
+          `/api/documents/${encodeURIComponent(doc.id)}/invoices?refresh=${Date.now()}`,
           { cache: 'no-store' }
         );
         if (!invoiceRes.ok) {
-          throw new Error(`Unable to load invoice records (HTTP ${invoiceRes.status}).`);
+          throw new Error(`Unable to load invoices for ${doc.fileName || doc.id} (HTTP ${invoiceRes.status}).`);
         }
         const invoiceData = await invoiceRes.json();
         if (!Array.isArray(invoiceData.invoices)) {
           throw new Error('The invoice list response did not include invoices.');
         }
         return {
+          documentId: doc.id,
           invoices: invoiceData.invoices
         };
       }));
       const seenInvoices = new Set();
-      const issues = [];
+      const invoiceCountsByDocument = new Map();
       invoiceResponses.forEach(({ invoices }) => {
         invoices.forEach((invoice) => {
-          const documentId = invoice.documentId;
-          const doc = documentsById.get(documentId);
-          const invoiceIndex = Number(invoice.invoiceIndex);
-          const invoiceId = invoice.id || `${documentId}:${invoiceIndex}`;
-          const invoiceKey = `${documentId}:${invoiceIndex}`;
+          if (invoice.documentId) {
+            invoiceCountsByDocument.set(
+              invoice.documentId,
+              (invoiceCountsByDocument.get(invoice.documentId) || 0) + 1
+            );
+          }
+        });
+      });
+      const issues = [];
+      invoiceResponses.forEach(({ documentId, invoices }) => {
+        invoices.forEach((invoice) => {
+          const invoiceDocumentId = invoice.documentId || documentId;
+          const doc = documentsById.get(invoiceDocumentId);
+          const hasInvoiceIndex = invoice.invoiceIndex !== null
+            && invoice.invoiceIndex !== undefined
+            && String(invoice.invoiceIndex).trim() !== '';
+          const invoiceIndex = hasInvoiceIndex ? Number(invoice.invoiceIndex) : NaN;
+          const invoiceId = invoice.id || `${invoiceDocumentId}:${invoiceIndex}`;
+          const invoiceKey = `${invoiceDocumentId}:${invoiceIndex}`;
           if (
-            !documentId
+            !invoiceDocumentId
             || !doc
+            || (invoiceCountsByDocument.get(invoiceDocumentId) || 0) <= 1
+            || !hasInvoiceIndex
             || !Number.isInteger(invoiceIndex)
             || invoiceIndex < 0
             || !getInvoicePoorImageState(invoice).poor
-            || resolvedSet.has(invoiceId)
             || seenInvoices.has(invoiceKey)
           ) return;
           seenInvoices.add(invoiceKey);
           issues.push({
             id: invoiceId,
-            documentId,
+            documentId: invoiceDocumentId,
             invoiceIndex,
-            docNumber: invoice.fileName || invoice.sourceFileName || doc.fileName || documentId,
+            docNumber: invoice.fileName || invoice.sourceFileName || doc.fileName || invoiceDocumentId,
             invoiceNumber: `Invoice #${invoiceIndex + 1}`,
             reason: 'Poor Image Quality',
             date: String(doc.createdAt || '').slice(0, 10),
             status: 'Pending Review',
-            isMulti: Number(doc.invoiceCount || invoices.length) > 1,
+            isMulti: true,
             scope: 'invoice',
             poorImageQuality: true,
             hasInvoiceNumber: false,
