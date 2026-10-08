@@ -41,7 +41,6 @@ export const Escalations = () => {
             || invoiceIndex < 0
             || !getInvoicePoorImageState(invoice).poor
             || resolvedSet.has(invoiceId)
-            || resolvedSet.has(doc.id)
             || seenInvoices.has(invoiceKey)
           ) return;
           seenInvoices.add(invoiceKey);
