@@ -14,6 +14,7 @@ export const getResolvedEscalationIds = () => {
 export const Escalations = () => {
   const [escalations, setEscalations] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState('');
   const [search, setSearch] = useState('');
   const [filterReason, setFilterReason] = useState('ALL');
   const [resolvingId, setResolvingId] = useState(null);
@@ -24,19 +25,51 @@ export const Escalations = () => {
     const resolvedSet = new Set(resolvedIds);
 
     try {
+      setLoading(true);
+      setLoadError('');
       const res = await fetch(`/api/documents?refresh=${Date.now()}`, { cache: 'no-store' });
       if (!res.ok) throw new Error(`Unable to load escalations (HTTP ${res.status}).`);
       const data = await res.json();
+      if (!Array.isArray(data.documents)) throw new Error('The document list response did not include documents.');
+      const documents = data.documents;
+      const documentsWithInvoices = documents.filter((doc) => (
+        doc.id && (Number(doc.invoiceCount) > 0 || (Array.isArray(doc.invoices) && doc.invoices.length > 0))
+      ));
+      const documentsById = new Map(documentsWithInvoices.map((doc) => [doc.id, doc]));
+      const invoiceChunks = [];
+      for (let i = 0; i < documentsWithInvoices.length; i += 100) {
+        invoiceChunks.push(documentsWithInvoices.slice(i, i + 100));
+      }
+      const invoiceResponses = await Promise.all(invoiceChunks.map(async (documentChunk) => {
+        const ids = documentChunk.map((doc) => doc.id).join(',');
+        const requestDocId = documentChunk[0].id;
+        const invoiceRes = await fetch(
+          `/api/documents/${encodeURIComponent(requestDocId)}/invoices?ids=${encodeURIComponent(ids)}&refresh=${Date.now()}`,
+          { cache: 'no-store' }
+        );
+        if (!invoiceRes.ok) {
+          throw new Error(`Unable to load invoice records (HTTP ${invoiceRes.status}).`);
+        }
+        const invoiceData = await invoiceRes.json();
+        if (!Array.isArray(invoiceData.invoices)) {
+          throw new Error('The invoice list response did not include invoices.');
+        }
+        return {
+          invoices: invoiceData.invoices
+        };
+      }));
       const seenInvoices = new Set();
       const issues = [];
-      (data.documents || []).forEach((doc) => {
-        const invoices = Array.isArray(doc.invoices) ? doc.invoices : [];
+      invoiceResponses.forEach(({ invoices }) => {
         invoices.forEach((invoice) => {
+          const documentId = invoice.documentId;
+          const doc = documentsById.get(documentId);
           const invoiceIndex = Number(invoice.invoiceIndex);
-          const invoiceId = invoice.id || `${doc.id}:${invoiceIndex}`;
-          const invoiceKey = `${doc.id}:${invoiceIndex}`;
+          const invoiceId = invoice.id || `${documentId}:${invoiceIndex}`;
+          const invoiceKey = `${documentId}:${invoiceIndex}`;
           if (
-            !doc.id
+            !documentId
+            || !doc
             || !Number.isInteger(invoiceIndex)
             || invoiceIndex < 0
             || !getInvoicePoorImageState(invoice).poor
@@ -46,9 +79,9 @@ export const Escalations = () => {
           seenInvoices.add(invoiceKey);
           issues.push({
             id: invoiceId,
-            documentId: doc.id,
+            documentId,
             invoiceIndex,
-            docNumber: doc.fileName || doc.id,
+            docNumber: invoice.fileName || invoice.sourceFileName || doc.fileName || documentId,
             invoiceNumber: `Invoice #${invoiceIndex + 1}`,
             reason: 'Poor Image Quality',
             date: String(doc.createdAt || '').slice(0, 10),
@@ -65,6 +98,7 @@ export const Escalations = () => {
     } catch (err) {
       console.error('Failed to load escalations', err);
       setEscalations([]);
+      setLoadError(err.message || 'Unable to load escalations.');
     } finally {
       setLoading(false);
     }
@@ -194,7 +228,9 @@ export const Escalations = () => {
           </div>
         </div>
 
-        {loading ? <p className="subtle-copy">Loading flagged documents...</p> : (
+        {loading ? <p className="subtle-copy">Loading flagged documents...</p> : loadError ? (
+          <p className="subtle-copy">{loadError}</p>
+        ) : (
           <table className="data-table">
             <thead>
               <tr>
@@ -257,7 +293,9 @@ export const Escalations = () => {
                 <tr>
                   <td colSpan="6">
                     <div className="empty-state">
-                      🎉 No flagged items found! All invoices are verified and completed.
+                      {escalations.length === 0
+                        ? '🎉 No poor-image invoices found.'
+                        : 'No invoices match the current search or filter.'}
                     </div>
                   </td>
                 </tr>
