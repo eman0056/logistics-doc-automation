@@ -853,7 +853,7 @@ function App() {
     const [loadingDoc, setLoadingDoc] = useState(true);
     const [processing, setProcessing] = useState(false);
     const [dispatching, setDispatching] = useState(false);
-    const [selectedSection, setSelectedSection] = useState('all');
+    const [selectedSection, setSelectedSection] = useState('header');
     const [invoiceDrafts, setInvoiceDrafts] = useState({});
     const [savingInvoice, setSavingInvoice] = useState(false);
     const [discarding, setDiscarding] = useState(false);
@@ -1090,7 +1090,6 @@ function App() {
     });
 
     const sectionDefinitions = [
-      { id: 'all', label: 'All Fields' },
       { id: 'header', label: 'Invoice Header' },
       { id: 'shipment', label: 'Shipment Details' },
       { id: 'charges', label: 'Charge Line Items' },
@@ -1211,7 +1210,7 @@ function App() {
       return (
         <div className="invoice-sections" style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
           {/* 1. INVOICE HEADER */}
-          {(selectedSection === 'all' || selectedSection === 'header') && (
+          {activeSection.id === 'header' && (
             <div className="section-block" style={{ margin: 0 }}>
               <div className="section-title" style={{ fontSize: '0.72rem', color: 'var(--primary, #6366f1)', marginBottom: '6px' }}>📄 INVOICE HEADER</div>
               {Object.keys(headerObj).length > 0 ? (
@@ -1225,7 +1224,7 @@ function App() {
           )}
 
           {/* 2. GENERAL DETAILS */}
-          {(selectedSection === 'all' || selectedSection === 'header') && Object.keys(headerObj).length > 0 && Object.keys(extraTopObj).length > 0 && (
+          {activeSection.id === 'header' && Object.keys(headerObj).length > 0 && Object.keys(extraTopObj).length > 0 && (
             <div className="section-block" style={{ margin: 0 }}>
               <div className="section-title" style={{ fontSize: '0.72rem', color: 'var(--primary, #6366f1)', marginBottom: '6px' }}>⚙️ GENERAL DETAILS</div>
               {renderEditableNode(extraTopObj, [], '')}
@@ -1233,7 +1232,7 @@ function App() {
           )}
 
           {/* 3. SHIPMENT DETAILS */}
-          {(selectedSection === 'all' || selectedSection === 'shipment') && (
+          {activeSection.id === 'shipment' && (
             <div className="section-block" style={{ margin: 0 }}>
               <div className="section-title" style={{ fontSize: '0.72rem', color: 'var(--primary, #6366f1)', marginBottom: '6px' }}>
                 🚚 SHIPMENT DETAILS {shipmentRecords.length > 0 ? `(${shipmentRecords.length})` : ''}
@@ -1247,7 +1246,7 @@ function App() {
           )}
 
           {/* 4. CHARGE LINE ITEMS */}
-          {(selectedSection === 'all' || selectedSection === 'charges') && (
+          {activeSection.id === 'charges' && (
             <div className="section-block" style={{ margin: 0 }}>
               <div className="section-title" style={{ fontSize: '0.72rem', color: 'var(--primary, #6366f1)', marginBottom: '6px' }}>
                 💳 CHARGE LINE ITEMS {chargeRecords.length > 0 ? `(${chargeRecords.length})` : ''}
