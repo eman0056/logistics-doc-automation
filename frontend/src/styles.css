@@ -905,8 +905,8 @@ img {
 
 .field-grid {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 4px 6px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px 10px;
   width: 100%;
   box-sizing: border-box;
 }
@@ -960,7 +960,7 @@ img {
   color: #fff;
   min-width: 0;
   font-size: 0.8rem;
-  height: 28px;
+  height: 32px;
   box-sizing: border-box;
 }
 
@@ -1027,7 +1027,7 @@ img {
   }
 
   .field-grid {
-    grid-template-columns: 1fr;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 
   .topbar-inner {
@@ -2435,7 +2435,7 @@ img {
     padding: 8px 0;
   }
   .field-grid {
-    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+    grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
   }
 }
 
