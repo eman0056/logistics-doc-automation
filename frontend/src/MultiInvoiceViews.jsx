@@ -834,6 +834,20 @@ export const invoiceHasRealExtraction = (invoice) => Boolean(
   extractRealInvoiceObject(invoice?.extractedData || invoice?.canonicalJson)
 );
 
+export const getInvoicePoorImageState = (invoice, draft = null) => {
+  const invDraft = draft || extractRealInvoiceObject(invoice?.extractedData || invoice?.canonicalJson) || {};
+  const invHeader = invDraft.invoiceHeader || invDraft.invoice_header || invDraft.header || {};
+  const hasReal = invoiceHasRealExtraction(invoice) || Boolean(extractRealInvoiceObject(invDraft));
+  const invNumberVal = hasReal ? (
+    invHeader.invoiceNumber || invHeader.invoice_number || invHeader.invoiceNo
+    || invHeader.invoice_no || invHeader.invoiceId || invHeader.documentNumber
+    || invDraft.invoiceNumber || invoice?.invoiceNumber
+  ) : null;
+  const hasInvoiceNumber = invNumberVal != null && String(invNumberVal).trim() !== '';
+
+  return { hasReal, hasInvoiceNumber, poor: hasReal && !hasInvoiceNumber };
+};
+
 // Data extractor helpers
 const getInvoiceHeaderFields = (data) => {
   if (!data) return {};
@@ -2778,19 +2792,17 @@ export const MultiInvoiceWorkspace = ({ docId: propDocId, docIds: propDocIds }) 
           {filteredWithIndex.map(({ inv, globalIdx }) => {
             const isSelected = selectedInvoiceIndex === globalIdx;
             const invDraft = drafts[globalIdx] || {};
+            const { hasReal, hasInvoiceNumber, poor } = getInvoicePoorImageState(inv, invDraft);
             const invHeader = invDraft.invoiceHeader || invDraft.invoice_header || invDraft.header || {};
-            const hasReal = invoiceHasRealExtraction(inv) || Boolean(extractRealInvoiceObject(invDraft));
-            const invNumberVal = hasReal ? (
+            const invNumberVal = hasInvoiceNumber ? (
               invHeader.invoiceNumber || invHeader.invoice_number || invHeader.invoiceNo
               || invHeader.invoice_no || invHeader.invoiceId || invHeader.documentNumber
               || invDraft.invoiceNumber || inv.invoiceNumber
             ) : null;
-            const hasInvoiceNumber = invNumberVal != null && String(invNumberVal).trim() !== '';
             const displayNum = hasReal ? (hasInvoiceNumber ? String(invNumberVal) : 'Poor image') : 'Not extracted';
             const conf = hasReal && inv.overallConfidence != null ? Math.round(inv.overallConfidence * 100) : null;
             const statusLabel = humanInvoiceStatus(inv, globalIdx);
             const ui = normalizeInvoiceExtractionUi(inv);
-            const poor = hasReal && !hasInvoiceNumber;
             const srcName = inv.sourceFileName || inv.fileName || '';
             const invLabel = invoiceDisplayLabel(inv, globalIdx);
             const invPageCount = invoicePageCount(inv);

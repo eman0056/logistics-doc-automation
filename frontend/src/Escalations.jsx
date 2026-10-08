@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { getInvoicePoorImageState } from './MultiInvoiceViews.jsx';
 
 export const DEFAULT_DEMO_ESCALATIONS = [];
 
@@ -23,23 +24,43 @@ export const Escalations = () => {
     const resolvedSet = new Set(resolvedIds);
 
     try {
-      const res = await fetch(`/api/documents?escalations_only=true&refresh=${Date.now()}`, { cache: 'no-store' });
+      const res = await fetch(`/api/documents?refresh=${Date.now()}`, { cache: 'no-store' });
       if (!res.ok) throw new Error(`Unable to load escalations (HTTP ${res.status}).`);
       const data = await res.json();
       const seenInvoices = new Set();
-      const issues = (data.escalations || []).filter((item) => {
-        if (
-          item.scope !== 'invoice'
-          || !item.poorImageQuality
-          || item.hasInvoiceNumber
-          || !item.hasExtraction
-          || resolvedSet.has(item.id)
-          || resolvedSet.has(item.documentId)
-        ) return false;
-        const invoiceKey = `${item.documentId}:${item.invoiceIndex}`;
-        if (seenInvoices.has(invoiceKey)) return false;
-        seenInvoices.add(invoiceKey);
-        return true;
+      const issues = [];
+      (data.documents || []).forEach((doc) => {
+        const invoices = Array.isArray(doc.invoices) ? doc.invoices : [];
+        invoices.forEach((invoice) => {
+          const invoiceIndex = Number(invoice.invoiceIndex);
+          const invoiceId = invoice.id || `${doc.id}:${invoiceIndex}`;
+          const invoiceKey = `${doc.id}:${invoiceIndex}`;
+          if (
+            !doc.id
+            || !Number.isInteger(invoiceIndex)
+            || invoiceIndex < 0
+            || !getInvoicePoorImageState(invoice).poor
+            || resolvedSet.has(invoiceId)
+            || resolvedSet.has(doc.id)
+            || seenInvoices.has(invoiceKey)
+          ) return;
+          seenInvoices.add(invoiceKey);
+          issues.push({
+            id: invoiceId,
+            documentId: doc.id,
+            invoiceIndex,
+            docNumber: doc.fileName || doc.id,
+            invoiceNumber: `Invoice #${invoiceIndex + 1}`,
+            reason: 'Poor Image Quality',
+            date: String(doc.createdAt || '').slice(0, 10),
+            status: 'Pending Review',
+            isMulti: Number(doc.invoiceCount || invoices.length) > 1,
+            scope: 'invoice',
+            poorImageQuality: true,
+            hasInvoiceNumber: false,
+            hasExtraction: true
+          });
+        });
       });
       setEscalations(issues);
     } catch (err) {
