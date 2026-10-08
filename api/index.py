@@ -1934,7 +1934,6 @@ def get_documents(escalations_only: bool = False, summary: bool = False, ids: st
                     FROM DocumentInvoice GROUP BY documentId
                 ) invoice_counts ON invoice_counts.documentId = d.id
                 WHERE di.status IN ('POOR_IMAGE_QUALITY', 'Poor Image Quality')
-                   OR di.imageQuality < 0.6
                 ORDER BY d.createdAt DESC, di.invoiceIndex;
             """)
             rows = cursor.fetchall()
@@ -2812,6 +2811,29 @@ async def escalate_invoice(doc_id: str, request: Request):
     notes = str(body.get('notes') or body.get('reason') or '')
 
     conn = get_db()
+    try:
+        invoice_index = int(invoice_id)
+    except ValueError:
+        invoice_index = None
+    cursor = execute_query(conn, """
+        SELECT id, canonicalJson, finalSubmittedData
+        FROM DocumentInvoice
+        WHERE documentId = ? AND (id = ? OR invoiceIndex = ?)
+    """, (doc_id, invoice_id, invoice_index))
+    invoice_row = cursor.fetchone()
+    if not invoice_row:
+        conn.close()
+        return JSONResponse({"error": "Invoice not found for this document"}, status_code=404)
+
+    invoice_data = _parse_invoice_json(invoice_row[1] or invoice_row[2])
+    if _invoice_result_status(invoice_data) != "POOR_IMAGE_QUALITY":
+        conn.close()
+        return JSONResponse(
+            {"error": "Only extracted invoices without an invoice number can be escalated"},
+            status_code=409,
+        )
+
+    invoice_id = invoice_row[0]
     cursor = execute_query(conn, """
         CREATE TABLE IF NOT EXISTS EscalationLog (
             id TEXT PRIMARY KEY,

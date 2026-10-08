@@ -95,7 +95,7 @@ export const Escalations = () => {
     if (filterReason === 'ESCALATED') return e.reason.includes('Escalation');
     return true;
   });
-  const poorQualityCount = searchable.filter(e => e.reason.includes('Poor Image Quality')).length;
+  const poorQualityCount = filtered.length;
   const dataIssuesCount = searchable.filter(e => e.reason.includes('Escalation')).length;
 
   return (
@@ -189,9 +189,7 @@ export const Escalations = () => {
             <tbody>
               {filtered.map((esc) => {
                 const isPoorQuality = esc.reason.includes('Poor Image Quality');
-                const reviewUrl = esc.isMulti 
-                  ? `/documents/${esc.documentId}/multi-workspace${esc.invoiceIndex !== undefined ? `?invoiceIndex=${esc.invoiceIndex}` : ''}`
-                  : `/documents/${esc.documentId}/review`;
+                const reviewUrl = `/documents/${esc.documentId}/multi-workspace?invoiceIndex=${esc.invoiceIndex}`;
 
                 return (
                   <tr key={esc.id}>

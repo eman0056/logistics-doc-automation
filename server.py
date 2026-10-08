@@ -683,6 +683,27 @@ class LogisticsAutomationHandler(http.server.BaseHTTPRequestHandler):
 
         conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
+        try:
+            invoice_index = int(invoice_id)
+        except ValueError:
+            invoice_index = None
+        cursor.execute(
+            "SELECT id, canonicalJson, finalSubmittedData FROM DocumentInvoice WHERE documentId = ? AND (id = ? OR invoiceIndex = ?)",
+            (doc_id, invoice_id, invoice_index),
+        )
+        invoice_row = cursor.fetchone()
+        if not invoice_row:
+            conn.close()
+            return self._send_json({"error": "Invoice not found for this document"}, 404)
+
+        invoice_data = _parse_saved_invoice(invoice_row[1] or invoice_row[2])
+        if _invoice_result_status(invoice_data) != "POOR_IMAGE_QUALITY":
+            conn.close()
+            return self._send_json(
+                {"error": "Only extracted invoices without an invoice number can be escalated"},
+                409,
+            )
+        invoice_id = invoice_row[0]
 
         # Create EscalationLog table if it doesn't exist
         cursor.execute("""
@@ -824,7 +845,6 @@ class LogisticsAutomationHandler(http.server.BaseHTTPRequestHandler):
                     FROM DocumentInvoice GROUP BY documentId
                 ) invoice_counts ON invoice_counts.documentId = d.id
                 WHERE di.status IN ('POOR_IMAGE_QUALITY', 'Poor Image Quality')
-                   OR di.imageQuality < 0.6
                 ORDER BY d.createdAt DESC, di.invoiceIndex;
             """)
             rows = cursor.fetchall()
