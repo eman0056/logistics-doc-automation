@@ -830,14 +830,19 @@ export const extractRealInvoiceObject = (raw) => {
   return null;
 };
 
-export const invoiceHasRealExtraction = (invoice) => Boolean(
-  extractRealInvoiceObject(invoice?.extractedData || invoice?.canonicalJson)
+const getInvoiceExtractionObject = (invoice) => (
+  extractRealInvoiceObject(invoice?.extractedData)
+  || extractRealInvoiceObject(invoice?.canonicalJson)
+  || extractRealInvoiceObject(invoice?.finalSubmittedData)
 );
 
+export const invoiceHasRealExtraction = (invoice) => Boolean(getInvoiceExtractionObject(invoice));
+
 export const getInvoicePoorImageState = (invoice, draft = null) => {
-  const invDraft = draft || extractRealInvoiceObject(invoice?.extractedData || invoice?.canonicalJson) || {};
+  const extracted = getInvoiceExtractionObject(invoice);
+  const invDraft = extractRealInvoiceObject(draft) || extracted || {};
   const invHeader = invDraft.invoiceHeader || invDraft.invoice_header || invDraft.header || {};
-  const hasReal = invoiceHasRealExtraction(invoice) || Boolean(extractRealInvoiceObject(invDraft));
+  const hasReal = Boolean(extracted || extractRealInvoiceObject(draft));
   const invNumberVal = hasReal ? (
     invHeader.invoiceNumber || invHeader.invoice_number || invHeader.invoiceNo
     || invHeader.invoice_no || invHeader.invoiceId || invHeader.documentNumber
