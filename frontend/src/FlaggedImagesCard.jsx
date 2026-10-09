@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { getInvoicePoorImageState } from './MultiInvoiceViews.jsx';
 
 // FlaggedImagesCard: displays count of Poor Image Quality flags and navigates to Escalations page
 export const FlaggedImagesCard = () => {
@@ -8,17 +9,22 @@ export const FlaggedImagesCard = () => {
   const loadCount = async () => {
     try {
       const res = await fetch('/api/documents?refresh=' + Date.now());
+      if (!res.ok) throw new Error(`Unable to load poor-image count (HTTP ${res.status}).`);
       const data = await res.json();
-      let total = 0;
-      (data.documents || []).forEach(doc => {
-        const docStatus = doc.status || '';
-        const isDocPoor = docStatus.includes('Poor Image Quality') || docStatus === 'POOR_IMAGE_QUALITY' || doc.poorImageQuality || (doc.imageQuality != null && doc.imageQuality < 0.6);
-        if (isDocPoor) total++;
-        (doc.invoices || []).forEach(inv => {
-          const invStatus = inv.status || inv.extractionStatus || '';
-          if (invStatus.includes('Poor Image Quality') || invStatus === 'POOR_IMAGE_QUALITY' || inv.poorImageQuality || (inv.imageQuality != null && inv.imageQuality < 0.6)) total++;
+      const poorInvoiceKeys = new Set();
+      (data.documents || []).forEach((doc) => {
+        (doc.invoices || []).forEach((invoice, index) => {
+          const invoiceIndex = Number(invoice.invoiceIndex ?? index);
+          if (
+            Number.isInteger(invoiceIndex)
+            && invoiceIndex >= 0
+            && getInvoicePoorImageState(invoice).poor
+          ) {
+            poorInvoiceKeys.add(`${doc.id}:${invoiceIndex}`);
+          }
         });
-      setCount(total);
+      });
+      setCount(poorInvoiceKeys.size);
     } catch (err) {
       console.error('Failed to load flagged count', err);
     } finally {

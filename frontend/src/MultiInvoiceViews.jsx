@@ -142,7 +142,7 @@ const normalizeInvoiceExtractionUi = (invoice) => {
 
 const humanInvoiceStatus = (invoice, index = 0) => {
   const ui = normalizeInvoiceExtractionUi(invoice);
-  if (invoice?.poorImageQuality || ['POOR_IMAGE_QUALITY', 'Poor Image Quality'].includes(invoice?.status)) {
+  if (getInvoicePoorImageState(invoice).poor) {
     return 'Poor Image Quality';
   }
   if (ui === EXTRACTION_UI.EXTRACTED) {
@@ -840,17 +840,35 @@ export const invoiceHasRealExtraction = (invoice) => Boolean(getInvoiceExtractio
 
 export const getInvoicePoorImageState = (invoice, draft = null) => {
   const extracted = getInvoiceExtractionObject(invoice);
-  const invDraft = extractRealInvoiceObject(draft) || extracted || {};
+  const draftExtraction = extractRealInvoiceObject(draft);
+  const invDraft = draftExtraction || extracted || {};
   const invHeader = invDraft.invoiceHeader || invDraft.invoice_header || invDraft.header || {};
-  const hasReal = Boolean(extracted || extractRealInvoiceObject(draft));
-  const invNumberVal = hasReal ? (
-    invHeader.invoiceNumber || invHeader.invoice_number || invHeader.invoiceNo
-    || invHeader.invoice_no || invHeader.invoiceId || invHeader.documentNumber
-    || invDraft.invoiceNumber || invoice?.invoiceNumber
-  ) : null;
+  const hasReal = Boolean(extracted || draftExtraction);
+  const invoiceNumberValues = hasReal ? [
+    invHeader.invoiceNumber,
+    invHeader.invoice_number,
+    invHeader.invoiceNo,
+    invHeader.invoice_no,
+    invHeader.invoiceId,
+    invHeader.documentNumber,
+    invDraft.invoiceNumber,
+    invoice?.invoiceNumber,
+  ] : [];
+  const invNumberVal = invoiceNumberValues.find(
+    (value) => value != null && String(value).trim() !== ''
+  );
   const hasInvoiceNumber = invNumberVal != null && String(invNumberVal).trim() !== '';
+  const statuses = [invoice?.status, invoice?.extractionStatus]
+    .map((value) => String(value || '').toUpperCase());
+  const hasPerInvoicePoorFlag = invoice?.poorImageQuality === true
+    || statuses.some((status) => status === 'POOR_IMAGE_QUALITY' || status === 'POOR IMAGE QUALITY')
+    || (invoice?.imageQuality != null && Number(invoice.imageQuality) < 0.6);
 
-  return { hasReal, hasInvoiceNumber, poor: hasReal && !hasInvoiceNumber };
+  return {
+    hasReal,
+    hasInvoiceNumber,
+    poor: hasReal && (!hasInvoiceNumber || hasPerInvoicePoorFlag),
+  };
 };
 
 // Data extractor helpers
@@ -1635,7 +1653,7 @@ export const InvoiceCard = ({ idx, group, data, isLoading, errorMsg, isSelected,
 
   // NEW REQUIREMENTS: STATUS DISPLAY
   const status = draft.status || 'Ready for Review';
-  const hasPoorQuality = draft.status === 'Poor Image Quality' || draft.poorImageQuality;
+  const hasPoorQuality = getInvoicePoorImageState(draft, draft).poor;
 
   return (
     <div 
@@ -2260,7 +2278,7 @@ export const MultiInvoiceWorkspace = ({ docId: propDocId, docIds: propDocIds }) 
   const filteredInvoices = invoices.filter((inv, idx) => {
     const srcName = inv.sourceFileName || inv.fileName || inv.documentId || primaryDocId;
     const status = inv.status || inv.extractionStatus || '';
-    const isPoor = inv.poorImageQuality || status === 'POOR_IMAGE_QUALITY' || status === 'Poor Image Quality';
+    const isPoor = getInvoicePoorImageState(inv, drafts[idx]).poor;
     if (filterDoc !== 'all' && srcName !== filterDoc) return false;
     
     if (filterStatus === 'ready') {
@@ -2303,7 +2321,7 @@ export const MultiInvoiceWorkspace = ({ docId: propDocId, docIds: propDocIds }) 
   const invoiceStatusLabel = humanInvoiceStatus(selectedInvoice, selectedInvoiceIndex);
   const selectedInvoiceLabel = invoiceDisplayLabel(selectedInvoice, selectedInvoiceIndex);
   const selectedExtractionProgress = invoiceExtractionProgress(selectedInvoice);
-  const isPoorQuality = selectedInvoice?.poorImageQuality || selectedInvoice?.status === 'Poor Image Quality' || selectedInvoice?.status === 'POOR_IMAGE_QUALITY';
+  const isPoorQuality = getInvoicePoorImageState(selectedInvoice, currentDraft).poor;
   // Use selected invoice's own documentId for PDF preview
   const activeDocId = selectedInvoice?.documentId || primaryDocId;
 

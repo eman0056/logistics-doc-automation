@@ -1,6 +1,6 @@
 import React, { Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { apiGetJson, normalizeApiCacheUrl } from './dataCache.js';
-import { UploadMultiView, MultiInvoiceWorkspace, ExtractionProcessingPanel, triggerInvoiceExtraction } from './MultiInvoiceViews.jsx';
+import { UploadMultiView, MultiInvoiceWorkspace, ExtractionProcessingPanel, triggerInvoiceExtraction, getInvoicePoorImageState } from './MultiInvoiceViews.jsx';
 import { Escalations } from './Escalations.jsx';
 import { EscalationModal } from './EscalationModal.jsx';
 import { PreviewRange } from './PreviewRange.jsx';
@@ -1541,8 +1541,7 @@ function App() {
   };
 
   /**
-   * FlaggedInvoicesView – displays invoices flagged with POOR_IMAGE_QUALITY status.
-   * Filters both document-level and invoice-level statuses.
+   * FlaggedInvoicesView – displays individually poor-quality extracted invoices.
    */
   const FlaggedInvoicesView = ({ documents: docs = [] }) => {
     const [escalationTarget, setEscalationTarget] = useState(null);
@@ -1552,44 +1551,25 @@ function App() {
     });
     const [toastMsg, setToastMsg] = useState('');
 
-    // Collect all flagged invoices/documents
+    // Collect only poor-quality invoices; a document-level flag must not fan out.
     const flaggedItems = [];
     docs.forEach((doc) => {
-      const docStatus = doc.status || '';
-      const poorQualityStatuses = ['POOR_IMAGE_QUALITY', 'Poor Image Quality'];
-      const isDocPoor = poorQualityStatuses.some(s => docStatus.includes(s)) || doc.poorImageQuality || (doc.imageQuality != null && doc.imageQuality < 0.6);
-
-      // Check doc-level poor quality
-      if (isDocPoor && !resolvedKeys.has(doc.id)) {
-        flaggedItems.push({
-          key: doc.id,
-          docId: doc.id,
-          invoiceId: doc.id,
-          docName: doc.fileName,
-          invoiceLabel: 'Document Level',
-          status: docStatus || 'POOR_IMAGE_QUALITY',
-          date: doc.createdAt ? new Date(doc.createdAt).toLocaleDateString() : '—',
-          reviewUrl: `/documents/${doc.id}/review`,
-        });
-      }
-
-      // Check invoice-level poor quality
       (doc.invoices || []).forEach((inv, idx) => {
+        const invoiceIndex = Number(inv.invoiceIndex ?? idx);
+        const { poor } = getInvoicePoorImageState(inv);
+        const itemKey = `${doc.id}-${invoiceIndex}`;
+        if (!Number.isInteger(invoiceIndex) || invoiceIndex < 0) return;
         const invStatus = inv.status || inv.extractionStatus || '';
-        const isPoor = poorQualityStatuses.some(s => invStatus.includes(s)) || inv.poorImageQuality || (inv.imageQuality != null && inv.imageQuality < 0.6) || isDocPoor;
-        const itemKey = `${doc.id}-${idx}`;
-        if (isPoor && !resolvedKeys.has(itemKey) && !resolvedKeys.has(doc.id)) {
+        if (poor && !resolvedKeys.has(itemKey) && !resolvedKeys.has(doc.id)) {
           flaggedItems.push({
             key: itemKey,
             docId: doc.id,
-            invoiceId: inv.id || String(idx),
+            invoiceId: inv.id || String(invoiceIndex),
             docName: doc.fileName,
-            invoiceLabel: inv.invoiceNumber ? `Invoice ${inv.invoiceNumber}` : `Invoice #${idx + 1}`,
+            invoiceLabel: inv.invoiceNumber ? `Invoice ${inv.invoiceNumber}` : `Invoice #${invoiceIndex + 1}`,
             status: invStatus || 'POOR_IMAGE_QUALITY',
             date: doc.createdAt ? new Date(doc.createdAt).toLocaleDateString() : '—',
-            reviewUrl: (doc.invoiceCount || 1) > 1 || (doc.fileName || '').toLowerCase().endsWith('.pdf')
-              ? `/documents/${doc.id}/multi-workspace?invoiceIndex=${idx}`
-              : `/documents/${doc.id}/review`,
+            reviewUrl: `/documents/${doc.id}/multi-workspace?invoiceIndex=${invoiceIndex}`,
           });
         }
       });

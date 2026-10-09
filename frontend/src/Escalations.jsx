@@ -51,17 +51,6 @@ export const Escalations = () => {
         };
       }));
       const seenInvoices = new Set();
-      const invoiceCountsByDocument = new Map();
-      invoiceResponses.forEach(({ invoices }) => {
-        invoices.forEach((invoice) => {
-          if (invoice.documentId) {
-            invoiceCountsByDocument.set(
-              invoice.documentId,
-              (invoiceCountsByDocument.get(invoice.documentId) || 0) + 1
-            );
-          }
-        });
-      });
       const issues = [];
       invoiceResponses.forEach(({ documentId, invoices }) => {
         invoices.forEach((invoice) => {
@@ -76,7 +65,6 @@ export const Escalations = () => {
           if (
             !invoiceDocumentId
             || !doc
-            || (invoiceCountsByDocument.get(invoiceDocumentId) || 0) <= 1
             || !hasInvoiceIndex
             || !Number.isInteger(invoiceIndex)
             || invoiceIndex < 0
@@ -156,7 +144,7 @@ export const Escalations = () => {
     if (filterReason === 'ESCALATED') return e.reason.includes('Escalation');
     return true;
   });
-  const poorQualityCount = filtered.length;
+  const poorQualityCount = searchable.filter(e => e.reason.includes('Poor Image Quality')).length;
   const dataIssuesCount = searchable.filter(e => e.reason.includes('Escalation')).length;
 
   return (
