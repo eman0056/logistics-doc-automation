@@ -130,14 +130,18 @@ const normalizeInvoiceExtractionUi = (invoice) => {
   if (['FAILED', 'EXTRACTION_FAILED', 'ERROR'].includes(status)) return EXTRACTION_UI.FAILED;
   if (['EXTRACTING', 'PROCESSING'].includes(status)) return EXTRACTION_UI.EXTRACTING;
   if (['PREPARING'].includes(status)) return EXTRACTION_UI.PREPARING;
-  if (['EXTRACTED', 'IN_REVIEW', 'APPROVED', 'INVOICE_GENERATED', 'Ready for Review', 'READY FOR REVIEW'].includes(status)
-    || ['EXTRACTED', 'IN_REVIEW', 'APPROVED', 'INVOICE_GENERATED'].includes(String(invoice.status || ''))) {
-    if (invoiceHasRealExtraction(invoice)) return EXTRACTION_UI.EXTRACTED;
-  }
-  if (['POOR_IMAGE_QUALITY', 'POOR IMAGE QUALITY'].includes(status) && invoiceHasRealExtraction(invoice)) {
+  if (['EXTRACTED', 'IN_REVIEW', 'APPROVED', 'INVOICE_GENERATED', 'READY FOR REVIEW',
+    'POOR_IMAGE_QUALITY', 'POOR IMAGE QUALITY'].includes(status)) {
     return EXTRACTION_UI.EXTRACTED;
   }
   return EXTRACTION_UI.IDLE;
+};
+
+const hasCompletedInvoiceExtraction = (invoice) => {
+  if (invoiceHasRealExtraction(invoice)) return true;
+  const status = String(invoice?.status || invoice?.extractionStatus || '').toUpperCase();
+  return ['EXTRACTED', 'IN_REVIEW', 'APPROVED', 'INVOICE_GENERATED', 'READY FOR REVIEW',
+    'POOR_IMAGE_QUALITY', 'POOR IMAGE QUALITY'].includes(status);
 };
 
 const humanInvoiceStatus = (invoice, index = 0) => {
@@ -863,11 +867,12 @@ export const getInvoicePoorImageState = (invoice, draft = null) => {
   const hasPerInvoicePoorFlag = invoice?.poorImageQuality === true
     || statuses.some((status) => status === 'POOR_IMAGE_QUALITY' || status === 'POOR IMAGE QUALITY')
     || (invoice?.imageQuality != null && Number(invoice.imageQuality) < 0.6);
+  const statusSaysPoor = statuses.some((status) => status === 'POOR_IMAGE_QUALITY' || status === 'POOR IMAGE QUALITY');
 
   return {
     hasReal,
     hasInvoiceNumber,
-    poor: hasReal && (!hasInvoiceNumber || hasPerInvoicePoorFlag),
+    poor: statusSaysPoor || (hasReal && (!hasInvoiceNumber || hasPerInvoicePoorFlag)),
   };
 };
 
@@ -1932,7 +1937,7 @@ export const MultiInvoiceWorkspace = ({ docId: propDocId, docIds: propDocIds }) 
     const ui = normalizeInvoiceExtractionUi(invoice);
 
     if (!force) {
-      if (ui === EXTRACTION_UI.EXTRACTED || invoiceHasRealExtraction(invoice)) return;
+      if (ui === EXTRACTION_UI.EXTRACTED || hasCompletedInvoiceExtraction(invoice)) return;
       if (ui === EXTRACTION_UI.EXTRACTING || ui === EXTRACTION_UI.PREPARING) return;
       if (extractionInFlightRef.current.has(invoiceKey)) return;
     }
@@ -2055,10 +2060,13 @@ export const MultiInvoiceWorkspace = ({ docId: propDocId, docIds: propDocIds }) 
 
           const isPdf = (foundDoc?.fileName || '').toLowerCase().endsWith('.pdf');
           if (isPdf) {
-            let expectedCount = Number.isInteger(expectedInvoiceCountParam) && expectedInvoiceCountParam > 0
-              ? expectedInvoiceCountParam
-              : Number(foundDoc?.invoiceCount || 0);
-            if (expectedCount <= 0) {
+            let expectedCount = invoiceList.length;
+            if (expectedCount === 0) {
+              expectedCount = Number.isInteger(expectedInvoiceCountParam) && expectedInvoiceCountParam > 0
+                ? expectedInvoiceCountParam
+                : Number(foundDoc?.invoiceCount || 0);
+            }
+            if (expectedCount <= 0 && invoiceList.length === 0) {
               const detectRes = await fetch(`${API}/documents/${docId}/detect-invoices?refresh=${Date.now()}`, { cache: 'no-store' });
               if (!detectRes.ok) {
                 throw new Error(`Invoice detection failed (HTTP ${detectRes.status})`);
@@ -2070,9 +2078,7 @@ export const MultiInvoiceWorkspace = ({ docId: propDocId, docIds: propDocIds }) 
               }
               expectedCount = detectedGroups.length;
             }
-            if (invoiceList.length > expectedCount) {
-              throw new Error(`Invoice list returned ${invoiceList.length} records; expected ${expectedCount}.`);
-            }
+            expectedCount = Math.max(expectedCount, invoiceList.length);
 
             for (let attempt = 0; attempt < 30 && invoiceList.length < expectedCount; attempt += 1) {
               if (attempt > 0) await new Promise((resolve) => setTimeout(resolve, 1000));
@@ -2084,7 +2090,7 @@ export const MultiInvoiceWorkspace = ({ docId: propDocId, docIds: propDocIds }) 
               invoiceList = Array.isArray(invoicesData.invoices) ? invoicesData.invoices : [];
             }
 
-            if (invoiceList.length < expectedCount) {
+            if (invoiceList.length === 0 && invoiceList.length < expectedCount) {
               throw new Error(`Waiting for invoice records timed out: expected ${expectedCount}, received ${invoiceList.length}.`);
             }
           }
@@ -2098,11 +2104,7 @@ export const MultiInvoiceWorkspace = ({ docId: propDocId, docIds: propDocIds }) 
             documentId: inv.documentId || primaryDocId,
             pageStart: inv.pageStart || 1,
             pageEnd: inv.pageEnd || inv.pageStart || 1,
-            extractionUi: invoiceHasRealExtraction(inv)
-              ? EXTRACTION_UI.EXTRACTED
-              : (['FAILED', 'EXTRACTION_FAILED'].includes(String(inv.status || '').toUpperCase())
-                ? EXTRACTION_UI.FAILED
-                : EXTRACTION_UI.IDLE),
+            extractionUi: normalizeInvoiceExtractionUi(inv),
             extractionError: inv.errorMessage || inv.extractionError || null,
           }));
           setDoc(foundDoc);
@@ -2771,7 +2773,7 @@ export const MultiInvoiceWorkspace = ({ docId: propDocId, docIds: propDocIds }) 
       </div>
 
       {/* ── C. INVOICE NAVIGATOR with Filters & Document Grouping ────────── */}
-      {!hasSingleInvoiceParam && <section className="emir-invoices-section">
+      <section className="emir-invoices-section">
         <div className="emir-invoices-header">
           <h2 className="emir-invoices-title">
             <span>INVOICES</span>
@@ -2842,7 +2844,11 @@ export const MultiInvoiceWorkspace = ({ docId: propDocId, docIds: propDocIds }) 
               || invHeader.invoice_no || invHeader.invoiceId || invHeader.documentNumber
               || invDraft.invoiceNumber || inv.invoiceNumber
             ) : null;
-            const displayNum = hasReal ? (hasInvoiceNumber ? String(invNumberVal) : 'Poor image') : 'Not extracted';
+            const displayNum = poor
+              ? 'Poor image'
+              : hasReal
+                ? (hasInvoiceNumber ? String(invNumberVal) : 'Poor image')
+                : ui === EXTRACTION_UI.EXTRACTED ? 'Extracted' : 'Not extracted';
             const conf = hasReal && inv.overallConfidence != null ? Math.round(inv.overallConfidence * 100) : null;
             const statusLabel = humanInvoiceStatus(inv, globalIdx);
             const ui = normalizeInvoiceExtractionUi(inv);
@@ -2888,7 +2894,7 @@ export const MultiInvoiceWorkspace = ({ docId: propDocId, docIds: propDocIds }) 
             );
           })}
         </div>
-      </section>}
+      </section>
 
       {/* ── D. CUSTOM DISCARD CONFIRMATION MODAL ─────────────────────────── */}
       {showDiscardModal && (
