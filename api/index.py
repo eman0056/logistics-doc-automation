@@ -26,7 +26,7 @@ except:
 
 sys.path.append(os.path.join(BASE_DIR, "scripts"))
 from invoice_routing import detect_invoice_groups
-from image_quality import get_image_blur_quality
+from image_quality import get_image_blur_quality, get_pdf_page_range_quality
 
 app = FastAPI()
 
@@ -265,14 +265,6 @@ def send_to_n8n_webhook(invoice_index, pages, base64_pdf, doc_id=None, raw_ocr_t
                 )
             except Exception:
                 raw_ocr_text = ""
-
-    if image_quality is None:
-        if file_bytes:
-            image_quality = get_image_blur_quality(file_bytes)
-        elif base64_pdf:
-            image_quality = get_image_blur_quality(base64_pdf)
-        else:
-            image_quality = 0.5
 
     # Build callback URL so n8n can POST extracted data back to us.
     # Respect an explicit APP_BASE_URL. Only fall back to the production default
@@ -2063,7 +2055,7 @@ def get_documents(escalations_only: bool = False, summary: bool = False, ids: st
             "extractedData": invoice_data,
             "status": display_status,
             "overallConfidence": invoice[10],
-            "imageQuality": inv_quality if is_poor else None,
+            "imageQuality": inv_quality,
             "errorMessage": invoice[12] if len(invoice) > 12 else None,
             "poorImageQuality": is_poor,
             "extractionStatus": display_status if has_extraction else (inv_status or "PENDING"),
@@ -2179,6 +2171,7 @@ def _serialize_invoice_row(row):
     "fileName": file_name,
     "sourceFileName": file_name,
     "mimeType": mime_type,
+    "imageQuality": row[14] if len(row) > 14 else None,
   }
 
 
@@ -2195,7 +2188,8 @@ def get_document_invoices(doc_id: str, ids: str = None):
     conn,
     f"""SELECT di.id, di.documentId, di.invoiceIndex, di.pageStart, di.pageEnd,
                di.rawOcrText, di.canonicalJson, di.confidenceScores, di.finalSubmittedData,
-               di.status, di.overallConfidence, d.fileName, d.mimeType, di.errorMessage
+               di.status, di.overallConfidence, d.fileName, d.mimeType, di.errorMessage,
+               di.imageQuality
         FROM DocumentInvoice di
         LEFT JOIN Document d ON di.documentId = d.id
         WHERE di.documentId IN ({placeholders})
@@ -2558,7 +2552,25 @@ async def _internal_process_invoice(doc_id: str, invoice_index: int, page_start:
         base64_pdf = base64.b64encode(file_bytes).decode('utf-8')
 
     print(f"[Backend] 🔍 Analyzing image quality for invoice {resolved_invoice_id} ({file_name})...")
-    image_quality = get_image_blur_quality(file_bytes)
+    try:
+        image_quality = (
+            get_pdf_page_range_quality(file_bytes, int(page_start), int(page_end))
+            if ext == ".pdf" or not ext
+            else get_image_blur_quality(file_bytes)
+        )
+    except Exception as exc:
+        print(f"[ImageQuality] Invoice analysis failed for {resolved_invoice_id}: {exc}")
+        image_quality = None
+    quality_conn = get_db()
+    try:
+        execute_query(
+            quality_conn,
+            "UPDATE DocumentInvoice SET imageQuality = ? WHERE id = ? AND documentId = ?",
+            (image_quality, resolved_invoice_id, doc_id),
+        )
+        quality_conn.commit()
+    finally:
+        quality_conn.close()
     print(f"[Backend] ✅ Calculated imageQuality score: {image_quality}")
 
     webhook_result = await asyncio.to_thread(
@@ -3097,18 +3109,13 @@ async def extraction_callback(doc_id: str, request: Request):
                     pass
             confidence_json = json.dumps(confidence_scores) if confidence_scores is not None else None
 
-            # Calculate / retrieve image quality for status check
-            img_quality = invoice.get('imageQuality') or body.get('imageQuality')
-            if img_quality is None:
-                cursor_img = execute_query(conn, "SELECT fileData FROM Document WHERE id = ?", (doc_id,))
-                row_img = cursor_img.fetchone()
-                if row_img and row_img[0]:
-                    try:
-                        img_quality = get_image_blur_quality(base64.b64decode(row_img[0]))
-                    except Exception:
-                        img_quality = 0.5
-                else:
-                    img_quality = 0.5
+            cursor = execute_query(
+                conn,
+                "SELECT id, imageQuality FROM DocumentInvoice WHERE id = ? OR (documentId = ? AND invoiceIndex = ?)",
+                (invoice_id, doc_id, invoice_index),
+            )
+            existing = cursor.fetchone()
+            img_quality = existing[1] if existing else None
 
             try:
                 threshold = float(os.getenv('IMAGE_QUALITY_THRESHOLD', '0.6'))
@@ -3118,8 +3125,6 @@ async def extraction_callback(doc_id: str, request: Request):
             inv_status = _invoice_result_status(extracted)
 
             # Upsert: first try by id, then fall back to (documentId, invoiceIndex)
-            cursor = execute_query(conn, "SELECT id FROM DocumentInvoice WHERE id = ? OR (documentId = ? AND invoiceIndex = ?)", (invoice_id, doc_id, invoice_index))
-            existing = cursor.fetchone()
             if existing:
                 existing_id = existing[0]
                 execute_query(conn, "UPDATE DocumentInvoice SET pageStart = COALESCE(?, pageStart), pageEnd = COALESCE(?, pageEnd), rawOcrText = COALESCE(?, rawOcrText), canonicalJson = ?, confidenceScores = ?, overallConfidence = ?, imageQuality = ?, status = ?, updatedAt = CURRENT_TIMESTAMP WHERE id = ?", (invoice.get('pageStart'), invoice.get('pageEnd'), invoice.get('rawOcrText'), json_str, confidence_json, invoice.get('overallConfidence'), img_quality, inv_status, existing_id))

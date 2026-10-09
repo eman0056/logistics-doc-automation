@@ -15,8 +15,6 @@ try:
     from PIL import Image, ImageFilter, ImageStat
 except ImportError:
     Image = None, None, None
-
-
 def analyze_pil_image_quality(pil_img):
     """Analyze a PIL Image across Resolution, Blur (Laplacian Variance), and Contrast.
     Returns (quality_score: float, details: dict).
@@ -184,4 +182,51 @@ def get_image_blur_quality(image_path_or_bytes) -> float:
         return 0.3
 
 
+def get_pdf_page_range_quality(pdf_path_or_bytes, page_start, page_end):
+    """Return the lowest image-quality score for an inclusive 1-based PDF range."""
+    document = None
+    try:
+        import pymupdf
 
+        if Image is None:
+            raise RuntimeError("Pillow is unavailable")
+        if not isinstance(page_start, int) or not isinstance(page_end, int):
+            raise ValueError("PDF page range must contain integer page numbers")
+        if page_start < 1 or page_end < page_start:
+            raise ValueError("PDF page range must be a valid inclusive 1-based range")
+
+        if isinstance(pdf_path_or_bytes, (bytes, bytearray)):
+            document = pymupdf.open(stream=bytes(pdf_path_or_bytes), filetype="pdf")
+        else:
+            document = pymupdf.open(os.fspath(pdf_path_or_bytes))
+
+        if page_end > document.page_count:
+            raise ValueError(
+                f"PDF page range ends at {page_end}, but document has {document.page_count} pages"
+            )
+
+        scores = []
+        render_scale = 150 / 72
+        for page_index in range(page_start - 1, page_end):
+            page = document.load_page(page_index)
+            pixmap = page.get_pixmap(
+                matrix=pymupdf.Matrix(render_scale, render_scale),
+                colorspace=pymupdf.csRGB,
+                alpha=False,
+            )
+            image = Image.frombytes("RGB", (pixmap.width, pixmap.height), pixmap.samples)
+            try:
+                score, details = analyze_pil_image_quality(image)
+                if "error" in details:
+                    raise RuntimeError(details["error"])
+                scores.append(score)
+            finally:
+                image.close()
+
+        return min(scores) if scores else None
+    except Exception as e:
+        print(f"[ImageQuality] Failed to analyze PDF pages {page_start}-{page_end}: {e}")
+        return None
+    finally:
+        if document is not None:
+            document.close()

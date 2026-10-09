@@ -7,3 +7,4 @@ python-docx
 pypdf
 Pillow
 numpy
+PyMuPDF

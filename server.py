@@ -1,5 +1,5 @@
 import http.server
-from scripts.image_quality import get_image_blur_quality
+from scripts.image_quality import get_image_blur_quality, get_pdf_page_range_quality
 
 import socketserver
 import json
@@ -293,14 +293,6 @@ def send_to_n8n_webhook(invoice_index, pages, base64_pdf, doc_id=None, raw_ocr_t
     # Build callback URL so n8n can POST extracted data back to us
     app_base_url = get_effective_base_url()
     callback_url = f"{app_base_url}/api/documents/{doc_id}/extraction/callback"
-
-    if image_quality is None:
-        if file_path and os.path.exists(file_path):
-            image_quality = get_image_blur_quality(file_path)
-        elif base64_pdf:
-            image_quality = get_image_blur_quality(base64_pdf)
-        else:
-            image_quality = 0.5
 
     safe_source_name = os.path.basename((source_file_name or "").replace("\\", "/")).replace('"', "_").replace("\r", "_").replace("\n", "_")
     is_pdf = safe_source_name.lower().endswith(".pdf") or (
@@ -924,7 +916,7 @@ class LogisticsAutomationHandler(http.server.BaseHTTPRequestHandler):
             "status": display_status,
             "extractionStatus": display_status if has_extraction else (inv_status or "PENDING"),
             "overallConfidence": invoice[10],
-            "imageQuality": inv_quality if is_inv_poor else None,
+            "imageQuality": inv_quality,
             "poorImageQuality": is_inv_poor,
             "extractedData": invoice_data,
             "invoiceNumber": header.get('invoiceNumber') or header.get('invoiceId') or header.get('documentNumber') or header.get('invoiceNo')
@@ -1054,7 +1046,7 @@ class LogisticsAutomationHandler(http.server.BaseHTTPRequestHandler):
                 "status": display_status,
                 "extractionStatus": display_status,
                 "overallConfidence": r[10],
-                "imageQuality": inv_quality if is_inv_poor else None,
+                "imageQuality": inv_quality,
                 "poorImageQuality": is_inv_poor,
                 "extractionComplete": has_extraction,
                 "extractedData": invoice_data,
@@ -1513,7 +1505,24 @@ class LogisticsAutomationHandler(http.server.BaseHTTPRequestHandler):
             dispatch_file_size = len(original_file_bytes)
 
         print(f"[Backend] 🔍 Analyzing image quality for invoice {resolved_invoice_id} ({file_name})...")
-        image_quality = get_image_blur_quality(file_path)
+        try:
+            image_quality = (
+                get_pdf_page_range_quality(file_path, int(page_start), int(page_end))
+                if ext == ".pdf" or not ext
+                else get_image_blur_quality(file_path)
+            )
+        except Exception as exc:
+            print(f"[ImageQuality] Invoice analysis failed for {resolved_invoice_id}: {exc}")
+            image_quality = None
+        quality_conn = sqlite3.connect(DB_PATH)
+        try:
+            quality_conn.execute(
+                "UPDATE DocumentInvoice SET imageQuality = ? WHERE id = ? AND documentId = ?",
+                (image_quality, resolved_invoice_id, doc_id),
+            )
+            quality_conn.commit()
+        finally:
+            quality_conn.close()
         print(f"[Backend] ✅ Calculated imageQuality score: {image_quality}")
 
         result = send_to_n8n_webhook(
@@ -1642,18 +1651,6 @@ class LogisticsAutomationHandler(http.server.BaseHTTPRequestHandler):
         cursor = conn.cursor()
         cursor.execute("CREATE TABLE IF NOT EXISTS DocumentInvoice (id TEXT PRIMARY KEY, documentId TEXT NOT NULL, invoiceIndex INTEGER NOT NULL, pageStart INTEGER, pageEnd INTEGER, rawOcrText TEXT, canonicalJson TEXT, confidenceScores TEXT, finalSubmittedData TEXT, status TEXT DEFAULT 'EXTRACTED', overallConfidence REAL, imageQuality REAL, createdAt DATETIME DEFAULT CURRENT_TIMESTAMP, updatedAt DATETIME DEFAULT CURRENT_TIMESTAMP)")
 
-        # Compute image quality for document
-        image_quality = 0.5
-        try:
-            cursor.execute("SELECT storagePath FROM Document WHERE id = ?", (doc_id,))
-            row_path = cursor.fetchone()
-            if row_path:
-                file_path_cb = os.path.join(BASE_DIR, row_path[0])
-                if os.path.exists(file_path_cb):
-                    image_quality = get_image_blur_quality(file_path_cb)
-        except Exception:
-            pass
-
         last_json_str = None
         for index, inv_item in enumerate(invoice_payloads):
             extracted = inv_item.get('canonicalJson') or inv_item.get('extractedData') or {}
@@ -1668,10 +1665,11 @@ class LogisticsAutomationHandler(http.server.BaseHTTPRequestHandler):
             status = _invoice_result_status(extracted)
             
             cursor.execute(
-                "SELECT id FROM DocumentInvoice WHERE id = ? OR (documentId = ? AND invoiceIndex = ?)",
+                "SELECT id, imageQuality FROM DocumentInvoice WHERE id = ? OR (documentId = ? AND invoiceIndex = ?)",
                 (inv_id, doc_id, inv_idx)
             )
             existing_row = cursor.fetchone()
+            image_quality = existing_row[1] if existing_row else None
             if existing_row:
                 existing_id = existing_row[0]
                 cursor.execute(
