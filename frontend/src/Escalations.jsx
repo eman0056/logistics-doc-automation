@@ -245,7 +245,8 @@ export const Escalations = () => {
                 return (
                   <tr key={esc.id}>
                     <td>
-                      <div style={{ fontWeight: 600, color: '#f8fafc' }}>{esc.docNumber}</div>
+                      <div style={{ fontWeight: 600, color: '#f8fafc' }}>{esc.invoiceNumber}</div>
+                      <div style={{ fontSize: '0.75rem', color: 'var(--text-muted, #94a3b8)' }}>{esc.docNumber}</div>
                     </td>
                     <td>
                       <span className="status-pill neutral">{esc.invoiceNumber}</span>

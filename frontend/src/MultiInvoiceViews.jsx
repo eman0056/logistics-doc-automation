@@ -1853,6 +1853,7 @@ export const MultiInvoiceWorkspace = ({ docId: propDocId, docIds: propDocIds }) 
   const primaryDocId = propDocId || (docIds ? docIds[0] : null) || path.split('/')[2];
   const isBatchMode = docIds && docIds.length > 1;
   const expectedInvoiceCountParam = Number(searchParams.get('expectedInvoices'));
+  const hasSingleInvoiceParam = searchParams.has('invoiceIndex');
 
   const [doc, setDoc] = useState(null);
   const [invoices, setInvoices] = useState([]);
@@ -2108,8 +2109,17 @@ export const MultiInvoiceWorkspace = ({ docId: propDocId, docIds: propDocIds }) 
           setInvoices(normalized);
 
           const params = new URLSearchParams(window.location.search);
-          const initialIndex = params.has('invoiceIndex') ? parseInt(params.get('invoiceIndex'), 10) : 0;
-          const validIndex = (!isNaN(initialIndex) && initialIndex >= 0 && initialIndex < normalized.length) ? initialIndex : 0;
+          const requestedIndex = params.get('invoiceIndex');
+          let validIndex = 0;
+          if (params.has('invoiceIndex')) {
+            const initialIndex = Number(requestedIndex);
+            validIndex = normalized.findIndex((invoice, idx) => (
+              Number(invoice.invoiceIndex ?? idx) === initialIndex
+            ));
+            if (!/^\d+$/.test(requestedIndex || '') || validIndex < 0) {
+              throw new Error(`Invoice #${requestedIndex || ''} was not found in this document.`);
+            }
+          }
           setSelectedInvoiceIndex(validIndex);
 
           const initialDrafts = {};
@@ -2462,21 +2472,31 @@ export const MultiInvoiceWorkspace = ({ docId: propDocId, docIds: propDocIds }) 
       {/* ── A. TOP HEADER ─────────────────────────────────────────────────── */}
       <header className="emir-header">
         <div className="emir-header-left">
-          <BackButton />
+          <BackButton href={hasSingleInvoiceParam ? '/escalations' : '/dashboard'} />
           <div className="emir-breadcrumbs">
             <a href="/dashboard" style={{ color: 'inherit', textDecoration: 'none' }}>Document Review</a>
             <span>/</span>
             <span>{isBatchMode ? 'Batch Multi-Invoice Processing' : 'Multi-Invoice Processing'}</span>
-            {!isBatchMode && <span className="emir-file-badge">{doc?.fileName || 'Combined_Invoice.pdf'}</span>}
+            {!isBatchMode && !hasSingleInvoiceParam && <span className="emir-file-badge">{doc?.fileName || 'Combined_Invoice.pdf'}</span>}
             {isBatchMode && <span className="emir-file-badge">{uniqueDocNames.length} documents</span>}
           </div>
-          <h1 className="emir-title">{isBatchMode ? 'Batch Invoice Review Workspace' : 'Multi-Invoice Review Workspace'}</h1>
-          <p className="emir-subtitle">
-            {isBatchMode
-              ? <><strong style={{ color: 'var(--primary, #6366f1)' }}>Documents: {uniqueDocNames.length}</strong> &nbsp;·&nbsp; <strong style={{ color: 'var(--primary, #6366f1)' }}>Invoices: {invoices.length}</strong> · Select an invoice below to review</>  
-              : <><strong style={{ color: 'var(--primary, #6366f1)' }}>{invoices.length}</strong> invoices detected • Select an invoice below to review original pages and extracted data</>  
-            }
-          </p>
+          <h1 className="emir-title">
+            {hasSingleInvoiceParam && selectedInvoice
+              ? `Invoice #${Number(selectedInvoice.invoiceIndex ?? selectedInvoiceIndex) + 1}`
+              : isBatchMode ? 'Batch Invoice Review Workspace' : 'Multi-Invoice Review Workspace'}
+          </h1>
+          {hasSingleInvoiceParam ? (
+            <p className="emir-subtitle" style={{ fontSize: '0.8rem', color: 'var(--text-muted, #94a3b8)' }}>
+              {doc?.fileName || 'Combined_Invoice.pdf'}
+            </p>
+          ) : (
+            <p className="emir-subtitle">
+              {isBatchMode
+                ? <><strong style={{ color: 'var(--primary, #6366f1)' }}>Documents: {uniqueDocNames.length}</strong> &nbsp;·&nbsp; <strong style={{ color: 'var(--primary, #6366f1)' }}>Invoices: {invoices.length}</strong> · Select an invoice below to review</>
+                : <><strong style={{ color: 'var(--primary, #6366f1)' }}>{invoices.length}</strong> invoices detected • Select an invoice below to review original pages and extracted data</>
+              }
+            </p>
+          )}
         </div>
 
         <div className="emir-header-actions">
@@ -2751,7 +2771,7 @@ export const MultiInvoiceWorkspace = ({ docId: propDocId, docIds: propDocIds }) 
       </div>
 
       {/* ── C. INVOICE NAVIGATOR with Filters & Document Grouping ────────── */}
-      <section className="emir-invoices-section">
+      {!hasSingleInvoiceParam && <section className="emir-invoices-section">
         <div className="emir-invoices-header">
           <h2 className="emir-invoices-title">
             <span>INVOICES</span>
@@ -2868,7 +2888,7 @@ export const MultiInvoiceWorkspace = ({ docId: propDocId, docIds: propDocIds }) 
             );
           })}
         </div>
-      </section>
+      </section>}
 
       {/* ── D. CUSTOM DISCARD CONFIRMATION MODAL ─────────────────────────── */}
       {showDiscardModal && (
