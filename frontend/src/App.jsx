@@ -1799,7 +1799,7 @@ function App() {
     case 'upload-multi': renderedRoute = <UploadMultiView />; break;
     case 'multi-workspace': renderedRoute = <MultiInvoiceWorkspace docId={path.split('/')[2]} />; break;
     case 'batch-workspace': renderedRoute = <MultiInvoiceWorkspace />; break;
-    case 'review': renderedRoute = <ReviewView />; break;
+    case 'review': renderedRoute = <MultiInvoiceWorkspace docId={path.split('/')[2]} singleInvoiceMode />; break;
     case 'review-multi': renderedRoute = <MultiInvoiceListView />; break;
     case 'multi-invoice-list': renderedRoute = <MultiInvoiceListView />; break;
     case 'multi-invoice-detail': renderedRoute = <MultiInvoiceDetailView />; break;

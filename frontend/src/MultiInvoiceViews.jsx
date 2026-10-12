@@ -2012,7 +2012,7 @@ export const InvoiceNavigator = ({
   );
 };
 
-export const MultiInvoiceWorkspace = ({ docId: propDocId, docIds: propDocIds }) => {
+export const MultiInvoiceWorkspace = ({ docId: propDocId, docIds: propDocIds, singleInvoiceMode = false }) => {
   const path = window.location.pathname;
   const searchParams = new URLSearchParams(window.location.search);
   // Support batch mode: ids= query param takes precedence over path-based docId
@@ -2045,9 +2045,39 @@ export const MultiInvoiceWorkspace = ({ docId: propDocId, docIds: propDocIds }) 
   const [viewerSize, setViewerSize] = useState({ width: 0, height: 0 });
   const viewerBodyRef = useRef(null);
   const extractionInFlightRef = useRef(new Set());
+  const singlePollingRefs = useRef(new Map());
+  const singleExtractionTriggeredRef = useRef(new Set());
+  const isSingleDocumentMode = !isBatchMode
+    && invoices.length <= 1
+    && Number(doc?.invoiceCount || 0) <= 1
+    && (
+    singleInvoiceMode
+    || expectedInvoiceCountParam === 1
+    || invoices.length === 1
+    );
   const patchInvoiceAt = (index, patch) => {
     setInvoices((prev) => prev.map((inv, idx) => (idx === index ? { ...inv, ...patch } : inv)));
   };
+  const isSingleInvoiceDocument = (invoice) => {
+    if (!invoice) return false;
+    if (isSingleDocumentMode) return true;
+    const invoiceDocId = invoice.documentId || primaryDocId;
+    const invoiceCountForDocument = invoices.filter((item) => (item.documentId || primaryDocId) === invoiceDocId).length;
+    const knownInvoiceCount = invoiceDocId === primaryDocId ? Number(doc?.invoiceCount || 0) : null;
+    return invoiceCountForDocument === 1 && (knownInvoiceCount === null || knownInvoiceCount <= 1);
+  };
+
+  useEffect(() => {
+    singleExtractionTriggeredRef.current.clear();
+    return () => {
+      singlePollingRefs.current.forEach((polling) => {
+        polling.cancelled = true;
+        if (polling.timeout) window.clearTimeout(polling.timeout);
+        polling.controller?.abort();
+      });
+      singlePollingRefs.current.clear();
+    };
+  }, [primaryDocId]);
 
   const refreshInvoiceFromServer = async (targetDocId, invoiceKey, index) => {
     try {
@@ -2176,6 +2206,165 @@ export const MultiInvoiceWorkspace = ({ docId: propDocId, docIds: propDocIds }) 
     }
   };
 
+  const runSingleInvoiceExtraction = async (index = selectedInvoiceIndex) => {
+    const invoice = invoices[index];
+    if (!invoice || singleExtractionTriggeredRef.current.has(invoice.id) || extractionInFlightRef.current.has(invoice.id)) return;
+    if (invoiceHasRealExtraction(invoice)) return;
+
+    const invoiceDocId = invoice.documentId || primaryDocId;
+    const invoiceId = invoice.id || invoice.invoiceId || `${invoiceDocId}-invoice-1`;
+    const polling = singlePollingRefs.current.get(invoiceDocId) || { cancelled: false, timeout: null, controller: null };
+    singlePollingRefs.current.set(invoiceDocId, polling);
+    const pageStart = Number(invoice.pageStart || 1);
+    const pageEnd = Number(invoice.pageEnd || (invoiceDocId === primaryDocId ? doc?.pageCount : null) || pageStart);
+    const terminalStatuses = new Set(['FAILED', 'EXTRACTED', 'APPROVED', 'INVOICE_GENERATED', 'IN_REVIEW']);
+
+    polling.cancelled = false;
+    singleExtractionTriggeredRef.current.add(invoiceId);
+    extractionInFlightRef.current.add(invoiceId);
+    patchInvoiceAt(index, {
+      extractionUi: EXTRACTION_UI.PREPARING,
+      extractionError: null,
+      status: 'PREPARING',
+      extractionStatus: 'PREPARING',
+    });
+
+    try {
+      await triggerInvoiceExtraction({
+        documentId: invoiceDocId,
+        id: invoiceId,
+        invoiceId,
+        invoiceIndex: invoice.invoiceIndex ?? 0,
+        pageStart,
+        pageEnd,
+        pages: Array.from({ length: Math.max(1, pageEnd - pageStart + 1) }, (_, index) => pageStart + index),
+      });
+      if (!polling.cancelled) {
+        patchInvoiceAt(index, {
+          extractionUi: EXTRACTION_UI.EXTRACTING,
+          status: 'EXTRACTING',
+          extractionStatus: 'EXTRACTING',
+        });
+      }
+    } catch (error) {
+      console.error('[Single Invoice] Extraction trigger failed:', error);
+      if (!polling.cancelled) {
+        patchInvoiceAt(index, {
+          extractionUi: EXTRACTION_UI.FAILED,
+          status: 'FAILED',
+          extractionStatus: 'FAILED',
+          extractionError: error.message || 'n8n did not accept the extraction request.',
+        });
+        singleExtractionTriggeredRef.current.delete(invoiceId);
+      }
+      extractionInFlightRef.current.delete(invoiceId);
+      return;
+    }
+
+    const poll = async () => {
+      if (polling.cancelled) return;
+      polling.controller?.abort();
+      polling.controller = new AbortController();
+      try {
+        const requestOptions = { signal: polling.controller.signal };
+        const statusRes = await fetch(`${API}/documents/${invoiceDocId}/status?refresh=${Date.now()}`, {
+          ...requestOptions,
+          cache: 'no-store',
+        });
+        const status = await statusRes.json();
+        const documentsRes = await fetch(`${API}/documents?refresh=${Date.now()}`, {
+          ...requestOptions,
+          cache: 'no-store',
+        });
+        const documentsJson = await documentsRes.json();
+        const latestDoc = (documentsJson.documents || []).find((item) => item.id === invoiceDocId);
+        if (polling.cancelled) return;
+
+        if (latestDoc && status.extractedData && Object.keys(status.extractedData).length > 0) {
+          latestDoc.extraction = {
+            ...(latestDoc.extraction || {}),
+            extractedData: status.extractedData,
+            canonicalJson: JSON.stringify(status.extractedData),
+          };
+          if (Array.isArray(latestDoc.invoices) && latestDoc.invoices.length > 0) {
+            latestDoc.invoices[0] = {
+              ...latestDoc.invoices[0],
+              extractedData: status.extractedData,
+              canonicalJson: JSON.stringify(status.extractedData),
+              status: 'EXTRACTED',
+              extractionStatus: 'EXTRACTED',
+            };
+          }
+        }
+
+        const extractedData = extractRealInvoiceObject(
+          status.extractedData
+          || latestDoc?.invoices?.[0]?.extractedData
+          || latestDoc?.invoices?.[0]?.canonicalJson
+          || latestDoc?.extraction?.extractedData
+          || latestDoc?.extraction?.canonicalJson
+          || latestDoc?.extraction?.finalSubmittedData
+        );
+        if (latestDoc) {
+          if (invoiceDocId === primaryDocId) setDoc(latestDoc);
+          if (extractedData) {
+            patchInvoiceAt(index, {
+              ...(latestDoc.invoices?.[0] || {}),
+              extractedData,
+              canonicalJson: JSON.stringify(extractedData),
+              extractionUi: EXTRACTION_UI.EXTRACTED,
+              status: 'EXTRACTED',
+              extractionStatus: 'EXTRACTED',
+              extractionError: null,
+            });
+            setDrafts((previous) => ({ ...previous, [index]: extractedData }));
+          }
+        }
+
+        if (status.status === 'FAILED') {
+          patchInvoiceAt(index, {
+            extractionUi: EXTRACTION_UI.FAILED,
+            status: 'FAILED',
+            extractionStatus: 'FAILED',
+            extractionError: status.errorMessage || 'n8n did not accept the extraction request.',
+          });
+          singleExtractionTriggeredRef.current.delete(invoiceId);
+          extractionInFlightRef.current.delete(invoiceId);
+          return;
+        }
+
+        const terminalApiStatus = status?.status || '';
+        const stopPolling = Boolean(
+          status?.isExtracted
+          || terminalStatuses.has(terminalApiStatus)
+          || (status.extractedData && Object.keys(status.extractedData).length > 0)
+          || extractedData
+        );
+        if (stopPolling) {
+          extractionInFlightRef.current.delete(invoiceId);
+          return;
+        }
+
+      } catch (error) {
+        if (error.name !== 'AbortError' && !polling.cancelled) console.error(error);
+        extractionInFlightRef.current.delete(invoiceId);
+        return;
+      }
+      if (!polling.cancelled) {
+        if (polling.controller?.signal?.aborted) return;
+        polling.timeout = window.setTimeout(poll, 1500);
+      }
+    };
+
+    poll();
+  };
+
+  const handleInvoiceExtraction = (index, options = {}) => (
+    isSingleInvoiceDocument(invoices[index])
+      ? runSingleInvoiceExtraction(index)
+      : runInvoiceExtraction(index, options)
+  );
+
   // Upload must not trigger n8n automatically. Extraction begins only when the
   // reviewer explicitly clicks the extraction action from the review workspace.
 
@@ -2191,7 +2380,7 @@ export const MultiInvoiceWorkspace = ({ docId: propDocId, docIds: propDocIds }) 
         if (isBatchMode) {
           const idsQuery = docIds.join(',');
           const [docsRes, invRes] = await Promise.all([
-            fetch(`${API}/documents?summary=true&ids=${encodeURIComponent(primaryDocId)}&refresh=${Date.now()}`, { cache: 'no-store' }),
+            fetch(`${API}/documents?summary=true&ids=${encodeURIComponent(idsQuery)}&refresh=${Date.now()}`, { cache: 'no-store' }),
             fetch(`${API}/documents/${primaryDocId}/invoices?ids=${encodeURIComponent(idsQuery)}&refresh=${Date.now()}`, { cache: 'no-store' })
           ]);
           if (!docsRes.ok || !invRes.ok) {
@@ -2201,6 +2390,45 @@ export const MultiInvoiceWorkspace = ({ docId: propDocId, docIds: propDocIds }) 
           const invData = await invRes.json();
           foundDoc = (docsData.documents || []).find(d => d.id === primaryDocId) || null;
           invoiceList = Array.isArray(invData.invoices) ? invData.invoices : [];
+          const missingDocumentIds = docIds.filter((id) => !invoiceList.some((invoice) => invoice.documentId === id));
+          if (missingDocumentIds.length > 0) {
+            const fullDocsRes = await fetch(`${API}/documents?refresh=${Date.now()}`, { cache: 'no-store' });
+            if (!fullDocsRes.ok) {
+              throw new Error(`Unable to load saved batch document data (HTTP ${fullDocsRes.status})`);
+            }
+            const fullDocsData = await fullDocsRes.json();
+            const fullDocuments = fullDocsData.documents || [];
+            missingDocumentIds.forEach((missingDocId) => {
+              const summary = (docsData.documents || []).find((item) => item.id === missingDocId);
+              const fullDocument = fullDocuments.find((item) => item.id === missingDocId);
+              if (!summary || !fullDocument) return;
+              const savedData = extractRealInvoiceObject(
+                fullDocument.extraction?.extractedData
+                || fullDocument.extraction?.canonicalJson
+                || fullDocument.extraction?.finalSubmittedData
+              );
+              const invoiceCount = Number(summary.invoiceCount || 0);
+              const isSingleDocument = invoiceCount <= 1
+                && (Boolean(savedData) || invoiceCount === 1 || isImageFile(summary));
+              if (!isSingleDocument) return;
+              invoiceList.push({
+                id: `${missingDocId}-invoice-1`,
+                invoiceId: `${missingDocId}-invoice-1`,
+                documentId: missingDocId,
+                invoiceIndex: 0,
+                fileName: summary.fileName,
+                sourceFileName: summary.fileName,
+                pageStart: 1,
+                pageEnd: fullDocument.pageCount || 1,
+                status: fullDocument.status || summary.status || 'PENDING',
+                extractionStatus: fullDocument.status || summary.status || 'PENDING',
+                extractionComplete: Boolean(savedData),
+                extractedData: savedData || {},
+                canonicalJson: savedData || {},
+                overallConfidence: fullDocument.overallConfidence ?? summary.overallConfidence,
+              });
+            });
+          }
         } else {
           const docId = primaryDocId;
           setLoadingMessage('Detecting invoices...');
@@ -2216,6 +2444,8 @@ export const MultiInvoiceWorkspace = ({ docId: propDocId, docIds: propDocIds }) 
           foundDoc = (docData.documents || []).find(d => d.id === docId) || null;
           invoiceList = Array.isArray(invData.invoices) ? invData.invoices : [];
 
+          const singleReviewRoute = Number(foundDoc?.invoiceCount || 0) <= 1
+            && (singleInvoiceMode || expectedInvoiceCountParam === 1 || window.location.pathname.endsWith('/review'));
           if (invoiceList.length === 0 && foundDoc) {
             const fullDocsRes = await fetch(`${API}/documents?refresh=${Date.now()}`, { cache: 'no-store' });
             if (!fullDocsRes.ok) {
@@ -2243,6 +2473,22 @@ export const MultiInvoiceWorkspace = ({ docId: propDocId, docIds: propDocIds }) 
                 extractionComplete: true,
                 extractedData: savedData,
                 canonicalJson: savedData,
+                overallConfidence: foundDoc.overallConfidence,
+              }];
+            } else if (singleReviewRoute) {
+              invoiceList = [{
+                id: `${docId}-invoice-1`,
+                invoiceId: `${docId}-invoice-1`,
+                documentId: docId,
+                invoiceIndex: 0,
+                fileName: foundDoc.fileName,
+                sourceFileName: foundDoc.fileName,
+                pageStart: 1,
+                pageEnd: foundDoc.pageCount || 1,
+                status: foundDoc.status || 'PENDING',
+                extractionStatus: foundDoc.status || 'PENDING',
+                extractionComplete: false,
+                extractedData: {},
                 overallConfidence: foundDoc.overallConfidence,
               }];
             }
@@ -2387,19 +2633,24 @@ export const MultiInvoiceWorkspace = ({ docId: propDocId, docIds: propDocIds }) 
       const invoiceId = selectedInvoice.id || selectedInvoice.invoiceId;
       // Use the invoice's own documentId for data isolation (critical for multi-PDF batches)
       const saveDocId = selectedInvoice.documentId || primaryDocId;
-      const res = await fetch(`${API}/documents/${saveDocId}/review`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
+      const savePayload = isSingleInvoiceDocument(selectedInvoice)
+        ? { invoiceId, editedData: currentDraft }
+        : {
           docId: saveDocId,
           invoiceId,
           invoiceIndex: selectedInvoice.invoiceIndex ?? selectedInvoiceIndex,
           editedData: currentDraft,
-          editedExtractedData: currentDraft
-        })
+          editedExtractedData: currentDraft,
+        };
+      const res = await fetch(`${API}/documents/${saveDocId}/review`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(savePayload)
       });
       const data = await res.json();
-      if (!res.ok || data.error) throw new Error(data.error || 'Failed to save invoice changes');
+      if (!res.ok || data.error || (isSingleInvoiceDocument(selectedInvoice) && !data.success)) {
+        throw new Error(data.error || 'Failed to save invoice changes');
+      }
       
       setSaveSuccess(true);
       setInvoices((prev) => prev.map((inv, idx) => idx === selectedInvoiceIndex ? { ...inv, status: 'APPROVED' } : inv));
@@ -2635,16 +2886,22 @@ export const MultiInvoiceWorkspace = ({ docId: propDocId, docIds: propDocIds }) 
           <div className="emir-breadcrumbs">
             <a href="/dashboard" style={{ color: 'inherit', textDecoration: 'none' }}>Document Review</a>
             <span>/</span>
-            <span>{isBatchMode ? 'Batch Multi-Invoice Processing' : 'Multi-Invoice Processing'}</span>
-            {!isBatchMode && !hasSingleInvoiceParam && <span className="emir-file-badge">{doc?.fileName || 'Combined_Invoice.pdf'}</span>}
+            <span>{isBatchMode ? 'Batch Multi-Invoice Processing' : isSingleDocumentMode ? 'Single-Invoice Processing' : 'Multi-Invoice Processing'}</span>
+            {!isBatchMode && (!hasSingleInvoiceParam || isSingleDocumentMode) && <span className="emir-file-badge">{doc?.fileName || 'Combined_Invoice.pdf'}</span>}
             {isBatchMode && <span className="emir-file-badge">{uniqueDocNames.length} documents</span>}
           </div>
           <h1 className="emir-title">
-            {hasSingleInvoiceParam && selectedInvoice
+            {isSingleDocumentMode && selectedInvoice
+              ? 'Single-Invoice Review Workspace'
+              : hasSingleInvoiceParam && selectedInvoice
               ? `Invoice #${Number(selectedInvoice.invoiceIndex ?? selectedInvoiceIndex) + 1}`
               : isBatchMode ? 'Batch Invoice Review Workspace' : 'Multi-Invoice Review Workspace'}
           </h1>
-          {hasSingleInvoiceParam ? (
+          {isSingleDocumentMode ? (
+            <p className="emir-subtitle">
+              <strong style={{ color: 'var(--primary, #6366f1)' }}>1</strong> invoice • Review original document and extracted data
+            </p>
+          ) : hasSingleInvoiceParam ? (
             <p className="emir-subtitle" style={{ fontSize: '0.8rem', color: 'var(--text-muted, #94a3b8)' }}>
               {doc?.fileName || 'Combined_Invoice.pdf'}
             </p>
@@ -2853,7 +3110,7 @@ export const MultiInvoiceWorkspace = ({ docId: propDocId, docIds: propDocIds }) 
                 <button
                   type="button"
                   className="primary-btn"
-                  onClick={() => runInvoiceExtraction(selectedInvoiceIndex, { force: true })}
+                  onClick={() => handleInvoiceExtraction(selectedInvoiceIndex, { force: true })}
                 >
                   Extract Invoice Data
                 </button>
@@ -2902,13 +3159,14 @@ export const MultiInvoiceWorkspace = ({ docId: propDocId, docIds: propDocIds }) 
                 <button
                   type="button"
                   className="emir-btn-save emir-extraction-retry"
-                  onClick={() => runInvoiceExtraction(selectedInvoiceIndex, { force: true })}
+                  onClick={() => handleInvoiceExtraction(selectedInvoiceIndex, { force: true })}
                 >
                   Retry Extraction
                 </button>
               </div>
             ) : isPreparing || isExtracting ? (
               <ExtractionProcessingPanel
+                isSingleInvoice={isSingleDocumentMode}
                 invoiceIndex={selectedInvoiceIndex}
                 pageStart={selectedInvoice?.pageStart}
                 pageEnd={selectedInvoice?.pageEnd}
@@ -2937,7 +3195,9 @@ export const MultiInvoiceWorkspace = ({ docId: propDocId, docIds: propDocIds }) 
         isBatchMode={isBatchMode}
         onSelectInvoice={(index) => {
           setSelectedInvoiceIndex(index);
-          if (!hasCompletedInvoiceExtraction(invoices[index])) {
+          if (isSingleInvoiceDocument(invoices[index])) {
+            if (!invoiceHasRealExtraction(invoices[index])) runSingleInvoiceExtraction(index);
+          } else if (!hasCompletedInvoiceExtraction(invoices[index])) {
             runInvoiceExtraction(index, { force: false });
           }
         }}
