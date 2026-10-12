@@ -1849,6 +1849,169 @@ export const ExtractedDataPanel = ({ selectedIndex, invoiceGroups, extractedData
 };
 
 
+export const InvoiceNavigator = ({
+  invoices,
+  drafts,
+  selectedInvoiceIndex,
+  primaryDocId,
+  isBatchMode = false,
+  onSelectInvoice,
+}) => {
+  const [filterDoc, setFilterDoc] = useState('all');
+  const [filterStatus, setFilterStatus] = useState('all');
+  const [searchQuery, setSearchQuery] = useState('');
+  const uniqueDocNames = [...new Set(invoices.map((inv) => inv.sourceFileName || inv.fileName || inv.documentId || primaryDocId).filter(Boolean))];
+  const filteredInvoices = invoices.filter((inv, idx) => {
+    const srcName = inv.sourceFileName || inv.fileName || inv.documentId || primaryDocId;
+    const status = inv.status || inv.extractionStatus || '';
+    const isPoor = getInvoicePoorImageState(inv, drafts[idx]).poor;
+    if (filterDoc !== 'all' && srcName !== filterDoc) return false;
+
+    if (filterStatus === 'ready') {
+      const ui = normalizeInvoiceExtractionUi(inv);
+      if (isPoor || (ui !== EXTRACTION_UI.EXTRACTED && !['EXTRACTED', 'IN_REVIEW', 'APPROVED', 'Ready for Review'].includes(status))) return false;
+    } else if (filterStatus === 'review') {
+      if (isPoor || (status !== 'NEEDS_REVIEW' && status !== 'Needs Review')) return false;
+    } else if (filterStatus === 'poor') {
+      if (!isPoor) return false;
+    } else if (filterStatus === 'approved') {
+      if (status !== 'APPROVED' && status !== 'Approved') return false;
+    } else if (filterStatus === 'failed') {
+      const ui = normalizeInvoiceExtractionUi(inv);
+      if (status !== 'FAILED' && ui !== EXTRACTION_UI.FAILED) return false;
+    }
+
+    if (searchQuery.trim()) {
+      const query = searchQuery.toLowerCase();
+      const invoiceNumber = String(inv.invoiceNumber || '').toLowerCase();
+      const fileName = String(srcName || '').toLowerCase();
+      if (!invoiceNumber.includes(query) && !fileName.includes(query)) return false;
+    }
+    return true;
+  });
+  const filteredWithIndex = filteredInvoices.map((inv) => ({ inv, globalIdx: invoices.indexOf(inv) }));
+
+  return (
+    <section className="emir-invoices-section">
+      <div className="emir-invoices-header">
+        <h2 className="emir-invoices-title">
+          <span>INVOICES</span>
+        </h2>
+        <span className="emir-invoices-count">{filteredWithIndex.length} of {invoices.length} invoices</span>
+      </div>
+
+      {isBatchMode && uniqueDocNames.length > 1 && (
+        <div className="bq-doc-tabs">
+          <button
+            type="button"
+            className={`bq-doc-tab${filterDoc === 'all' ? ' bq-doc-tab--active' : ''}`}
+            onClick={() => { setFilterDoc('all'); onSelectInvoice(0); }}
+          >
+            All Documents ({invoices.length})
+          </button>
+          {uniqueDocNames.map((name) => (
+            <button
+              key={name}
+              type="button"
+              className={`bq-doc-tab${filterDoc === name ? ' bq-doc-tab--active' : ''}`}
+              onClick={() => {
+                setFilterDoc(name);
+                const foundIdx = invoices.findIndex((inv) => (inv.sourceFileName || inv.fileName || inv.documentId || primaryDocId) === name);
+                onSelectInvoice(foundIdx !== -1 ? foundIdx : 0);
+              }}
+            >
+              📄 {name.length > 24 ? `${name.slice(0, 22)}…` : name}
+            </button>
+          ))}
+        </div>
+      )}
+
+      <div className="bq-filter-bar">
+        <div className="bq-filter-tabs">
+          {[['all', 'All'], ['ready', 'Ready'], ['review', 'Needs Review'], ['poor', 'Poor Image'], ['approved', 'Approved'], ['failed', 'Failed']].map(([value, label]) => (
+            <button key={value} type="button" className={`bq-filter-tab${filterStatus === value ? ' bq-filter-tab--active' : ''}`} onClick={() => setFilterStatus(value)}>{label}</button>
+          ))}
+        </div>
+        <div className="bq-search-wrap">
+          <input
+            type="text"
+            className="bq-search-input"
+            placeholder="Search invoice # or filename…"
+            value={searchQuery}
+            onChange={(event) => setSearchQuery(event.target.value)}
+          />
+          {searchQuery && <button className="bq-search-clear" onClick={() => setSearchQuery('')}>×</button>}
+        </div>
+      </div>
+
+      <div className="emir-cards-grid">
+        {filteredWithIndex.length === 0 && (
+          <div className="emir-empty-box" style={{ gridColumn: '1 / -1' }}>
+            <div className="emir-empty-icon">🔍</div>
+            <div className="emir-empty-text">No invoices match the current filters.</div>
+          </div>
+        )}
+        {filteredWithIndex.map(({ inv, globalIdx }) => {
+          const isSelected = selectedInvoiceIndex === globalIdx;
+          const invDraft = drafts[globalIdx] || {};
+          const { hasReal, hasInvoiceNumber, poor } = getInvoicePoorImageState(inv, invDraft);
+          const ui = normalizeInvoiceExtractionUi(inv);
+          const invHeader = invDraft.invoiceHeader || invDraft.invoice_header || invDraft.header || {};
+          const invNumberVal = hasInvoiceNumber ? (
+            invHeader.invoiceNumber || invHeader.invoice_number || invHeader.invoiceNo
+            || invHeader.invoice_no || invHeader.invoiceId || invHeader.documentNumber
+            || invDraft.invoiceNumber || inv.invoiceNumber
+          ) : null;
+          const displayNum = poor
+            ? 'Poor image'
+            : hasReal
+              ? (hasInvoiceNumber ? String(invNumberVal) : 'Poor image')
+              : ui === EXTRACTION_UI.EXTRACTED ? 'Extracted' : 'Not extracted';
+          const conf = hasReal && inv.overallConfidence != null ? Math.round(inv.overallConfidence * 100) : null;
+          const statusLabel = humanInvoiceStatus(inv, globalIdx);
+          const srcName = inv.sourceFileName || inv.fileName || '';
+          const invLabel = invoiceDisplayLabel(inv, globalIdx);
+          const invPageCount = invoicePageCount(inv);
+
+          return (
+            <div
+              key={inv.id || globalIdx}
+              className={`emir-card ${isSelected ? 'is-selected' : ''}`}
+              onClick={() => onSelectInvoice(globalIdx)}
+            >
+              <div className="emir-card-top">
+                <span className="emir-card-tag">{invLabel.toUpperCase()}</span>
+                {isSelected && <span className="emir-selected-pill">● SELECTED</span>}
+              </div>
+
+              <div className="emir-card-number" style={{ fontStyle: hasInvoiceNumber ? 'normal' : 'italic', opacity: hasInvoiceNumber ? 1 : 0.7 }}>
+                {displayNum}
+              </div>
+
+              {srcName && (
+                <div className="emir-card-source" title={srcName}>
+                  📄 {srcName.length > 26 ? `${srcName.slice(0, 24)}…` : srcName}
+                </div>
+              )}
+
+              <div className="emir-card-meta">
+                <span>Pages 1–{invPageCount}</span>
+                <span>{conf != null ? `${conf}% confidence` : 'Confidence N/A'}</span>
+              </div>
+
+              <div className="emir-card-footer">
+                <span className={`status-pill ${poor ? 'warning-strong' : statusLabel === 'Approved' ? 'success' : ui === EXTRACTION_UI.FAILED ? 'danger' : (ui === EXTRACTION_UI.EXTRACTING || ui === EXTRACTION_UI.PREPARING) ? 'warning' : 'primary'}`}>
+                  {poor ? '⚠ Poor Image' : statusLabel}
+                </span>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </section>
+  );
+};
+
 export const MultiInvoiceWorkspace = ({ docId: propDocId, docIds: propDocIds }) => {
   const path = window.location.pathname;
   const searchParams = new URLSearchParams(window.location.search);
@@ -1882,11 +2045,6 @@ export const MultiInvoiceWorkspace = ({ docId: propDocId, docIds: propDocIds }) 
   const [viewerSize, setViewerSize] = useState({ width: 0, height: 0 });
   const viewerBodyRef = useRef(null);
   const extractionInFlightRef = useRef(new Set());
-  // Batch review filters
-  const [filterDoc, setFilterDoc] = useState('all');
-  const [filterStatus, setFilterStatus] = useState('all');
-  const [searchQuery, setSearchQuery] = useState('');
-
   const patchInvoiceAt = (index, patch) => {
     setInvoices((prev) => prev.map((inv, idx) => (idx === index ? { ...inv, ...patch } : inv)));
   };
@@ -2057,6 +2215,38 @@ export const MultiInvoiceWorkspace = ({ docId: propDocId, docIds: propDocIds }) 
           const invData = await invRes.json();
           foundDoc = (docData.documents || []).find(d => d.id === docId) || null;
           invoiceList = Array.isArray(invData.invoices) ? invData.invoices : [];
+
+          if (invoiceList.length === 0 && foundDoc) {
+            const fullDocsRes = await fetch(`${API}/documents?refresh=${Date.now()}`, { cache: 'no-store' });
+            if (!fullDocsRes.ok) {
+              throw new Error(`Unable to load saved document data (HTTP ${fullDocsRes.status})`);
+            }
+            const fullDocsData = await fullDocsRes.json();
+            foundDoc = (fullDocsData.documents || []).find((document) => document.id === docId) || foundDoc;
+            const savedData = extractRealInvoiceObject(
+              foundDoc.extraction?.extractedData
+              || foundDoc.extraction?.canonicalJson
+              || foundDoc.extraction?.finalSubmittedData
+            );
+            if (savedData) {
+              invoiceList = [{
+                id: `${docId}-saved-invoice-1`,
+                invoiceId: `${docId}-saved-invoice-1`,
+                documentId: docId,
+                invoiceIndex: 0,
+                fileName: foundDoc.fileName,
+                sourceFileName: foundDoc.fileName,
+                pageStart: 1,
+                pageEnd: foundDoc.pageCount || 1,
+                status: foundDoc.status || 'EXTRACTED',
+                extractionStatus: foundDoc.status || 'EXTRACTED',
+                extractionComplete: true,
+                extractedData: savedData,
+                canonicalJson: savedData,
+                overallConfidence: foundDoc.overallConfidence,
+              }];
+            }
+          }
 
           const isPdf = (foundDoc?.fileName || '').toLowerCase().endsWith('.pdf');
           if (isPdf) {
@@ -2284,39 +2474,6 @@ export const MultiInvoiceWorkspace = ({ docId: propDocId, docIds: propDocIds }) 
       </main>
     );
   }
-
-  // ── FILTER LOGIC ─────────────────────────────────────────────────────────
-  const uniqueDocNames = [...new Set(invoices.map(inv => inv.sourceFileName || inv.fileName || inv.documentId || primaryDocId).filter(Boolean))];
-  const filteredInvoices = invoices.filter((inv, idx) => {
-    const srcName = inv.sourceFileName || inv.fileName || inv.documentId || primaryDocId;
-    const status = inv.status || inv.extractionStatus || '';
-    const isPoor = getInvoicePoorImageState(inv, drafts[idx]).poor;
-    if (filterDoc !== 'all' && srcName !== filterDoc) return false;
-    
-    if (filterStatus === 'ready') {
-      const ui = normalizeInvoiceExtractionUi(inv);
-      if (isPoor || (ui !== EXTRACTION_UI.EXTRACTED && !['EXTRACTED', 'IN_REVIEW', 'APPROVED', 'Ready for Review'].includes(status))) return false;
-    } else if (filterStatus === 'review') {
-      if (isPoor || (status !== 'NEEDS_REVIEW' && status !== 'Needs Review')) return false;
-    } else if (filterStatus === 'poor') {
-      if (!isPoor) return false;
-    } else if (filterStatus === 'approved') {
-      if (status !== 'APPROVED' && status !== 'Approved') return false;
-    } else if (filterStatus === 'failed') {
-      const ui = normalizeInvoiceExtractionUi(inv);
-      if (status !== 'FAILED' && ui !== EXTRACTION_UI.FAILED) return false;
-    }
-    
-    if (searchQuery.trim()) {
-      const q = searchQuery.toLowerCase();
-      const invNum = String(inv.invoiceNumber || '').toLowerCase();
-      const fName = String(srcName || '').toLowerCase();
-      if (!invNum.includes(q) && !fName.includes(q)) return false;
-    }
-    return true;
-  });
-  // Map filtered back to global indices for selection
-  const filteredWithIndex = filteredInvoices.map(inv => ({ inv, globalIdx: invoices.indexOf(inv) }));
 
   const hasExtractedData = invoiceHasRealExtraction(selectedInvoice) || Boolean(extractRealInvoiceObject(currentDraft));
   const headerObjForNum = currentDraft.invoiceHeader || currentDraft.header || currentDraft || {};
@@ -2772,129 +2929,19 @@ export const MultiInvoiceWorkspace = ({ docId: propDocId, docIds: propDocIds }) 
         </section>
       </div>
 
-      {/* ── C. INVOICE NAVIGATOR with Filters & Document Grouping ────────── */}
-      <section className="emir-invoices-section">
-        <div className="emir-invoices-header">
-          <h2 className="emir-invoices-title">
-            <span>INVOICES</span>
-          </h2>
-          <span className="emir-invoices-count">{filteredWithIndex.length} of {invoices.length} invoices</span>
-        </div>
-
-        {/* Document grouping tabs */}
-        {isBatchMode && uniqueDocNames.length > 1 && (
-          <div className="bq-doc-tabs">
-            <button
-              type="button"
-              className={`bq-doc-tab${filterDoc === 'all' ? ' bq-doc-tab--active' : ''}`}
-              onClick={() => { setFilterDoc('all'); setSelectedInvoiceIndex(0); }}
-            >
-              All Documents ({invoices.length})
-            </button>
-            {uniqueDocNames.map((name) => (
-              <button
-                key={name}
-                type="button"
-                className={`bq-doc-tab${filterDoc === name ? ' bq-doc-tab--active' : ''}`}
-                onClick={() => { 
-                  setFilterDoc(name); 
-                  const foundIdx = invoices.findIndex(inv => (inv.sourceFileName || inv.fileName || inv.documentId || primaryDocId) === name);
-                  setSelectedInvoiceIndex(foundIdx !== -1 ? foundIdx : 0); 
-                }}
-              >
-                📄 {name.length > 24 ? name.slice(0, 22) + '…' : name}
-              </button>
-            ))}
-          </div>
-        )}
-
-        {/* Status filters + Search */}
-        <div className="bq-filter-bar">
-          <div className="bq-filter-tabs">
-            {[['all','All'],['ready','Ready'],['review','Needs Review'],['poor','Poor Image'],['approved','Approved'],['failed','Failed']].map(([val, label]) => (
-              <button key={val} type="button" className={`bq-filter-tab${filterStatus === val ? ' bq-filter-tab--active' : ''}`} onClick={() => setFilterStatus(val)}>{label}</button>
-            ))}
-          </div>
-          <div className="bq-search-wrap">
-            <input
-              type="text"
-              className="bq-search-input"
-              placeholder="Search invoice # or filename…"
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-            />
-            {searchQuery && <button className="bq-search-clear" onClick={() => setSearchQuery('')}>×</button>}
-          </div>
-        </div>
-
-        <div className="emir-cards-grid">
-          {filteredWithIndex.length === 0 && (
-            <div className="emir-empty-box" style={{ gridColumn: '1 / -1' }}>
-              <div className="emir-empty-icon">🔍</div>
-              <div className="emir-empty-text">No invoices match the current filters.</div>
-            </div>
-          )}
-          {filteredWithIndex.map(({ inv, globalIdx }) => {
-            const isSelected = selectedInvoiceIndex === globalIdx;
-            const invDraft = drafts[globalIdx] || {};
-            const { hasReal, hasInvoiceNumber, poor } = getInvoicePoorImageState(inv, invDraft);
-            const invHeader = invDraft.invoiceHeader || invDraft.invoice_header || invDraft.header || {};
-            const invNumberVal = hasInvoiceNumber ? (
-              invHeader.invoiceNumber || invHeader.invoice_number || invHeader.invoiceNo
-              || invHeader.invoice_no || invHeader.invoiceId || invHeader.documentNumber
-              || invDraft.invoiceNumber || inv.invoiceNumber
-            ) : null;
-            const displayNum = poor
-              ? 'Poor image'
-              : hasReal
-                ? (hasInvoiceNumber ? String(invNumberVal) : 'Poor image')
-                : ui === EXTRACTION_UI.EXTRACTED ? 'Extracted' : 'Not extracted';
-            const conf = hasReal && inv.overallConfidence != null ? Math.round(inv.overallConfidence * 100) : null;
-            const statusLabel = humanInvoiceStatus(inv, globalIdx);
-            const ui = normalizeInvoiceExtractionUi(inv);
-            const srcName = inv.sourceFileName || inv.fileName || '';
-            const invLabel = invoiceDisplayLabel(inv, globalIdx);
-            const invPageCount = invoicePageCount(inv);
-
-            return (
-              <div
-                key={inv.id || globalIdx}
-                className={`emir-card ${isSelected ? 'is-selected' : ''}`}
-                onClick={() => {
-                  setSelectedInvoiceIndex(globalIdx);
-                  runInvoiceExtraction(globalIdx, { force: false });
-                }}
-              >
-                <div className="emir-card-top">
-                  <span className="emir-card-tag">{invLabel.toUpperCase()}</span>
-                  {isSelected && <span className="emir-selected-pill">● SELECTED</span>}
-                </div>
-
-                <div className="emir-card-number" style={{ fontStyle: hasInvoiceNumber ? 'normal' : 'italic', opacity: hasInvoiceNumber ? 1 : 0.7 }}>
-                  {displayNum}
-                </div>
-
-                {srcName && (
-                  <div className="emir-card-source" title={srcName}>
-                    📄 {srcName.length > 26 ? srcName.slice(0, 24) + '…' : srcName}
-                  </div>
-                )}
-
-                <div className="emir-card-meta">
-                  <span>Pages 1–{invPageCount}</span>
-                  <span>{conf != null ? `${conf}% confidence` : 'Confidence N/A'}</span>
-                </div>
-
-                <div className="emir-card-footer">
-                  <span className={`status-pill ${poor ? 'warning-strong' : statusLabel === 'Approved' ? 'success' : ui === EXTRACTION_UI.FAILED ? 'danger' : (ui === EXTRACTION_UI.EXTRACTING || ui === EXTRACTION_UI.PREPARING) ? 'warning' : 'primary'}`}>
-                    {poor ? '⚠ Poor Image' : statusLabel}
-                  </span>
-                </div>
-              </div>
-            );
-          })}
-        </div>
-      </section>
+      <InvoiceNavigator
+        invoices={invoices}
+        drafts={drafts}
+        selectedInvoiceIndex={selectedInvoiceIndex}
+        primaryDocId={primaryDocId}
+        isBatchMode={isBatchMode}
+        onSelectInvoice={(index) => {
+          setSelectedInvoiceIndex(index);
+          if (!hasCompletedInvoiceExtraction(invoices[index])) {
+            runInvoiceExtraction(index, { force: false });
+          }
+        }}
+      />
 
       {/* ── D. CUSTOM DISCARD CONFIRMATION MODAL ─────────────────────────── */}
       {showDiscardModal && (

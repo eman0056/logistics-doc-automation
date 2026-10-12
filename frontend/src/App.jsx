@@ -1,10 +1,11 @@
 import React, { Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { apiGetJson, normalizeApiCacheUrl } from './dataCache.js';
-import { UploadMultiView, MultiInvoiceWorkspace, ExtractionProcessingPanel, triggerInvoiceExtraction, getInvoicePoorImageState } from './MultiInvoiceViews.jsx';
+import { UploadMultiView, MultiInvoiceWorkspace, InvoiceNavigator, ExtractionProcessingPanel, triggerInvoiceExtraction, getInvoicePoorImageState } from './MultiInvoiceViews.jsx';
 import { Escalations } from './Escalations.jsx';
 import { EscalationModal } from './EscalationModal.jsx';
 import { PreviewRange } from './PreviewRange.jsx';
 import { BackButton } from './BackButton.jsx';
+import { getDocumentReviewPath } from './reviewRouting.js';
 
 const API = '/api';
 
@@ -479,6 +480,30 @@ function App() {
 
   const openDeleteModal = (doc) => setDeleteTarget(doc);
 
+  const openDocumentReview = async (event, doc) => {
+    event.preventDefault();
+    event.stopPropagation();
+    try {
+      const response = await fetchJson(
+        `${API}/documents/${encodeURIComponent(doc.id)}/invoices?refresh=${Date.now()}`
+      );
+      if (!response.ok) throw new Error("Unable to check this document's invoices.");
+      const data = await response.json();
+      const invoiceCount = Math.max(
+        Number(doc.invoiceCount) || 0,
+        Number(data.invoiceCount) || 0
+      );
+      const target = getDocumentReviewPath(
+        { ...doc, invoiceCount },
+        Array.isArray(data.invoices) ? data.invoices : []
+      );
+      window.history.pushState({}, '', target);
+      setPath(target);
+    } catch (error) {
+      alert(error.message || 'Unable to open this document for review.');
+    }
+  };
+
   const handleDeleteDocument = async () => {
     if (!deleteTarget || deletingId) return;
 
@@ -515,7 +540,7 @@ function App() {
           <td>{((doc.fileSize || 0) / 1024).toFixed(1)} KB</td>
           <td>{new Date(doc.createdAt).toLocaleDateString()}</td>
           <td style={{ textAlign: 'right' }}>
-            <a href={(doc.invoiceCount > 1 || (doc.invoices || []).length > 1 || (doc.fileName || '').toLowerCase().endsWith('.pdf')) ? `/documents/${doc.id}/multi-workspace` : `/documents/${doc.id}/review`} className="nav-link" style={{ padding: '0.4rem 0.6rem', display: 'inline-flex' }}>
+            <a href={getDocumentReviewPath(doc)} onClick={(event) => openDocumentReview(event, doc)} className="nav-link" style={{ padding: '0.4rem 0.6rem', display: 'inline-flex' }}>
               Review & Edit
             </a>
             <button
@@ -850,6 +875,8 @@ function App() {
   const ReviewView = () => {
     const docId = path.split('/')[2];
     const [doc, setDoc] = useState(null);
+    const [savedInvoiceRecords, setSavedInvoiceRecords] = useState([]);
+    const [selectedInvoiceIndex, setSelectedInvoiceIndex] = useState(0);
     const [loadingDoc, setLoadingDoc] = useState(true);
     const [processing, setProcessing] = useState(false);
     const [dispatching, setDispatching] = useState(false);
@@ -868,13 +895,38 @@ function App() {
       let isMounted = true;
       const loadReview = async () => {
         try {
-          const res = await fetchJson(`${API}/documents?refresh=${Date.now()}`);
-          const json = await res.json();
+          setDoc(null);
+          setSavedInvoiceRecords([]);
+          setSelectedInvoiceIndex(0);
+          setLoadingDoc(true);
+          const [res, invoicesRes] = await Promise.all([
+            fetchJson(`${API}/documents?refresh=${Date.now()}`),
+            fetchJson(`${API}/documents/${encodeURIComponent(docId)}/invoices?refresh=${Date.now()}`),
+          ]);
+          if (!res.ok) throw new Error('Unable to load document data.');
+          if (!invoicesRes.ok) throw new Error("Unable to check this document's invoices.");
+          const [json, invoicesData] = await Promise.all([res.json(), invoicesRes.json()]);
           console.log('REVIEW API RESPONSE', { status: res.status, response: json, documentId: docId });
           const found = (json.documents || []).find((item) => item.id === docId) || null;
+          const invoiceRecords = Array.isArray(invoicesData.invoices) ? invoicesData.invoices : [];
+          if (
+            found
+            && getDocumentReviewPath(
+              { ...found, invoiceCount: Math.max(Number(found.invoiceCount) || 0, Number(invoicesData.invoiceCount) || 0) },
+              invoiceRecords
+            ).endsWith('/multi-workspace')
+          ) {
+            const target = `/documents/${encodeURIComponent(docId)}/multi-workspace`;
+            window.history.replaceState({}, '', target);
+            setPath(target);
+            return;
+          }
           console.log('EXTRACTED DATA', found?.invoices?.[0]?.extractedData || found?.extraction?.extractedData);
           console.log('INVOICE HEADER', (found?.invoices?.[0]?.extractedData || found?.extraction?.extractedData)?.invoiceHeader);
-          if (isMounted) setDoc(found);
+          if (isMounted) {
+            setDoc(found);
+            setSavedInvoiceRecords(invoiceRecords);
+          }
         } catch (error) {
           console.error(error);
         } finally {
@@ -1014,17 +1066,37 @@ function App() {
       pollingRef.current.controller?.abort();
     }, []);
 
+    const reviewInvoices = doc ? (
+      savedInvoiceRecords.length > 0
+        ? savedInvoiceRecords.map((invoice, index) => ({
+          ...invoice,
+          id: invoice.id || invoice.invoiceId || `${doc.id}-invoice-${index + 1}`,
+          invoiceIndex: invoice.invoiceIndex ?? index,
+          documentId: invoice.documentId || doc.id,
+          sourceFileName: invoice.sourceFileName || invoice.fileName || doc.fileName,
+          pageStart: invoice.pageStart || 1,
+          pageEnd: invoice.pageEnd || invoice.pageStart || doc.pageCount || 1,
+          extractedData: parseStoredInvoiceData(invoice),
+        }))
+        : [{
+          ...(doc.invoices?.[0] || {}),
+          id: doc.invoices?.[0]?.id || `${doc.id}-extracted`,
+          invoiceIndex: doc.invoices?.[0]?.invoiceIndex ?? 0,
+          documentId: doc.id,
+          sourceFileName: doc.fileName,
+          fileName: doc.fileName,
+          pageStart: doc.invoices?.[0]?.pageStart || 1,
+          pageEnd: doc.invoices?.[0]?.pageEnd || doc.pageCount || 1,
+          status: doc.invoices?.[0]?.status || doc.status,
+          extractedData: getSingleInvoiceData(doc),
+        }]
+    ) : [];
+
     useEffect(() => {
       if (!doc) return;
-      const invoiceRecord = doc.invoices?.[0];
-      const records = [{
-        ...(invoiceRecord || {}),
-        id: invoiceRecord?.id || `${doc.id}-extracted`,
-        extractedData: getSingleInvoiceData(doc),
-      }];
       setInvoiceDrafts((current) => {
         const next = { ...current };
-        records.forEach((invoice) => {
+        reviewInvoices.forEach((invoice) => {
           const latestData = parseStoredInvoiceData(invoice);
           const currentData = next[invoice.id];
           if (!currentData || Object.keys(currentData).length === 0 || Object.keys(latestData || {}).length > 0) {
@@ -1033,17 +1105,19 @@ function App() {
         });
         return next;
       });
-    }, [doc]);
+    }, [doc, savedInvoiceRecords]);
 
     if (loadingDoc) return <RouteSkeleton label="Loading review..." />;
 
     if (!doc) return <main className="page"><div className="card upload-panel">Document not found.</div></main>;
 
-    const invoiceRecord = doc.invoices?.[0];
+    const invoiceRecord = reviewInvoices[selectedInvoiceIndex] || reviewInvoices[0];
     const selectedInvoice = {
       ...(invoiceRecord || {}),
       id: invoiceRecord?.id || `${doc.id}-extracted`,
-      extractedData: getSingleInvoiceData(doc),
+      extractedData: Object.keys(parseStoredInvoiceData(invoiceRecord)).length > 0
+        ? parseStoredInvoiceData(invoiceRecord)
+        : getSingleInvoiceData(doc),
     };
     const previewUrl = `${API}/documents/${docId}/file`;
     const invoicePageStart = Number(selectedInvoice.pageStart || 1);
@@ -1362,6 +1436,21 @@ function App() {
             </div>
           </div>
         </main>
+        <InvoiceNavigator
+          invoices={reviewInvoices}
+          drafts={reviewInvoices.map((invoice) => invoiceDrafts[invoice.id] || parseStoredInvoiceData(invoice))}
+          selectedInvoiceIndex={selectedInvoiceIndex}
+          primaryDocId={docId}
+          onSelectInvoice={(index) => {
+            setSelectedInvoiceIndex(index);
+            const invoice = reviewInvoices[index];
+            if (!invoice) return;
+            const savedData = parseStoredInvoiceData(invoice);
+            if (Object.keys(savedData).length > 0) {
+              setInvoiceDrafts((current) => ({ ...current, [invoice.id]: savedData }));
+            }
+          }}
+        />
       </>
     );
   };
