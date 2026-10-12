@@ -1,15 +1,9 @@
 import os
 import io
 
-try:
-    import cv2
-except ImportError:
-    cv2 = None
+# OpenCV optional import removed; Pillow fallback will be used exclusively.
 
-try:
-    import numpy as np
-except ImportError:
-    np = None
+# NumPy optional import removed; not required for Pillow fallback.
 
 try:
     from PIL import Image, ImageFilter, ImageStat
@@ -34,11 +28,7 @@ def analyze_pil_image_quality(pil_img):
 
         # 2. Blur / Sharpness calculation (Laplacian variance)
         lap_var = None
-        if cv2 is not None and np is not None:
-            try:
-                cv_img = cv2.cvtColor(np.array(pil_img.convert('RGB')), cv2.COLOR_RGB2BGR)
-                gray_cv = cv2.cvtColor(cv_img, cv2.COLOR_BGR2GRAY)
-                lap_var = float(cv2.Laplacian(gray_cv, cv2.CV_64F).var())
+        # OpenCV fallback removed; using Pillow-only blur detection
             except Exception:
                 pass
         if lap_var is None and Image is not None and ImageStat is not None:
