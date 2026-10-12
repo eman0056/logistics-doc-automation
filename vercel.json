@@ -3,7 +3,7 @@
   "outputDirectory": "frontend/dist",
   "functions": {
     "api/index.py": {
-      "excludeFiles": "{frontend/**,n8n/**,tmp_uploads/**,docs/**,check_db.py,debug.py,recover.py,refactor.py,refactor2.py,scripts/test*,scripts/verify*,tests/**,test/**,**/node_modules/**,**/__pycache__/**,**/*.py[co],**/.pytest_cache/**,**/.mypy_cache/**,**/.ruff_cache/**,**/.vercel/**,dist/**,**/*.{bak,backup,old,orig}}"
+      "excludeFiles": "{frontend/**,n8n/**,tmp_uploads/**,docs/**,check_db.py,debug.py,recover.py,refactor.py,refactor2.py}"
     }
   },
   "rewrites": [
