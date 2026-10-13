@@ -842,6 +842,12 @@ const getInvoiceExtractionObject = (invoice) => (
 
 export const invoiceHasRealExtraction = (invoice) => Boolean(getInvoiceExtractionObject(invoice));
 
+const getSavedDocumentInvoiceData = (document) => (
+  getInvoiceExtractionObject(document?.invoices?.[0])
+  || getInvoiceExtractionObject(document?.extraction)
+  || extractRealInvoiceObject(document)
+);
+
 export const getInvoicePoorImageState = (invoice, draft = null) => {
   const extracted = getInvoiceExtractionObject(invoice);
   const draftExtraction = extractRealInvoiceObject(draft);
@@ -2108,7 +2114,7 @@ export const MultiInvoiceWorkspace = ({ docId: propDocId, docIds: propDocIds, si
       if (invoiceHasRealExtraction(match)) {
         setDrafts((prev) => ({
           ...prev,
-          [index]: extractRealInvoiceObject(match.extractedData || match.canonicalJson) || {},
+          [index]: getInvoiceExtractionObject(match) || {},
         }));
       }
       return match;
@@ -2402,15 +2408,17 @@ export const MultiInvoiceWorkspace = ({ docId: propDocId, docIds: propDocIds, si
               const summary = (docsData.documents || []).find((item) => item.id === missingDocId);
               const fullDocument = fullDocuments.find((item) => item.id === missingDocId);
               if (!summary || !fullDocument) return;
-              const savedData = extractRealInvoiceObject(
-                fullDocument.extraction?.extractedData
-                || fullDocument.extraction?.canonicalJson
-                || fullDocument.extraction?.finalSubmittedData
-              );
+              const savedData = getSavedDocumentInvoiceData(fullDocument);
               const invoiceCount = Number(summary.invoiceCount || 0);
               const isSingleDocument = invoiceCount <= 1
                 && (Boolean(savedData) || invoiceCount === 1 || isImageFile(summary));
               if (!isSingleDocument) return;
+              const savedInvoice = fullDocument.invoices?.[0] || {};
+              const savedStatus = savedInvoice.status
+                || savedInvoice.extractionStatus
+                || fullDocument.status
+                || summary.status
+                || (savedData ? 'EXTRACTED' : 'PENDING');
               invoiceList.push({
                 id: `${missingDocId}-invoice-1`,
                 invoiceId: `${missingDocId}-invoice-1`,
@@ -2420,8 +2428,8 @@ export const MultiInvoiceWorkspace = ({ docId: propDocId, docIds: propDocIds, si
                 sourceFileName: summary.fileName,
                 pageStart: 1,
                 pageEnd: fullDocument.pageCount || 1,
-                status: fullDocument.status || summary.status || 'PENDING',
-                extractionStatus: fullDocument.status || summary.status || 'PENDING',
+                status: savedStatus,
+                extractionStatus: savedStatus,
                 extractionComplete: Boolean(savedData),
                 extractedData: savedData || {},
                 canonicalJson: savedData || {},
@@ -2445,7 +2453,10 @@ export const MultiInvoiceWorkspace = ({ docId: propDocId, docIds: propDocIds, si
           invoiceList = Array.isArray(invData.invoices) ? invData.invoices : [];
 
           const singleReviewRoute = Number(foundDoc?.invoiceCount || 0) <= 1
-            && (singleInvoiceMode || expectedInvoiceCountParam === 1 || window.location.pathname.endsWith('/review'));
+            && (singleInvoiceMode
+              || expectedInvoiceCountParam === 1
+              || window.location.pathname.endsWith('/review')
+              || isImageFile(foundDoc));
           if (invoiceList.length === 0 && foundDoc) {
             const fullDocsRes = await fetch(`${API}/documents?refresh=${Date.now()}`, { cache: 'no-store' });
             if (!fullDocsRes.ok) {
@@ -2453,12 +2464,13 @@ export const MultiInvoiceWorkspace = ({ docId: propDocId, docIds: propDocIds, si
             }
             const fullDocsData = await fullDocsRes.json();
             foundDoc = (fullDocsData.documents || []).find((document) => document.id === docId) || foundDoc;
-            const savedData = extractRealInvoiceObject(
-              foundDoc.extraction?.extractedData
-              || foundDoc.extraction?.canonicalJson
-              || foundDoc.extraction?.finalSubmittedData
-            );
+            const savedData = getSavedDocumentInvoiceData(foundDoc);
+            const savedInvoice = foundDoc.invoices?.[0] || {};
             if (savedData) {
+              const savedStatus = savedInvoice.status
+                || savedInvoice.extractionStatus
+                || foundDoc.status
+                || 'EXTRACTED';
               invoiceList = [{
                 id: `${docId}-saved-invoice-1`,
                 invoiceId: `${docId}-saved-invoice-1`,
@@ -2468,8 +2480,8 @@ export const MultiInvoiceWorkspace = ({ docId: propDocId, docIds: propDocIds, si
                 sourceFileName: foundDoc.fileName,
                 pageStart: 1,
                 pageEnd: foundDoc.pageCount || 1,
-                status: foundDoc.status || 'EXTRACTED',
-                extractionStatus: foundDoc.status || 'EXTRACTED',
+                status: savedStatus,
+                extractionStatus: savedStatus,
                 extractionComplete: true,
                 extractedData: savedData,
                 canonicalJson: savedData,
@@ -2562,7 +2574,7 @@ export const MultiInvoiceWorkspace = ({ docId: propDocId, docIds: propDocIds, si
 
           const initialDrafts = {};
           normalized.forEach((inv, idx) => {
-            const realObj = extractRealInvoiceObject(inv.extractedData || inv.canonicalJson) || {};
+            const realObj = getInvoiceExtractionObject(inv) || {};
             initialDrafts[idx] = realObj;
           });
           setDrafts(initialDrafts);
