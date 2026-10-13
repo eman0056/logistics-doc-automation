@@ -29,8 +29,6 @@ def analyze_pil_image_quality(pil_img):
         # 2. Blur / Sharpness calculation (Laplacian variance)
         lap_var = None
         # OpenCV fallback removed; using Pillow-only blur detection
-            except Exception:
-                pass
         if lap_var is None and Image is not None and ImageStat is not None:
             try:
                 lap_filter = ImageFilter.Kernel((3, 3), [0, 1, 0, 1, -4, 1, 0, 1, 0], scale=1, offset=128)
