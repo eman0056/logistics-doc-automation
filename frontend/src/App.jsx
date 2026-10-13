@@ -1,6 +1,6 @@
 import React, { Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { apiGetJson, normalizeApiCacheUrl } from './dataCache.js';
-import { UploadMultiView, MultiInvoiceWorkspace, InvoiceNavigator, ExtractionProcessingPanel, triggerInvoiceExtraction, getInvoicePoorImageState } from './MultiInvoiceViews.jsx';
+import { UploadMultiView, MultiInvoiceWorkspace, InvoiceNavigator, ExtractionProcessingPanel, InvoiceExtractionAction, triggerInvoiceExtraction, getInvoicePoorImageState } from './MultiInvoiceViews.jsx';
 import { Escalations } from './Escalations.jsx';
 import { EscalationModal } from './EscalationModal.jsx';
 import { PreviewRange } from './PreviewRange.jsx';
@@ -401,6 +401,12 @@ function App() {
     if (pathname === '/review-queue') return 'queue';
     return 'documents';
   }, [path]);
+
+  useEffect(() => {
+    if (route === 'review' || route === 'multi-workspace') {
+      window.scrollTo(0, 0);
+    }
+  }, [path, route]);
 
   const nav = (
     <header className="topbar">
@@ -992,6 +998,11 @@ function App() {
             status: 'FAILED',
             errorMessage: error.message || 'n8n did not accept the extraction request.',
           } : current);
+          setSavedInvoiceRecords((current) => current.map((invoice, index) => (
+            index === 0
+              ? { ...invoice, status: 'FAILED', extractionStatus: 'FAILED', errorMessage: error.message }
+              : invoice
+          )));
         }
         return;
       } finally {
@@ -1027,7 +1038,10 @@ function App() {
               };
             }
           }
-          if (latestDoc) setDoc(latestDoc);
+          if (latestDoc) {
+            setDoc(latestDoc);
+            if (Array.isArray(latestDoc.invoices)) setSavedInvoiceRecords(latestDoc.invoices);
+          }
 
           const terminalApiStatus = status?.status || '';
           const stopPolling = Boolean(
@@ -1044,6 +1058,11 @@ function App() {
           if (status.status === 'FAILED') {
             setProcessing(false);
             extractionTriggeredRef.current = false;
+            setSavedInvoiceRecords((current) => current.map((invoice, index) => (
+              index === 0
+                ? { ...invoice, status: 'FAILED', extractionStatus: 'FAILED', errorMessage: status.errorMessage }
+                : invoice
+            )));
             return;
           }
         } catch (error) {
@@ -1352,9 +1371,6 @@ function App() {
               <p className="subtle-copy mt-2">Edit the exact extracted key-value pairs before final generation.</p>
             </div>
             <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap' }}>
-              <button type="button" className="primary-btn" onClick={startSingleInvoiceExtraction} disabled={processing || dispatching || !doc || Object.keys(getSingleInvoiceData(doc)).length > 0}>
-                {dispatching ? 'Connecting to n8n...' : processing ? 'Extracting...' : 'Extract Invoice Data'}
-              </button>
               <button type="button" className="secondary-btn" onClick={discardDocument} disabled={discarding}>
                 {discarding ? 'Discarding...' : 'Discard'}
               </button>
@@ -1441,6 +1457,19 @@ function App() {
           drafts={reviewInvoices.map((invoice) => invoiceDrafts[invoice.id] || parseStoredInvoiceData(invoice))}
           selectedInvoiceIndex={selectedInvoiceIndex}
           primaryDocId={docId}
+          renderCardAction={() => {
+            const hasExtractedData = Object.keys(getSingleInvoiceData(doc)).length > 0;
+            if (hasExtractedData) return null;
+            return (
+              <InvoiceExtractionAction
+                onExtract={startSingleInvoiceExtraction}
+                disabled={processing || dispatching}
+                isPreparing={dispatching}
+                isExtracting={processing}
+                isFailed={doc?.status === 'FAILED'}
+              />
+            );
+          }}
           onSelectInvoice={(index) => {
             setSelectedInvoiceIndex(index);
             const invoice = reviewInvoices[index];

@@ -104,3 +104,4 @@ prisma/node_modules/
 .DS_Store
 .AppleDouble
 .LSOverride
+frontend/node_modules/

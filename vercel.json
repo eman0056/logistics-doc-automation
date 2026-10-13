@@ -1,6 +1,11 @@
 {
   "buildCommand": "npm install --prefix frontend && npm run --prefix frontend build",
   "outputDirectory": "frontend/dist",
+  "functions": {
+    "api/index.py": {
+      "excludeFiles": "{frontend/**,n8n/**,tmp_uploads/**,docs/**,check_db.py,debug.py,recover.py,refactor.py,refactor2.py}"
+    }
+  },
   "rewrites": [
     {
       "source": "/api/(.*)",
