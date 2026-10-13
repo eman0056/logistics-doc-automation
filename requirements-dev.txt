@@ -1,0 +1,4 @@
+# Local development only (not installed on Vercel)
+uvicorn
+requests
+python-docx
