@@ -1334,6 +1334,20 @@ export const MultiInvoicePageViewer = ({ pdfUrl, pageNumber = 1, zoomMode = 'fit
 };
 // ── END MultiInvoicePageViewer ───────────────────────────────────────────────
 
+export const InvoiceExtractionAction = ({ onExtract, disabled, isPreparing, isExtracting, isFailed }) => (
+  <button
+    type="button"
+    className="primary-btn"
+    disabled={disabled}
+    onClick={(event) => {
+      event.stopPropagation();
+      onExtract();
+    }}
+  >
+    {isPreparing ? 'Preparing...' : isExtracting ? 'Extracting...' : isFailed ? 'Retry Extraction' : 'Extract Invoice Data'}
+  </button>
+);
+
 export const DocumentViewer = ({ docId, selectedGroup }) => {
   const containerRef = useRef(null);
   const pageStart = selectedGroup?.pageStart || (selectedGroup?.pages ? selectedGroup.pages[0] : 1);
@@ -1862,6 +1876,7 @@ export const InvoiceNavigator = ({
   primaryDocId,
   isBatchMode = false,
   onSelectInvoice,
+  renderCardAction,
 }) => {
   const [filterDoc, setFilterDoc] = useState('all');
   const [filterStatus, setFilterStatus] = useState('all');
@@ -2009,6 +2024,7 @@ export const InvoiceNavigator = ({
                 <span className={`status-pill ${poor ? 'warning-strong' : statusLabel === 'Approved' ? 'success' : ui === EXTRACTION_UI.FAILED ? 'danger' : (ui === EXTRACTION_UI.EXTRACTING || ui === EXTRACTION_UI.PREPARING) ? 'warning' : 'primary'}`}>
                   {poor ? '⚠ Poor Image' : statusLabel}
                 </span>
+                {renderCardAction?.(inv, globalIdx)}
               </div>
             </div>
           );
@@ -3134,14 +3150,10 @@ export const MultiInvoiceWorkspace = ({ docId: propDocId, docIds: propDocIds, si
             </div>
 
             <div className="emir-summary-meta" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
-              {!hasExtractedData && !isPreparing && !isExtracting && (
-                <button
-                  type="button"
-                  className="primary-btn"
-                  onClick={() => handleInvoiceExtraction(selectedInvoiceIndex, { force: true })}
-                >
-                  Extract Invoice Data
-                </button>
+              {!isSingleDocumentMode && !hasExtractedData && !isPreparing && !isExtracting && (
+                <InvoiceExtractionAction
+                  onExtract={() => handleInvoiceExtraction(selectedInvoiceIndex, { force: true })}
+                />
               )}
               <span className={`status-pill ${isPoorQuality ? 'warning-strong' : selectedInvoice?.status === 'APPROVED' ? 'success' : isExtractionFailed ? 'danger' : (isPreparing || isExtracting) ? 'warning' : 'primary'}`}>
                 {isPoorQuality ? '⚠ Poor Image Quality' : invoiceStatusLabel}
@@ -3221,6 +3233,23 @@ export const MultiInvoiceWorkspace = ({ docId: propDocId, docIds: propDocIds, si
         selectedInvoiceIndex={selectedInvoiceIndex}
         primaryDocId={primaryDocId}
         isBatchMode={isBatchMode}
+        renderCardAction={isSingleDocumentMode ? (invoice, index) => {
+          const ui = normalizeInvoiceExtractionUi(invoice);
+          const extracted = invoiceHasRealExtraction(invoice) || Boolean(extractRealInvoiceObject(drafts[index]));
+          if (extracted) return null;
+          const preparing = ui === EXTRACTION_UI.PREPARING;
+          const extracting = ui === EXTRACTION_UI.EXTRACTING;
+          const failed = ui === EXTRACTION_UI.FAILED;
+          return (
+            <InvoiceExtractionAction
+              onExtract={() => handleInvoiceExtraction(index, { force: true })}
+              disabled={preparing || extracting}
+              isPreparing={preparing}
+              isExtracting={extracting}
+              isFailed={failed}
+            />
+          );
+        } : undefined}
         onSelectInvoice={(index) => {
           setSelectedInvoiceIndex(index);
           if (isSingleInvoiceDocument(invoices[index])) {
