@@ -402,6 +402,12 @@ function App() {
     return 'documents';
   }, [path]);
 
+  useEffect(() => {
+    if (route === 'review' || route === 'multi-workspace') {
+      window.scrollTo(0, 0);
+    }
+  }, [path, route]);
+
   const nav = (
     <header className="topbar">
       <div className="topbar-inner">

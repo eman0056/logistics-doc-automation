@@ -2457,7 +2457,11 @@ export const MultiInvoiceWorkspace = ({ docId: propDocId, docIds: propDocIds, si
               || expectedInvoiceCountParam === 1
               || window.location.pathname.endsWith('/review')
               || isImageFile(foundDoc));
-          if (invoiceList.length === 0 && foundDoc) {
+          const needsSavedDocumentData = invoiceList.length === 0
+            || (singleReviewRoute
+              && invoiceList.length === 1
+              && !invoiceHasRealExtraction(invoiceList[0]));
+          if (needsSavedDocumentData && foundDoc) {
             const fullDocsRes = await fetch(`${API}/documents?refresh=${Date.now()}`, { cache: 'no-store' });
             if (!fullDocsRes.ok) {
               throw new Error(`Unable to load saved document data (HTTP ${fullDocsRes.status})`);
@@ -2467,27 +2471,39 @@ export const MultiInvoiceWorkspace = ({ docId: propDocId, docIds: propDocIds, si
             const savedData = getSavedDocumentInvoiceData(foundDoc);
             const savedInvoice = foundDoc.invoices?.[0] || {};
             if (savedData) {
-              const savedStatus = savedInvoice.status
-                || savedInvoice.extractionStatus
-                || foundDoc.status
-                || 'EXTRACTED';
-              invoiceList = [{
-                id: `${docId}-saved-invoice-1`,
-                invoiceId: `${docId}-saved-invoice-1`,
-                documentId: docId,
-                invoiceIndex: 0,
-                fileName: foundDoc.fileName,
-                sourceFileName: foundDoc.fileName,
-                pageStart: 1,
-                pageEnd: foundDoc.pageCount || 1,
-                status: savedStatus,
-                extractionStatus: savedStatus,
-                extractionComplete: true,
-                extractedData: savedData,
-                canonicalJson: savedData,
-                overallConfidence: foundDoc.overallConfidence,
-              }];
-            } else if (singleReviewRoute) {
+              if (invoiceList.length === 1) {
+                const currentInvoice = invoiceList[0];
+                invoiceList = [{
+                  ...currentInvoice,
+                  status: currentInvoice.status || savedInvoice.status || foundDoc.status || 'EXTRACTED',
+                  extractionStatus: currentInvoice.extractionStatus || savedInvoice.extractionStatus || foundDoc.status || 'EXTRACTED',
+                  extractionComplete: true,
+                  extractedData: savedData,
+                  canonicalJson: currentInvoice.canonicalJson || savedData,
+                }];
+              } else {
+                const savedStatus = savedInvoice.status
+                  || savedInvoice.extractionStatus
+                  || foundDoc.status
+                  || 'EXTRACTED';
+                invoiceList = [{
+                  id: `${docId}-saved-invoice-1`,
+                  invoiceId: `${docId}-saved-invoice-1`,
+                  documentId: docId,
+                  invoiceIndex: 0,
+                  fileName: foundDoc.fileName,
+                  sourceFileName: foundDoc.fileName,
+                  pageStart: 1,
+                  pageEnd: foundDoc.pageCount || 1,
+                  status: savedStatus,
+                  extractionStatus: savedStatus,
+                  extractionComplete: true,
+                  extractedData: savedData,
+                  canonicalJson: savedData,
+                  overallConfidence: foundDoc.overallConfidence,
+                }];
+              }
+            } else if (invoiceList.length === 0 && singleReviewRoute) {
               invoiceList = [{
                 id: `${docId}-invoice-1`,
                 invoiceId: `${docId}-invoice-1`,
