@@ -2648,6 +2648,11 @@ export const MultiInvoiceWorkspace = ({ docId: propDocId, docIds: propDocIds, si
 
   const selectedInvoice = invoices[selectedInvoiceIndex] || null;
   const currentDraft = drafts[selectedInvoiceIndex] || {};
+  const uniqueDocNames = [...new Set(
+    invoices
+      .map((invoice) => invoice.sourceFileName || invoice.fileName || invoice.documentId || primaryDocId)
+      .filter(Boolean)
+  )];
 
   const pageStart = selectedInvoice?.pageStart || 1;
   const pageEnd = selectedInvoice?.pageEnd || pageStart;
