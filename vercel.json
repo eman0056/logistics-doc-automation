@@ -3,6 +3,7 @@
   "outputDirectory": "frontend/dist",
   "functions": {
     "api/index.py": {
+      "includeFiles": "scripts/**",
       "excludeFiles": "{frontend/**,n8n/**,tmp_uploads/**,docs/**,check_db.py,debug.py,recover.py,refactor.py,refactor2.py}"
     }
   },

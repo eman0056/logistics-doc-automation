@@ -24,9 +24,8 @@ try:
 except:
     psycopg2 = None
 
-sys.path.append(os.path.join(BASE_DIR, "scripts"))
-from invoice_routing import detect_invoice_groups
-from image_quality import get_image_blur_quality, get_pdf_page_range_quality
+from scripts.invoice_routing import detect_invoice_groups
+from scripts.image_quality import get_image_blur_quality, get_pdf_page_range_quality
 
 app = FastAPI()
 
