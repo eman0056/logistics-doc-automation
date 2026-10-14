@@ -3154,16 +3154,6 @@ export const MultiInvoiceWorkspace = ({ docId: propDocId, docIds: propDocIds, si
               </div>
             </div>
 
-            <div className="emir-summary-meta" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
-              {!isSingleDocumentMode && !hasExtractedData && !isPreparing && !isExtracting && (
-                <InvoiceExtractionAction
-                  onExtract={() => handleInvoiceExtraction(selectedInvoiceIndex, { force: true })}
-                />
-              )}
-              <span className={`status-pill ${isPoorQuality ? 'warning-strong' : selectedInvoice?.status === 'APPROVED' ? 'success' : isExtractionFailed ? 'danger' : (isPreparing || isExtracting) ? 'warning' : 'primary'}`}>
-                {isPoorQuality ? '⚠ Poor Image Quality' : invoiceStatusLabel}
-              </span>
-            </div>
           </div>
 
           {/* WARNING BANNER FOR POOR IMAGE QUALITY */}
