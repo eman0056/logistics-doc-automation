@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { getInvoicePoorImageState } from './MultiInvoiceViews.jsx';
+import { getInvoiceQualityReasonLabel } from './invoiceQualityReasons.js';
 
 export const DEFAULT_DEMO_ESCALATIONS = [];
 
@@ -49,13 +50,14 @@ export const Escalations = () => {
           const invoiceIndex = hasInvoiceIndex ? Number(invoice.invoiceIndex) : NaN;
           const invoiceId = invoice.id || `${invoiceDocumentId}:${invoiceIndex}`;
           const invoiceKey = `${invoiceDocumentId}:${invoiceIndex}`;
+          const qualityState = getInvoicePoorImageState(invoice);
           if (
             !invoiceDocumentId
             || !doc
             || !hasInvoiceIndex
             || !Number.isInteger(invoiceIndex)
             || invoiceIndex < 0
-            || !getInvoicePoorImageState(invoice).poor
+            || !qualityState.needsReview
             || seenInvoices.has(invoiceKey)
           ) return;
           seenInvoices.add(invoiceKey);
@@ -65,13 +67,14 @@ export const Escalations = () => {
             invoiceIndex,
             docNumber: invoice.fileName || invoice.sourceFileName || doc.fileName || invoiceDocumentId,
             invoiceNumber: `Invoice #${invoiceIndex + 1}`,
-            reason: 'Poor Image Quality',
+            reason: qualityState.poor ? 'Poor Image Quality' : 'Missing Invoice Number',
+            reasonLabel: qualityState.qualityReasons.map(getInvoiceQualityReasonLabel).join(' / '),
             date: String(doc.createdAt || '').slice(0, 10),
             status: 'Pending Review',
             isMulti: true,
             scope: 'invoice',
-            poorImageQuality: true,
-            hasInvoiceNumber: false,
+            poorImageQuality: qualityState.poor,
+            hasInvoiceNumber: qualityState.hasInvoiceNumber,
             hasExtraction: true
           });
         });
@@ -127,19 +130,19 @@ export const Escalations = () => {
     return matchesSearch;
   });
   const filtered = searchable.filter(e => {
-    if (filterReason === 'POOR_QUALITY') return e.reason.includes('Poor Image Quality');
-    if (filterReason === 'ESCALATED') return e.reason.includes('Escalation');
+    if (filterReason === 'POOR_QUALITY') return e.reason === 'Poor Image Quality';
+    if (filterReason === 'ESCALATED') return e.reason === 'Missing Invoice Number' || e.reason.includes('Escalation');
     return true;
   });
-  const poorQualityCount = searchable.filter(e => e.reason.includes('Poor Image Quality')).length;
-  const dataIssuesCount = searchable.filter(e => e.reason.includes('Escalation')).length;
+  const poorQualityCount = searchable.filter(e => e.reason === 'Poor Image Quality').length;
+  const dataIssuesCount = searchable.filter(e => e.reason === 'Missing Invoice Number' || e.reason.includes('Escalation')).length;
 
   return (
     <main className="page">
       <div className="section-header">
         <div>
           <div className="eyebrow">Attention Required</div>
-          <h1 className="page-title">Flagged & Poor Quality Escalations</h1>
+          <h1 className="page-title">Flagged Invoice Escalations</h1>
           <p className="subtle-copy mt-2">Review document image quality alerts and missing data before approval.</p>
         </div>
         <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center' }}>
@@ -197,7 +200,7 @@ export const Escalations = () => {
               onClick={() => setFilterReason('POOR_QUALITY')}
               style={{ padding: '0.4rem 0.8rem', fontSize: '0.8rem' }}
             >
-              Poor Quality 📸 ({poorQualityCount})
+              Poor Image Quality ({poorQualityCount})
             </button>
             <button 
               type="button"
@@ -226,7 +229,7 @@ export const Escalations = () => {
             </thead>
             <tbody>
               {filtered.map((esc) => {
-                const isPoorQuality = esc.reason.includes('Poor Image Quality');
+                const isPoorQuality = esc.reasonLabel?.includes('Poor Image Quality');
                 const reviewUrl = `/documents/${esc.documentId}/multi-workspace?invoiceIndex=${esc.invoiceIndex}`;
 
                 return (
@@ -240,7 +243,7 @@ export const Escalations = () => {
                     </td>
                     <td>
                       <span className={`status-pill ${isPoorQuality ? 'danger' : 'warning'}`}>
-                        {isPoorQuality ? '📸⚠️ ' : '⚠️ '} {esc.reason}
+                        {isPoorQuality ? '📸⚠️ ' : '⚠️ '} {esc.reasonLabel || 'Needs Review'}
                       </span>
                     </td>
                     <td>{esc.date}</td>

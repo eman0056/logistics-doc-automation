@@ -88,8 +88,8 @@ def test_callback():
     status, ocr, json_str = inv_row
     print(f"Updated Invoice Status: {status}")
     
-    if status != 'EXTRACTED' and status != 'POOR_IMAGE_QUALITY':
-        print(f"ERROR: Expected status EXTRACTED, got {status}")
+    if status != 'NEEDS_REVIEW':
+        print(f"ERROR: Expected missing-number review status, got {status}")
         sys.exit(1)
         
     # Check Document status

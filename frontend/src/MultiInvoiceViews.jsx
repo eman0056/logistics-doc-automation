@@ -4,6 +4,7 @@ import pdfWorkerUrl from 'pdfjs-dist/build/pdf.worker.min.js?url';
 import { apiGetJson, normalizeApiCacheUrl } from './dataCache.js';
 import { EscalationModal } from './EscalationModal.jsx';
 import { BackButton } from './BackButton.jsx';
+import { getInvoiceQualityState as classifyInvoiceQuality, getInvoiceQualityReasonLabel, getInvoiceQualityReasonMessage } from './invoiceQualityReasons.js';
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorkerUrl || `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js`;
 
@@ -131,7 +132,7 @@ const normalizeInvoiceExtractionUi = (invoice) => {
   if (['EXTRACTING', 'PROCESSING'].includes(status)) return EXTRACTION_UI.EXTRACTING;
   if (['PREPARING'].includes(status)) return EXTRACTION_UI.PREPARING;
   if (['EXTRACTED', 'IN_REVIEW', 'APPROVED', 'INVOICE_GENERATED', 'READY FOR REVIEW',
-    'POOR_IMAGE_QUALITY', 'POOR IMAGE QUALITY'].includes(status)) {
+    'NEEDS_REVIEW', 'POOR_IMAGE_QUALITY', 'POOR IMAGE QUALITY'].includes(status)) {
     return EXTRACTION_UI.EXTRACTED;
   }
   return EXTRACTION_UI.IDLE;
@@ -141,13 +142,14 @@ const hasCompletedInvoiceExtraction = (invoice) => {
   if (invoiceHasRealExtraction(invoice)) return true;
   const status = String(invoice?.status || invoice?.extractionStatus || '').toUpperCase();
   return ['EXTRACTED', 'IN_REVIEW', 'APPROVED', 'INVOICE_GENERATED', 'READY FOR REVIEW',
-    'POOR_IMAGE_QUALITY', 'POOR IMAGE QUALITY'].includes(status);
+    'NEEDS_REVIEW', 'POOR_IMAGE_QUALITY', 'POOR IMAGE QUALITY'].includes(status);
 };
 
 const humanInvoiceStatus = (invoice, index = 0) => {
   const ui = normalizeInvoiceExtractionUi(invoice);
-  if (getInvoicePoorImageState(invoice).poor) {
-    return 'Poor Image Quality';
+  const qualityState = getInvoicePoorImageState(invoice);
+  if (qualityState.qualityReasons.length > 0) {
+    return qualityState.qualityReasons.map(getInvoiceQualityReasonLabel).join(' / ');
   }
   if (ui === EXTRACTION_UI.EXTRACTED) {
     if (invoice?.status === 'APPROVED') return 'Approved';
@@ -541,7 +543,7 @@ export const UploadMultiView = () => {
             </div>
             <div className="bq-summary-stat bq-summary-stat--warning">
               <div className="bq-summary-stat__value">{batchResults.poorQuality}</div>
-              <div className="bq-summary-stat__label">Poor Image Quality</div>
+              <div className="bq-summary-stat__label">Invoices Need Review</div>
             </div>
             <div className="bq-summary-stat bq-summary-stat--danger">
               <div className="bq-summary-stat__value">{batchResults.failed}</div>
@@ -868,17 +870,18 @@ export const getInvoicePoorImageState = (invoice, draft = null) => {
     (value) => value != null && String(value).trim() !== ''
   );
   const hasInvoiceNumber = invNumberVal != null && String(invNumberVal).trim() !== '';
-  const statuses = [invoice?.status, invoice?.extractionStatus]
-    .map((value) => String(value || '').toUpperCase());
-  const hasPerInvoicePoorFlag = invoice?.poorImageQuality === true
-    || statuses.some((status) => status === 'POOR_IMAGE_QUALITY' || status === 'POOR IMAGE QUALITY')
-    || (invoice?.imageQuality != null && Number(invoice.imageQuality) < 0.6);
-  const statusSaysPoor = statuses.some((status) => status === 'POOR_IMAGE_QUALITY' || status === 'POOR IMAGE QUALITY');
+  const imageQuality = invoice?.imageQuality ?? draft?.imageQuality;
+  const classifiedQuality = classifyInvoiceQuality({
+    hasExtraction: hasReal,
+    hasInvoiceNumber,
+    imageQuality,
+    status: invoice?.status || invoice?.extractionStatus,
+  });
 
   return {
     hasReal,
     hasInvoiceNumber,
-    poor: statusSaysPoor || (hasReal && (!hasInvoiceNumber || hasPerInvoicePoorFlag)),
+    ...classifiedQuality,
   };
 };
 
@@ -1678,7 +1681,9 @@ export const InvoiceCard = ({ idx, group, data, isLoading, errorMsg, isSelected,
 
   // NEW REQUIREMENTS: STATUS DISPLAY
   const status = draft.status || 'Ready for Review';
-  const hasPoorQuality = getInvoicePoorImageState(draft, draft).poor;
+  const qualityState = getInvoicePoorImageState(draft, draft);
+  const hasPoorQuality = qualityState.needsReview;
+  const issueLabel = qualityState.qualityReasons.map(getInvoiceQualityReasonLabel).join(' / ');
 
   return (
     <div 
@@ -1693,7 +1698,7 @@ export const InvoiceCard = ({ idx, group, data, isLoading, errorMsg, isSelected,
         {/* Status indicator */}
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
             <span className={`status-pill ${hasPoorQuality ? 'warning-strong' : errorMsg ? 'danger' : 'success'}`}>
-                {hasPoorQuality ? '📸 Poor Image Quality' : status}
+                {hasPoorQuality ? issueLabel : status}
             </span>
         </div>
 
@@ -1721,7 +1726,11 @@ export const InvoiceCard = ({ idx, group, data, isLoading, errorMsg, isSelected,
 
       {hasPoorQuality && (
           <div className="error-message" style={{ marginBottom: '0.5rem', background: 'rgba(234, 106, 106, 0.2)', padding: '8px', borderRadius: '4px' }}>
-            <p style={{ margin: 0, fontSize: '0.8rem' }}><strong>⚠ Poor Image Quality</strong> - The source image is unclear and requires manual review.</p>
+            {qualityState.qualityReasons.map((reason) => (
+              <p key={reason} style={{ margin: 0, fontSize: '0.8rem' }}>
+                <strong>⚠ {getInvoiceQualityReasonLabel(reason)}</strong> - {getInvoiceQualityReasonMessage(reason)}
+              </p>
+            ))}
           </div>
       )}
 
@@ -1820,6 +1829,7 @@ export const InvoiceCard = ({ idx, group, data, isLoading, errorMsg, isSelected,
           docId={draft.documentId || ''}
           invoiceId={draft.invoiceId || String(idx)}
           invoiceLabel={`Invoice ${idx + 1}`}
+          reasonLabel={issueLabel}
           onClose={() => setShowEscalationModal(false)}
           onSuccess={() => {
             setShowEscalationModal(false);
@@ -1885,16 +1895,16 @@ export const InvoiceNavigator = ({
   const filteredInvoices = invoices.filter((inv, idx) => {
     const srcName = inv.sourceFileName || inv.fileName || inv.documentId || primaryDocId;
     const status = inv.status || inv.extractionStatus || '';
-    const isPoor = getInvoicePoorImageState(inv, drafts[idx]).poor;
+    const qualityState = getInvoicePoorImageState(inv, drafts[idx]);
     if (filterDoc !== 'all' && srcName !== filterDoc) return false;
 
     if (filterStatus === 'ready') {
       const ui = normalizeInvoiceExtractionUi(inv);
-      if (isPoor || (ui !== EXTRACTION_UI.EXTRACTED && !['EXTRACTED', 'IN_REVIEW', 'APPROVED', 'Ready for Review'].includes(status))) return false;
+      if (qualityState.needsReview || (ui !== EXTRACTION_UI.EXTRACTED && !['EXTRACTED', 'IN_REVIEW', 'APPROVED', 'Ready for Review'].includes(status))) return false;
     } else if (filterStatus === 'review') {
-      if (isPoor || (status !== 'NEEDS_REVIEW' && status !== 'Needs Review')) return false;
+      if (!qualityState.needsReview || qualityState.poor) return false;
     } else if (filterStatus === 'poor') {
-      if (!isPoor) return false;
+      if (!qualityState.poor) return false;
     } else if (filterStatus === 'approved') {
       if (status !== 'APPROVED' && status !== 'Approved') return false;
     } else if (filterStatus === 'failed') {
@@ -1949,7 +1959,7 @@ export const InvoiceNavigator = ({
 
       <div className="bq-filter-bar">
         <div className="bq-filter-tabs">
-          {[['all', 'All'], ['ready', 'Ready'], ['review', 'Needs Review'], ['poor', 'Poor Image'], ['approved', 'Approved'], ['failed', 'Failed']].map(([value, label]) => (
+          {[['all', 'All'], ['ready', 'Ready'], ['review', 'Needs Review'], ['poor', 'Flagged'], ['approved', 'Approved'], ['failed', 'Failed']].map(([value, label]) => (
             <button key={value} type="button" className={`bq-filter-tab${filterStatus === value ? ' bq-filter-tab--active' : ''}`} onClick={() => setFilterStatus(value)}>{label}</button>
           ))}
         </div>
@@ -1975,7 +1985,8 @@ export const InvoiceNavigator = ({
         {filteredWithIndex.map(({ inv, globalIdx }) => {
           const isSelected = selectedInvoiceIndex === globalIdx;
           const invDraft = drafts[globalIdx] || {};
-          const { hasReal, hasInvoiceNumber, poor } = getInvoicePoorImageState(inv, invDraft);
+          const qualityState = getInvoicePoorImageState(inv, invDraft);
+          const { hasReal, hasInvoiceNumber, poor } = qualityState;
           const ui = normalizeInvoiceExtractionUi(inv);
           const invHeader = invDraft.invoiceHeader || invDraft.invoice_header || invDraft.header || {};
           const invNumberVal = hasInvoiceNumber ? (
@@ -1984,9 +1995,9 @@ export const InvoiceNavigator = ({
             || invDraft.invoiceNumber || inv.invoiceNumber
           ) : null;
           const displayNum = poor
-            ? 'Poor image'
+            ? qualityState.qualityReasons.map(getInvoiceQualityReasonLabel).join(' / ')
             : hasReal
-              ? (hasInvoiceNumber ? String(invNumberVal) : 'Poor image')
+              ? (hasInvoiceNumber ? String(invNumberVal) : 'Invoice number missing')
               : ui === EXTRACTION_UI.EXTRACTED ? 'Extracted' : 'Not extracted';
           const conf = hasReal && inv.overallConfidence != null ? Math.round(inv.overallConfidence * 100) : null;
           const statusLabel = humanInvoiceStatus(inv, globalIdx);
@@ -2022,7 +2033,7 @@ export const InvoiceNavigator = ({
 
               <div className="emir-card-footer">
                 <span className={`status-pill ${poor ? 'warning-strong' : statusLabel === 'Approved' ? 'success' : ui === EXTRACTION_UI.FAILED ? 'danger' : (ui === EXTRACTION_UI.EXTRACTING || ui === EXTRACTION_UI.PREPARING) ? 'warning' : 'primary'}`}>
-                  {poor ? '⚠ Poor Image' : statusLabel}
+                  {poor ? qualityState.qualityReasons.map(getInvoiceQualityReasonLabel).join(' / ') : statusLabel}
                 </span>
                 {renderCardAction?.(inv, globalIdx)}
               </div>
@@ -2174,12 +2185,13 @@ export const MultiInvoiceWorkspace = ({ docId: propDocId, docIds: propDocIds, si
         const header = realObj.invoiceHeader || realObj.invoice_header || realObj.header || realObj;
         const invoiceNumber = header.invoiceNumber || header.invoice_number || header.invoiceNo || header.invoice_no || header.invoiceId || header.documentNumber;
         const hasInvoiceNumber = invoiceNumber != null && String(invoiceNumber).trim() !== '';
-        const resultStatus = hasInvoiceNumber ? 'EXTRACTED' : 'POOR_IMAGE_QUALITY';
+        const hasLowVisualQuality = invoice.imageQuality != null && Number(invoice.imageQuality) < 0.6;
+        const resultStatus = hasLowVisualQuality ? 'POOR_IMAGE_QUALITY' : hasInvoiceNumber ? 'EXTRACTED' : 'NEEDS_REVIEW';
         patchInvoiceAt(index, {
           extractionUi: EXTRACTION_UI.EXTRACTED,
           status: resultStatus,
           extractionStatus: resultStatus,
-          poorImageQuality: !hasInvoiceNumber,
+          poorImageQuality: hasLowVisualQuality,
           extractedData: realObj,
           canonicalJson: realObj,
           extractionError: null,
@@ -2790,7 +2802,9 @@ export const MultiInvoiceWorkspace = ({ docId: propDocId, docIds: propDocIds, si
   const invoiceStatusLabel = humanInvoiceStatus(selectedInvoice, selectedInvoiceIndex);
   const selectedInvoiceLabel = invoiceDisplayLabel(selectedInvoice, selectedInvoiceIndex);
   const selectedExtractionProgress = invoiceExtractionProgress(selectedInvoice);
-  const isPoorQuality = getInvoicePoorImageState(selectedInvoice, currentDraft).poor;
+  const selectedQualityState = getInvoicePoorImageState(selectedInvoice, currentDraft);
+  const hasQualityWarning = selectedQualityState.needsReview;
+  const qualityIssueLabel = selectedQualityState.qualityReasons.map(getInvoiceQualityReasonLabel).join(' / ');
   // Use selected invoice's own documentId for PDF preview
   const activeDocId = selectedInvoice?.documentId || primaryDocId;
 
@@ -3157,12 +3171,14 @@ export const MultiInvoiceWorkspace = ({ docId: propDocId, docIds: propDocIds, si
           </div>
 
           {/* WARNING BANNER FOR POOR IMAGE QUALITY */}
-          {isPoorQuality && (
+          {hasQualityWarning && (
             <div className="emir-warning-banner">
-              <div className="emir-warning-title">⚠ Poor Image Quality · Review Required</div>
-              <div className="emir-warning-desc">
-                The image for this isolated invoice is low quality or blurry. All extracted data fields are rendered below for manual verification.
-              </div>
+              {selectedQualityState.qualityReasons.map((reason) => (
+                <div key={reason}>
+                  <div className="emir-warning-title">⚠ {getInvoiceQualityReasonLabel(reason)} · Review Required</div>
+                  <div className="emir-warning-desc">{getInvoiceQualityReasonMessage(reason)}</div>
+                </div>
+              ))}
             </div>
           )}
 
@@ -3295,6 +3311,7 @@ export const MultiInvoiceWorkspace = ({ docId: propDocId, docIds: propDocIds, si
           docId={activeDocId}
           invoiceId={selectedInvoice?.id || String(selectedInvoiceIndex)}
           invoiceLabel={`Invoice ${selectedInvoiceIndex + 1}`}
+          reasonLabel={qualityIssueLabel}
           onClose={() => setShowEscalationModal(false)}
           onSuccess={() => {
             setShowEscalationModal(false);

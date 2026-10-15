@@ -69,8 +69,25 @@ def _has_saved_invoice_result(value):
     ))
 
 
-def _invoice_result_status(value):
+def _invoice_number_from_saved_data(value):
     data = _parse_saved_invoice(value)
+    header = data.get("invoiceHeader") or data.get("invoice_header") or data.get("header") or data
+    if not isinstance(header, dict):
+        header = data
+    for key in ("invoiceNumber", "invoice_number", "invoiceNo", "invoice_no", "invoiceId", "documentNumber"):
+        number = header.get(key) or data.get(key)
+        if number is not None and str(number).strip():
+            return number
+    return None
+
+
+def _invoice_result_status(value, image_quality=None):
+    data = _parse_saved_invoice(value)
+    try:
+        if image_quality is not None and float(image_quality) < 0.6:
+            return "POOR_IMAGE_QUALITY"
+    except (TypeError, ValueError):
+        pass
     if not _has_saved_invoice_result(data):
         return "EXTRACTING"
     header = data.get("invoiceHeader") or data.get("invoice_header") or data.get("header") or data
@@ -80,7 +97,7 @@ def _invoice_result_status(value):
         number = header.get(key) or data.get(key)
         if number is not None and str(number).strip():
             return "EXTRACTED"
-    return "POOR_IMAGE_QUALITY"
+    return "NEEDS_REVIEW"
 
 
 def get_effective_base_url():
@@ -680,7 +697,7 @@ class LogisticsAutomationHandler(http.server.BaseHTTPRequestHandler):
         except ValueError:
             invoice_index = None
         cursor.execute(
-            "SELECT id, canonicalJson, finalSubmittedData FROM DocumentInvoice WHERE documentId = ? AND (id = ? OR invoiceIndex = ?)",
+            "SELECT id, canonicalJson, finalSubmittedData, imageQuality FROM DocumentInvoice WHERE documentId = ? AND (id = ? OR invoiceIndex = ?)",
             (doc_id, invoice_id, invoice_index),
         )
         invoice_row = cursor.fetchone()
@@ -689,10 +706,13 @@ class LogisticsAutomationHandler(http.server.BaseHTTPRequestHandler):
             return self._send_json({"error": "Invoice not found for this document"}, 404)
 
         invoice_data = _parse_saved_invoice(invoice_row[1] or invoice_row[2])
-        if _invoice_result_status(invoice_data) != "POOR_IMAGE_QUALITY":
+        has_low_visual_quality = invoice_row[3] is not None and float(invoice_row[3]) < 0.6
+        if not _has_saved_invoice_result(invoice_data) or (
+            _invoice_number_from_saved_data(invoice_data) and not has_low_visual_quality
+        ):
             conn.close()
             return self._send_json(
-                {"error": "Only extracted invoices without an invoice number can be escalated"},
+                {"error": "Only extracted invoices flagged for visual quality or missing invoice data can be escalated"},
                 409,
             )
         invoice_id = invoice_row[0]
@@ -780,7 +800,7 @@ class LogisticsAutomationHandler(http.server.BaseHTTPRequestHandler):
             cursor.execute(f"""
                 SELECT d.id, d.fileName, d.fileSize, d.mimeType, d.documentType, d.status,
                        d.overallConfidence, d.invoiceGeneratedAt, d.createdAt,
-                       COALESCE(invoice_counts.invoiceCount, 0)
+                       COALESCE(invoice_counts.invoiceCount, 0), d.imageQuality
                 FROM Document d
                 LEFT JOIN (
                     SELECT documentId, COUNT(*) AS invoiceCount
@@ -794,21 +814,29 @@ class LogisticsAutomationHandler(http.server.BaseHTTPRequestHandler):
                 "mimeType": row[3], "documentType": row[4], "status": row[5],
                 "overallConfidence": row[6], "invoiceGeneratedAt": row[7],
                 "createdAt": row[8], "invoices": [], "invoiceCount": row[9],
+                "imageQuality": row[10],
             } for row in cursor.fetchall()]
             poor_doc_filter = f" AND documentId IN ({','.join(['?'] * len(doc_ids))})" if doc_ids else ""
             cursor.execute(f"""
-                SELECT documentId, canonicalJson, finalSubmittedData
+                SELECT documentId, imageQuality, canonicalJson, finalSubmittedData
                 FROM DocumentInvoice
-                WHERE status IN ('POOR_IMAGE_QUALITY', 'Poor Image Quality'){poor_doc_filter};
+                WHERE (status IN ('POOR_IMAGE_QUALITY', 'Poor Image Quality', 'NEEDS_REVIEW')
+                       OR imageQuality < 0.6){poor_doc_filter};
             """, tuple(doc_ids))
             poor_document_ids = set()
-            for document_id, canonical_json, final_data in cursor.fetchall():
+            review_document_ids = set()
+            for document_id, image_quality, canonical_json, final_data in cursor.fetchall():
                 extracted = _parse_saved_invoice(canonical_json or final_data)
-                if _has_saved_invoice_result(extracted) and _invoice_result_status(extracted) == "POOR_IMAGE_QUALITY":
+                result_status = _invoice_result_status(extracted, image_quality)
+                if result_status == "POOR_IMAGE_QUALITY":
                     poor_document_ids.add(document_id)
+                elif result_status == "NEEDS_REVIEW":
+                    review_document_ids.add(document_id)
             for doc in docs:
-                if doc["id"] in poor_document_ids:
+                if (doc.get("imageQuality") is not None and float(doc["imageQuality"]) < 0.6) or doc["id"] in poor_document_ids:
                     doc["status"] = "POOR_IMAGE_QUALITY"
+                elif doc["id"] in review_document_ids:
+                    doc["status"] = "NEEDS_REVIEW"
                 elif doc["status"] in ("POOR_IMAGE_QUALITY", "Poor Image Quality"):
                     doc["status"] = "PREPROCESSED"
             conn.close()
@@ -836,7 +864,8 @@ class LogisticsAutomationHandler(http.server.BaseHTTPRequestHandler):
                     SELECT documentId, COUNT(*) AS invoiceCount
                     FROM DocumentInvoice GROUP BY documentId
                 ) invoice_counts ON invoice_counts.documentId = d.id
-                WHERE di.status IN ('POOR_IMAGE_QUALITY', 'Poor Image Quality')
+                WHERE di.status IN ('POOR_IMAGE_QUALITY', 'Poor Image Quality', 'NEEDS_REVIEW')
+                   OR di.imageQuality < 0.6
                 ORDER BY d.createdAt DESC, di.invoiceIndex;
             """)
             rows = cursor.fetchall()
@@ -856,7 +885,9 @@ class LogisticsAutomationHandler(http.server.BaseHTTPRequestHandler):
                     for key in ("invoiceNumber", "invoice_number", "invoiceNo", "invoice_no", "invoiceId", "documentNumber")
                     if header.get(key) or extracted.get(key)
                 ), None)
-                if invoice_number is not None and str(invoice_number).strip():
+                has_invoice_number = invoice_number is not None and bool(str(invoice_number).strip())
+                has_low_visual_quality = image_quality is not None and float(image_quality) < 0.6
+                if has_invoice_number and not has_low_visual_quality:
                     continue
                 dedupe_key = (document_id, invoice_index)
                 if dedupe_key in seen_invoices:
@@ -868,13 +899,13 @@ class LogisticsAutomationHandler(http.server.BaseHTTPRequestHandler):
                     "invoiceIndex": invoice_index,
                     "docNumber": file_name,
                     "invoiceNumber": f"Invoice #{int(invoice_index or 0) + 1}",
-                    "reason": "Poor Image Quality",
+                    "reason": "Poor Image Quality" if has_low_visual_quality else "Missing Invoice Number",
                     "date": str(created_at or "")[:10],
                     "status": "Pending Review",
                     "isMulti": invoice_count > 1,
                     "scope": "invoice",
-                    "poorImageQuality": True,
-                    "hasInvoiceNumber": False,
+                    "poorImageQuality": has_low_visual_quality,
+                    "hasInvoiceNumber": has_invoice_number,
                     "hasExtraction": True,
                 })
             return self._send_json({"success": True, "escalations": escalation_rows}, no_store=True)
@@ -906,15 +937,17 @@ class LogisticsAutomationHandler(http.server.BaseHTTPRequestHandler):
           inv_status = invoice[9]
           inv_quality = invoice[11] if len(invoice) > 11 else None
           has_extraction = _has_saved_invoice_result(invoice_data)
-          is_inv_poor = has_extraction and _invoice_result_status(invoice_data) == "POOR_IMAGE_QUALITY"
-          display_status = "POOR_IMAGE_QUALITY" if is_inv_poor else ("EXTRACTED" if has_extraction and inv_status == "POOR_IMAGE_QUALITY" else (inv_status or "EXTRACTED"))
+          display_status = _invoice_result_status(invoice_data, inv_quality) if has_extraction or (
+              inv_quality is not None and float(inv_quality) < 0.6
+          ) else ("PREPROCESSED" if inv_status in ("POOR_IMAGE_QUALITY", "Poor Image Quality") else (inv_status or "PENDING"))
+          is_inv_poor = display_status == "POOR_IMAGE_QUALITY"
           invoices_by_document.setdefault(invoice[1], []).append({
             "id": invoice[0], "documentId": invoice[1], "invoiceIndex": invoice[2],
             "pageStart": invoice[3], "pageEnd": invoice[4], "rawOcrText": invoice[5],
             "canonicalJson": invoice[6], "confidenceScores": invoice[7],
             "finalSubmittedData": invoice[8],
             "status": display_status,
-            "extractionStatus": display_status if has_extraction else (inv_status or "PENDING"),
+            "extractionStatus": display_status if has_extraction or is_inv_poor else (inv_status or "PENDING"),
             "overallConfidence": invoice[10],
             "imageQuality": inv_quality,
             "poorImageQuality": is_inv_poor,
@@ -927,8 +960,14 @@ class LogisticsAutomationHandler(http.server.BaseHTTPRequestHandler):
             invoice_records = invoices_by_document.get(r[0], [])
             doc_status = r[6]
             doc_quality = r[13] if len(r) > 13 else None
-            is_doc_poor = any(inv.get('poorImageQuality') for inv in invoice_records)
-            final_status = "POOR_IMAGE_QUALITY" if is_doc_poor else ("PREPROCESSED" if doc_status in ('POOR_IMAGE_QUALITY', 'Poor Image Quality') else (doc_status or ("EXTRACTED" if invoice_records else "PREPROCESSED")))
+            is_doc_poor = (doc_quality is not None and float(doc_quality) < 0.6) or any(
+                inv.get('poorImageQuality') for inv in invoice_records
+            )
+            has_review_needed_invoice = any(inv.get("status") == "NEEDS_REVIEW" for inv in invoice_records)
+            final_status = "POOR_IMAGE_QUALITY" if is_doc_poor else (
+                "NEEDS_REVIEW" if has_review_needed_invoice else
+                ("PREPROCESSED" if doc_status in ('POOR_IMAGE_QUALITY', 'Poor Image Quality') else (doc_status or ("EXTRACTED" if invoice_records else "PREPROCESSED")))
+            )
 
             docs.append({
                 "id": r[0],
@@ -1023,9 +1062,11 @@ class LogisticsAutomationHandler(http.server.BaseHTTPRequestHandler):
             inv_status = r[9]
             inv_quality = r[11] if len(r) > 11 else None
             has_extraction = _has_saved_invoice_result(invoice_data)
-            result_status = _invoice_result_status(invoice_data) if has_extraction else None
+            result_status = _invoice_result_status(invoice_data, inv_quality) if has_extraction or (
+                inv_quality is not None and float(inv_quality) < 0.6
+            ) else None
             is_inv_poor = result_status == "POOR_IMAGE_QUALITY"
-            display_status = result_status if has_extraction else (
+            display_status = result_status if has_extraction or is_inv_poor else (
                 "PREPROCESSED" if inv_status in ("POOR_IMAGE_QUALITY", "Poor Image Quality") else (inv_status or "PENDING")
             )
             file_name = r[12] if (len(r) > 12 and r[12]) else f"Document ({r[1]})"
@@ -1057,7 +1098,7 @@ class LogisticsAutomationHandler(http.server.BaseHTTPRequestHandler):
     def _handle_get_document_status(self, doc_id):
         conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
-        cursor.execute("SELECT id, fileName, status, overallConfidence, mimeType FROM Document WHERE id = ?;", (doc_id,))
+        cursor.execute("SELECT id, fileName, status, overallConfidence, mimeType, imageQuality FROM Document WHERE id = ?;", (doc_id,))
         row = cursor.fetchone()
         if not row:
             conn.close()
@@ -1065,15 +1106,30 @@ class LogisticsAutomationHandler(http.server.BaseHTTPRequestHandler):
 
         # PDFs use the page-range workspace even when detection finds one invoice.
         try:
-            cursor.execute("SELECT COUNT(*) FROM DocumentInvoice WHERE documentId = ?;", (doc_id,))
-            invoice_count = cursor.fetchone()[0]
+            cursor.execute(
+                "SELECT imageQuality, canonicalJson, finalSubmittedData FROM DocumentInvoice WHERE documentId = ? ORDER BY invoiceIndex;",
+                (doc_id,),
+            )
+            invoice_rows = cursor.fetchall()
+            invoice_count = len(invoice_rows)
         except sqlite3.OperationalError:
             invoice_count = 0
+            invoice_rows = []
         conn.close()
 
-        is_poor = row[2] in ["POOR_IMAGE_QUALITY", "Poor Image Quality"]
-        is_extracted = is_poor or row[2] in ["EXTRACTED", "IN_REVIEW", "APPROVED", "INVOICE_GENERATED"]
-        if is_poor:
+        derived_statuses = [
+            _invoice_result_status(canonical or final_data, image_quality)
+            for image_quality, canonical, final_data in invoice_rows
+        ]
+        has_visual_quality_failure = (
+            row[5] is not None and float(row[5]) < 0.6
+        ) or "POOR_IMAGE_QUALITY" in derived_statuses
+        status = "POOR_IMAGE_QUALITY" if has_visual_quality_failure else (
+            "NEEDS_REVIEW" if "NEEDS_REVIEW" in derived_statuses else
+            "PREPROCESSED" if row[2] in ("POOR_IMAGE_QUALITY", "Poor Image Quality") else row[2]
+        )
+        is_extracted = status in ["POOR_IMAGE_QUALITY", "NEEDS_REVIEW", "EXTRACTED", "IN_REVIEW", "APPROVED", "INVOICE_GENERATED"]
+        if is_extracted and status in ("POOR_IMAGE_QUALITY", "NEEDS_REVIEW"):
             review_url = "/escalations"
         elif invoice_count > 1 or (row[1] or "").lower().endswith(".pdf"):
             review_url = f"/documents/{row[0]}/multi-workspace"
@@ -1105,8 +1161,8 @@ class LogisticsAutomationHandler(http.server.BaseHTTPRequestHandler):
             "success": True,
             "documentId": row[0],
             "fileName": row[1],
-            "status": row[2],
-            "isPoorImageQuality": is_poor,
+            "status": status,
+            "isPoorImageQuality": has_visual_quality_failure,
             "isExtracted": is_extracted,
             "overallConfidence": row[3],
             "reviewUrl": review_url,
@@ -1393,8 +1449,6 @@ class LogisticsAutomationHandler(http.server.BaseHTTPRequestHandler):
         })
 
     def _set_document_invoice_state(self, doc_id, invoice_id, invoice_index, page_start, page_end, status, canonical=None, error_message=None):
-        if status == "EXTRACTED" and canonical is not None:
-            status = _invoice_result_status(canonical)
         resolved_id = invoice_id or f"{doc_id}-invoice-{int(invoice_index) + 1}"
         conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
@@ -1404,10 +1458,12 @@ class LogisticsAutomationHandler(http.server.BaseHTTPRequestHandler):
             if "errorMessage" not in invoice_columns:
                 cursor.execute("ALTER TABLE DocumentInvoice ADD COLUMN errorMessage TEXT")
             cursor.execute(
-                "SELECT id FROM DocumentInvoice WHERE id = ? OR (documentId = ? AND invoiceIndex = ?)",
+                "SELECT id, imageQuality FROM DocumentInvoice WHERE id = ? OR (documentId = ? AND invoiceIndex = ?)",
                 (resolved_id, doc_id, invoice_index),
             )
             row = cursor.fetchone()
+            if status == "EXTRACTED" and canonical is not None:
+                status = _invoice_result_status(canonical, row[1] if row else None)
             json_str = json.dumps(canonical) if canonical is not None else None
             if row:
                 existing_id = row[0]
@@ -1662,14 +1718,13 @@ class LogisticsAutomationHandler(http.server.BaseHTTPRequestHandler):
             last_json_str = json_str
             inv_idx = int(inv_item.get('invoiceIndex', index))
             inv_id = inv_item.get('invoiceId') or f"{doc_id}-invoice-{inv_idx + 1}"
-            status = _invoice_result_status(extracted)
-            
             cursor.execute(
                 "SELECT id, imageQuality FROM DocumentInvoice WHERE id = ? OR (documentId = ? AND invoiceIndex = ?)",
                 (inv_id, doc_id, inv_idx)
             )
             existing_row = cursor.fetchone()
             image_quality = existing_row[1] if existing_row else None
+            status = _invoice_result_status(extracted, image_quality)
             if existing_row:
                 existing_id = existing_row[0]
                 cursor.execute(
@@ -1711,13 +1766,17 @@ class LogisticsAutomationHandler(http.server.BaseHTTPRequestHandler):
         cursor.execute("SELECT COUNT(*) FROM DocumentInvoice WHERE documentId = ?;", (doc_id,))
         received_count = cursor.fetchone()[0]
 
-        cursor.execute("SELECT COUNT(*) FROM DocumentInvoice WHERE documentId = ? AND status = 'POOR_IMAGE_QUALITY';", (doc_id,))
+        cursor.execute("SELECT COUNT(*) FROM DocumentInvoice WHERE documentId = ? AND imageQuality < 0.6;", (doc_id,))
         poor_invoice_count = cursor.fetchone()[0]
+        cursor.execute("SELECT COUNT(*) FROM DocumentInvoice WHERE documentId = ? AND status = 'NEEDS_REVIEW';", (doc_id,))
+        review_invoice_count = cursor.fetchone()[0]
         cursor.execute("SELECT status, imageQuality, fileName FROM Document WHERE id = ?;", (doc_id,))
         doc_row = cursor.fetchone()
 
         if poor_invoice_count > 0:
             doc_status = 'POOR_IMAGE_QUALITY'
+        elif received_count >= expected_count and review_invoice_count > 0:
+            doc_status = 'NEEDS_REVIEW'
         elif received_count >= expected_count:
             doc_status = 'EXTRACTED'
         else:
