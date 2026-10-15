@@ -33,22 +33,9 @@ export const Escalations = () => {
         doc.id && (Number(doc.invoiceCount) > 0 || (Array.isArray(doc.invoices) && doc.invoices.length > 0))
       ));
       const documentsById = new Map(documentsWithInvoices.map((doc) => [doc.id, doc]));
-      const invoiceResponses = await Promise.all(documentsWithInvoices.map(async (doc) => {
-        const invoiceRes = await fetch(
-          `/api/documents/${encodeURIComponent(doc.id)}/invoices?refresh=${Date.now()}`,
-          { cache: 'no-store' }
-        );
-        if (!invoiceRes.ok) {
-          throw new Error(`Unable to load invoices for ${doc.fileName || doc.id} (HTTP ${invoiceRes.status}).`);
-        }
-        const invoiceData = await invoiceRes.json();
-        if (!Array.isArray(invoiceData.invoices)) {
-          throw new Error('The invoice list response did not include invoices.');
-        }
-        return {
-          documentId: doc.id,
-          invoices: invoiceData.invoices
-        };
+      const invoiceResponses = documentsWithInvoices.map((doc) => ({
+        documentId: doc.id,
+        invoices: Array.isArray(doc.invoices) ? doc.invoices : []
       }));
       const seenInvoices = new Set();
       const issues = [];

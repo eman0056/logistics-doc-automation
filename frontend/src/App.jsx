@@ -362,6 +362,10 @@ function App() {
   useEffect(() => {
     let active = true;
     const pathname = path.split('?')[0];
+    if (pathname === '/escalations') {
+      setLoading(false);
+      return () => { active = false; };
+    }
     const documentsUrl = pathname === '/invoices' || pathname === '/flagged'
       ? `${API}/documents`
       : `${API}/documents?summary=true&refresh=${Date.now()}`;
@@ -717,7 +721,11 @@ function App() {
                 </tr>
               </thead>
               <tbody>
-                {rows.length > 0 ? rows : <tr><td colSpan="6"><div className="empty-state">No documents found. Upload one to get started.</div></td></tr>}
+                {loading ? (
+                  <tr><td colSpan="6"><div className="empty-state">Loading documents...</div></td></tr>
+                ) : rows.length > 0 ? rows : (
+                  <tr><td colSpan="6"><div className="empty-state">No documents found. Upload one to get started.</div></td></tr>
+                )}
               </tbody>
             </table>
           </div>
@@ -1816,7 +1824,9 @@ function App() {
     );
   };
 
-  if (loading) return <><>{nav}</><RouteSkeleton label="Loading dashboard..." /></>;
+  if (loading && route !== 'documents' && route !== 'escalations') {
+    return <><>{nav}</><RouteSkeleton label="Loading dashboard..." /></>;
+  }
 
 
   let renderedRoute;
