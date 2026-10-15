@@ -6,6 +6,7 @@ import { EscalationModal } from './EscalationModal.jsx';
 import { PreviewRange } from './PreviewRange.jsx';
 import { BackButton } from './BackButton.jsx';
 import { getDocumentReviewPath } from './reviewRouting.js';
+import { getInvoiceQualityReasonLabel } from './invoiceQualityReasons.js';
 
 const API = '/api';
 
@@ -539,9 +540,13 @@ function App() {
   const renderDocumentsView = () => {
     const rows = documents.map((doc) => {
       const docStatus = doc.status || 'PENDING';
-      const isPoor = docStatus === 'POOR_IMAGE_QUALITY' || docStatus === 'Poor Image Quality' || doc.poorImageQuality || (doc.imageQuality != null && doc.imageQuality < 0.6);
-      const displayStatus = isPoor ? 'Poor Image Quality' : docStatus;
-      const statusClass = isPoor ? 'danger' : normalizeStatus(docStatus);
+      const hasLowVisualQuality = (doc.imageQuality != null && Number(doc.imageQuality) < 0.6)
+        || (doc.invoices || []).some((invoice) => invoice.imageQuality != null && Number(invoice.imageQuality) < 0.6);
+      const needsReview = hasLowVisualQuality
+        || ['NEEDS_REVIEW', 'POOR_IMAGE_QUALITY', 'POOR IMAGE QUALITY'].includes(String(docStatus).toUpperCase())
+        || doc.poorImageQuality === true;
+      const displayStatus = hasLowVisualQuality ? 'Poor Image Quality' : needsReview ? 'Needs Review' : docStatus;
+      const statusClass = hasLowVisualQuality ? 'danger' : needsReview ? 'warning' : normalizeStatus(docStatus);
       return (
         <tr key={doc.id}>
           <td>{doc.fileName}</td>
@@ -1610,8 +1615,9 @@ function App() {
 
   const renderInvoicesView = () => {
     const invoices = documents.filter((doc) => {
-      const isPoor = doc.status === 'POOR_IMAGE_QUALITY' || doc.status === 'Poor Image Quality' || doc.poorImageQuality || (doc.imageQuality != null && doc.imageQuality < 0.6) || (doc.invoices || []).some(inv => inv.status === 'POOR_IMAGE_QUALITY' || inv.status === 'Poor Image Quality' || inv.poorImageQuality || (inv.imageQuality != null && inv.imageQuality < 0.6));
-      return (doc.status === 'INVOICE_GENERATED' || doc.extraction?.finalSubmittedData) && !isPoor;
+      const needsReview = String(doc.status || '').toUpperCase() === 'NEEDS_REVIEW'
+        || (doc.invoices || []).some((invoice) => getInvoicePoorImageState(invoice).needsReview);
+      return (doc.status === 'INVOICE_GENERATED' || doc.extraction?.finalSubmittedData) && !needsReview;
     });
 
     return (
@@ -1677,23 +1683,24 @@ function App() {
     });
     const [toastMsg, setToastMsg] = useState('');
 
-    // Collect only poor-quality invoices; a document-level flag must not fan out.
+    // Collect invoice-level visual or extraction issues; a document-level flag must not fan out.
     const flaggedItems = [];
     docs.forEach((doc) => {
       (doc.invoices || []).forEach((inv, idx) => {
         const invoiceIndex = Number(inv.invoiceIndex ?? idx);
-        const { poor } = getInvoicePoorImageState(inv);
+        const qualityState = getInvoicePoorImageState(inv);
+        const { needsReview } = qualityState;
         const itemKey = `${doc.id}-${invoiceIndex}`;
         if (!Number.isInteger(invoiceIndex) || invoiceIndex < 0) return;
-        const invStatus = inv.status || inv.extractionStatus || '';
-        if (poor && !resolvedKeys.has(itemKey) && !resolvedKeys.has(doc.id)) {
+        if (needsReview && !resolvedKeys.has(itemKey) && !resolvedKeys.has(doc.id)) {
           flaggedItems.push({
             key: itemKey,
             docId: doc.id,
             invoiceId: inv.id || String(invoiceIndex),
             docName: doc.fileName,
             invoiceLabel: inv.invoiceNumber ? `Invoice ${inv.invoiceNumber}` : `Invoice #${invoiceIndex + 1}`,
-            status: invStatus || 'POOR_IMAGE_QUALITY',
+            status: qualityState.qualityReasons.map(getInvoiceQualityReasonLabel).join(' / '),
+            reasonLabel: qualityState.qualityReasons.map(getInvoiceQualityReasonLabel).join(' / '),
             date: doc.createdAt ? new Date(doc.createdAt).toLocaleDateString() : '—',
             reviewUrl: `/documents/${doc.id}/multi-workspace?invoiceIndex=${invoiceIndex}`,
           });
@@ -1721,8 +1728,8 @@ function App() {
         <div className="section-header">
           <div>
             <div className="eyebrow">Quality Review</div>
-            <h1 className="page-title">Flagged / Poor Image Quality</h1>
-            <p className="subtle-copy mt-2">Invoices flagged with POOR_IMAGE_QUALITY status requiring manual review or escalation.</p>
+            <h1 className="page-title">Flagged Invoices</h1>
+            <p className="subtle-copy mt-2">Review low visual quality, missing invoice numbers, and incomplete extraction data.</p>
           </div>
           <span className="flagged-view-badge">
             📸 {flaggedItems.length} Flagged Invoice{flaggedItems.length !== 1 ? 's' : ''}
@@ -1760,7 +1767,7 @@ function App() {
                 <tr>
                   <td colSpan="5">
                     <div className="empty-state">
-                      🎉 No flagged invoices found! All image quality checks passed.
+                      🎉 No invoices currently need review.
                     </div>
                   </td>
                 </tr>
@@ -1774,7 +1781,7 @@ function App() {
                   </td>
                   <td>
                     <span className="status-pill warning-strong">
-                      📸 {item.status}
+                      {item.reasonLabel}
                     </span>
                   </td>
                   <td style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>{item.date}</td>
@@ -1816,6 +1823,7 @@ function App() {
             docId={escalationTarget.docId}
             invoiceId={escalationTarget.invoiceId}
             invoiceLabel={escalationTarget.invoiceLabel}
+            reasonLabel={escalationTarget.reasonLabel}
             onClose={() => setEscalationTarget(null)}
             onSuccess={() => handleEscalationSuccess(escalationTarget)}
           />

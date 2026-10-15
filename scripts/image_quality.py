@@ -63,7 +63,8 @@ def analyze_pil_image_quality(pil_img):
             except Exception:
                 pass
 
-        final_quality = round(min(res_score, blur_score, contrast_score), 2)
+        weighted_quality = (blur_score * 2 + res_score + contrast_score) / 4
+        final_quality = round(min(weighted_quality, blur_score, contrast_score), 2)
         details = {
             'dimensions': f'{w}x{h}',
             'total_pixels': total_pixels,

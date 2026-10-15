@@ -35,7 +35,9 @@ export const PreviewRange = () => {
               
               if (doc.status === 'Ready for Review' || doc.status === 'Completed' || doc.status === 'EXTRACTED') ready++;
               if (doc.status === 'Escalation Required') escalated++;
-              if (doc.status === 'Poor Image Quality') poorQuality++;
+              const hasLowVisualQuality = (doc.imageQuality != null && Number(doc.imageQuality) < 0.6)
+                  || (doc.invoices || []).some(invoice => invoice.imageQuality != null && Number(invoice.imageQuality) < 0.6);
+              if (hasLowVisualQuality) poorQuality++;
           });
 
           setPreviewData({

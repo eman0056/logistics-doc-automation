@@ -4,7 +4,55 @@ from io import BytesIO
 import pymupdf
 from PIL import Image, ImageDraw, ImageFilter
 
-from image_quality import get_pdf_page_range_quality
+from image_quality import analyze_pil_image_quality, get_pdf_page_range_quality
+
+
+class ImageQualityTests(unittest.TestCase):
+    def make_invoice_image(self):
+        image = Image.new("RGB", (387, 516), "white")
+        draw = ImageDraw.Draw(image)
+        for y in range(20, 500, 20):
+            draw.line((10, y, 377, y), fill="black", width=1)
+        for y in range(25, 500, 40):
+            draw.text((15, y), "INVOICE 12345 TOTAL 987.65", fill="black")
+        return image
+
+    def test_clear_low_resolution_image_is_not_flagged_as_blurry(self):
+        image = self.make_invoice_image()
+        try:
+            score, details = analyze_pil_image_quality(image)
+        finally:
+            image.close()
+
+        self.assertEqual(details["blur_score"], 0.95)
+        self.assertLess(details["res_score"], 0.6)
+        self.assertGreaterEqual(score, 0.6)
+
+    def test_blurred_low_resolution_image_is_flagged(self):
+        image = self.make_invoice_image()
+        blurred = image.filter(ImageFilter.GaussianBlur(radius=4))
+        image.close()
+        try:
+            score, details = analyze_pil_image_quality(blurred)
+        finally:
+            blurred.close()
+
+        self.assertLess(details["blur_score"], 0.6)
+        self.assertLess(score, 0.6)
+
+    def test_low_contrast_image_remains_flagged(self):
+        image = Image.new("RGB", (900, 1200), (120, 120, 120))
+        draw = ImageDraw.Draw(image)
+        for y in range(0, 1200, 2):
+            draw.line((0, y, 899, y), fill=(130, 130, 130), width=1)
+        try:
+            score, details = analyze_pil_image_quality(image)
+        finally:
+            image.close()
+
+        self.assertEqual(details["blur_score"], 0.95)
+        self.assertLess(details["contrast_score"], 0.6)
+        self.assertLess(score, 0.6)
 
 
 class PdfPageRangeQualityTests(unittest.TestCase):

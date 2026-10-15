@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { getInvoicePoorImageState } from './MultiInvoiceViews.jsx';
 
-// FlaggedImagesCard: displays count of Poor Image Quality flags and navigates to Escalations page
+// FlaggedImagesCard: displays flagged invoice count and navigates to Escalations page
 export const FlaggedImagesCard = () => {
   const [count, setCount] = useState(0);
   const [loading, setLoading] = useState(true);
@@ -18,7 +18,7 @@ export const FlaggedImagesCard = () => {
           if (
             Number.isInteger(invoiceIndex)
             && invoiceIndex >= 0
-            && getInvoicePoorImageState(invoice).poor
+            && getInvoicePoorImageState(invoice).needsReview
           ) {
             poorInvoiceKeys.add(`${doc.id}:${invoiceIndex}`);
           }
@@ -51,7 +51,7 @@ export const FlaggedImagesCard = () => {
     <div className="card" style={{ padding: '1.25rem', cursor: 'pointer', background: loading ? 'rgba(15,23,42,0.5)' : 'rgba(15,23,42,0.7)' }} onClick={navigate}>
       <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
         <span className="status-pill danger" style={{ fontSize: '0.85rem', padding: '0.4rem 0.8rem' }}>
-          📸⚠️ {loading ? '...' : count} Poor Image Quality
+          ⚠️ {loading ? '...' : count} Invoices Need Review
         </span>
       </div>
     </div>

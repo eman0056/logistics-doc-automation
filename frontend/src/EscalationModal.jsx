@@ -3,7 +3,7 @@ import { escalateInvoice } from './api.js';
 
 /**
  * EscalationModal – captures optional escalation notes and submits
- * the escalation request for a flagged (Poor Image Quality) invoice.
+ * the escalation request for a flagged invoice.
  *
  * Props:
  *  - docId       {string}   Parent document ID
@@ -12,7 +12,7 @@ import { escalateInvoice } from './api.js';
  *  - onClose     {function} Called when the modal should close
  *  - onSuccess   {function} Called after a successful escalation with response data
  */
-export const EscalationModal = ({ docId, invoiceId, invoiceLabel, onClose, onSuccess }) => {
+export const EscalationModal = ({ docId, invoiceId, invoiceLabel, reasonLabel, onClose, onSuccess }) => {
   const [notes, setNotes] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState('');
@@ -52,7 +52,7 @@ export const EscalationModal = ({ docId, invoiceId, invoiceLabel, onClose, onSuc
               Escalate Invoice
             </h2>
             <p className="escalation-modal-subtitle">
-              {invoiceLabel || 'Flagged Invoice'} — Poor Image Quality
+              {invoiceLabel || 'Flagged Invoice'} — {reasonLabel || 'Needs Review'}
             </p>
           </div>
           <button
